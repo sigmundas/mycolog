@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+*.pkl
+
+# Virtual envs
+.venv/
+venv/
+ENV/
+
+# PySide/Qt
+*.qmlc
+*.qmlcache
+
+# Build artifacts
+build/
+dist/
+*.spec
+
+# App data / local databases
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+
+# App local data folders
+images/
+image_cache/
+thumbnails/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Test artifacts
+.coverage
+.pytest_cache/
+
+# Temp
+*.tmp
+*.temp

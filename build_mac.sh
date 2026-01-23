@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+python -m pip install -r requirements.txt
+
+pyinstaller \
+  --noconfirm \
+  --clean \
+  --onedir \
+  --windowed \
+  --name MycoLog \
+  --hidden-import pillow_heif \
+  --exclude-module PySide6.QtQml \
+  --exclude-module PySide6.QtQuick \
+  --exclude-module PySide6.QtQuickControls2 \
+  --exclude-module PySide6.QtQuickWidgets \
+  --exclude-module PySide6.QtPdf \
+  --exclude-module PySide6.QtPdfWidgets \
+  --exclude-module tkinter \
+  --exclude-module PyQt5 \
+  --exclude-module PyQt6 \
+  --exclude-module wx \
+  --exclude-module gi \
+  --exclude-module kivy \
+  main.py
