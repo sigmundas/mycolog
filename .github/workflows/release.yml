@@ -1,0 +1,41 @@
+name: build-release-windows
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Build with PyInstaller
+        shell: pwsh
+        run: ./build.ps1
+
+      - name: Package zip
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $zipName = "MycoLog-$tag-windows.zip"
+          if (Test-Path $zipName) { Remove-Item $zipName }
+          Compress-Archive -Path dist\MycoLog\* -DestinationPath $zipName
+
+      - name: Create Release and upload asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: MycoLog-${{ github.ref_name }}-windows.zip
+          generate_release_notes: true

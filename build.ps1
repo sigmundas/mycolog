@@ -1,6 +1,7 @@
 $ErrorActionPreference = "Stop"
 
-python -m pip install -r requirements.txt
+python -m pip install --upgrade pip --disable-pip-version-check
+python -m pip install -r requirements.txt --disable-pip-version-check
 
 pyinstaller `
     --noconfirm `
