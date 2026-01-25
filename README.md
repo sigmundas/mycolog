@@ -1,15 +1,13 @@
-# MycoLog
+# ![MycoLog](assets/mycolog%20v1.png)
 
 A python app for measuring mushroom spores from microscope images, and organizing images and field photos.
 
 ## Features
 
-- **4-Point Spore Measurement**: Click 4 points per spore - auto-detects length (max) and width (min)
-- **Zoom & Pan**: Mouse wheel to zoom, Shift+Drag to pan around large images
-- **Magnified Measurement Preview**: Select current or previous measurements to see a magnified view with dimension overlay and interactive adjustment tools
-- **Calibration System**: Manage multiple microscope objectives with custom scale settings
-- **Statistics**: Publication-ready spore measurements, including plots of width vs length, aspect ratios and historgrams.
-- **Database Storage**: All measurements saved to SQLite database
+- **Organize field observations:** Store your field photos, macro photos and microscope images in one place.
+- **Measure spores from microscope images**: Easy spore and cell measurements. All measures are possible to review and edit later.
+- **Calibration System**: Set image scale for your objectives 
+- **Statistics**: Spore measurements as text and plots
 - **Reference Values**: Store and compare literature reference values
 
 ## Installation
@@ -45,6 +43,17 @@ python main.py
 ```
 
 ## Quick Start Guide
+
+First step is to create a new observation by importing photos. Select a field photo taken with a phone if you want GPS coordinates.
+![New Observation](assets/1-new-observation.png)
+
+Start by clicking measure mode. Hold shift to pan, mouse-wheel etc to zoom.
+![Measure Spores](assets/2-measure-spores.png)
+
+
+Select the type of measures you have taken. Click any graph element to filter thumbnails.
+![Stats and Reference](assets/3-stats-reference.png)
+
 
 ### First Time Setup
 
@@ -106,6 +115,7 @@ python main.py
    - You can click individual dots in the graph to see the measurement thumbnail on the right
    - You can clik columns in the histogram to filter a range of measures
    - Click a thumbnail link icon to jump to the measurement in the Measure tab
+   - The 95% ellipse is the covariance ellipse from the length/width data: compute the mean and 2x2 covariance, take the eigenvectors as axes, and scale axis lengths by sqrt(chi-square(df=2, 0.95)) so the ellipse contains about 95% of points under a bivariate normal model.
 
 7. **Reference Values**
    - Use the "Reference Values" button to view and store literature values

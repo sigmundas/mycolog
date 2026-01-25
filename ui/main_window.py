@@ -444,6 +444,7 @@ class ReferenceValuesDialog(QDialog):
     def _on_plot_clicked(self):
         data = self.get_data()
         self.plot_requested.emit(data)
+        self.accept()
 
     def _on_save_clicked(self):
         data = self.get_data()
@@ -1040,6 +1041,7 @@ class MainWindow(QMainWindow):
         left_controls = QHBoxLayout()
         left_controls.addWidget(QLabel("Measurement Type:"))
         self.gallery_filter_combo = QComboBox()
+        self.gallery_filter_combo.setFixedWidth(140)
         self.gallery_filter_combo.currentIndexChanged.connect(self.on_gallery_thumbnail_setting_changed)
         left_controls.addWidget(self.gallery_filter_combo)
 
@@ -1376,8 +1378,9 @@ class MainWindow(QMainWindow):
     def update_controls_for_image_type(self, image_type):
         """Adjust calibration and category controls based on image type."""
         is_field = (image_type == "field")
-        if hasattr(self, "measure_category_combo") and is_field:
-            idx = self.measure_category_combo.findData("other")
+        if hasattr(self, "measure_category_combo"):
+            target = "other" if is_field else "spore"
+            idx = self.measure_category_combo.findData(target)
             if idx >= 0:
                 self.measure_category_combo.setCurrentIndex(idx)
         if is_field:
@@ -3519,6 +3522,12 @@ class MainWindow(QMainWindow):
         normalized = self.normalize_measurement_category(category) if category else None
         show_q = normalized == "spore"
         Q = L / W
+        if category and category != "all":
+            category_label = self.format_measurement_category(category)
+        elif category == "all":
+            category_label = "All measurements"
+        else:
+            category_label = "Measurements"
 
         self.gallery_hist_patches = {}
         self.gallery_scatter = None
@@ -3560,8 +3569,12 @@ class MainWindow(QMainWindow):
                     data["L"], data["W"], s=20, alpha=0.8, picker=5, label=f"Image {image_id}", color=color
                 )
                 self.gallery_scatter_id_map[collection] = data["ids"]
+            if category_label:
+                ax_scatter.plot([], [], marker="o", color=hist_color, linestyle="", label=category_label)
         else:
-            self.gallery_scatter = ax_scatter.scatter(L, W, s=20, alpha=0.8, picker=5, color=hist_color)
+            self.gallery_scatter = ax_scatter.scatter(
+                L, W, s=20, alpha=0.8, picker=5, color=hist_color, label=category_label
+            )
             self.gallery_scatter_id_map[self.gallery_scatter] = measurement_ids
 
         max_len = float(np.max(L))
@@ -3610,6 +3623,18 @@ class MainWindow(QMainWindow):
         ref_q_max = self.reference_values.get("q_max")
         ref_q_avg = self.reference_values.get("q_p50")
 
+        def _fallback(low, mid_low, mid_high, high):
+            left = low if low is not None else mid_low
+            right = high if high is not None else mid_high
+            if left is None and right is not None:
+                left = right
+            if right is None and left is not None:
+                right = left
+            return left, right
+
+        l_left, l_right = _fallback(ref_l_min, ref_l_p05, ref_l_p95, ref_l_max)
+        w_bottom, w_top = _fallback(ref_w_min, ref_w_p05, ref_w_p95, ref_w_max)
+
         x_min = plot_settings.get("x_min")
         x_max = plot_settings.get("x_max")
         y_min = plot_settings.get("y_min")
@@ -3619,11 +3644,11 @@ class MainWindow(QMainWindow):
         if y_min is not None or y_max is not None:
             ax_scatter.set_ylim(bottom=y_min, top=y_max)
 
-        if ref_l_min is not None and ref_l_max is not None and ref_w_min is not None and ref_w_max is not None:
+        if l_left is not None and l_right is not None and w_bottom is not None and w_top is not None:
             rect = Rectangle(
-                (ref_l_min, ref_w_min),
-                max(0.0, ref_l_max - ref_l_min),
-                max(0.0, ref_w_max - ref_w_min),
+                (l_left, w_bottom),
+                max(0.0, l_right - l_left),
+                max(0.0, w_top - w_bottom),
                 fill=False,
                 edgecolor="#2c3e50",
                 linewidth=1.5,
@@ -3631,6 +3656,40 @@ class MainWindow(QMainWindow):
             )
             ax_scatter.add_patch(rect)
             ax_scatter.plot([], [], color="#2c3e50", linestyle=":", label="Ref min/max")
+
+        y0 = w_bottom if w_bottom is not None else min_w
+        y1 = w_top if w_top is not None else float(np.max(W))
+        x0 = l_left if l_left is not None else min_len
+        x1 = l_right if l_right is not None else float(np.max(L))
+
+        def _vline(x, color, linestyle, label=None):
+            if x is None:
+                return
+            ax_scatter.plot([x, x], [y0, y1], color=color, linestyle=linestyle, linewidth=1.0, label=label)
+
+        def _hline(y, color, linestyle, label=None):
+            if y is None:
+                return
+            ax_scatter.plot([x0, x1], [y, y], color=color, linestyle=linestyle, linewidth=1.0, label=label)
+
+        _vline(ref_l_min, "#2c3e50", ":", label="Ref min/max")
+        _vline(ref_l_max, "#2c3e50", ":")
+        _hline(ref_w_min, "#2c3e50", ":")
+        _hline(ref_w_max, "#2c3e50", ":")
+        _vline(ref_l_p05, "#e74c3c", ":")
+        if ref_l_p95 is not None:
+            y95 = y1
+            if ref_l_max is not None and ref_w_p95 is not None:
+                y95 = ref_w_p95
+            ax_scatter.plot([ref_l_p95, ref_l_p95], [y0, y95],
+                            color="#e74c3c", linestyle=":", linewidth=1.0)
+        _hline(ref_w_p05, "#e74c3c", ":")
+        if ref_w_p95 is not None:
+            x95 = x1
+            if ref_w_max is not None and ref_l_p95 is not None:
+                x95 = ref_l_p95
+            ax_scatter.plot([x0, x95], [ref_w_p95, ref_w_p95],
+                            color="#e74c3c", linestyle=":", linewidth=1.0)
 
         if ref_l_avg is not None and ref_w_avg is not None:
             ref_radius = 0.03 * max(float(np.max(L)), float(np.max(W)), ref_l_avg, ref_w_avg)
@@ -3715,6 +3774,22 @@ class MainWindow(QMainWindow):
                 for i, patch in enumerate(q_patches):
                     patch.set_picker(True)
                     self.gallery_hist_patches[patch] = ("Q", q_bins[i], q_bins[i + 1])
+        if ref_l_p05 is not None:
+            ax_len.axvline(ref_l_p05, color="#e74c3c", linestyle=":", linewidth=1.2)
+        if ref_l_p95 is not None:
+            ax_len.axvline(ref_l_p95, color="#e74c3c", linestyle=":", linewidth=1.2)
+        if ref_w_p05 is not None:
+            ax_wid.axvline(ref_w_p05, color="#e74c3c", linestyle=":", linewidth=1.2)
+        if ref_w_p95 is not None:
+            ax_wid.axvline(ref_w_p95, color="#e74c3c", linestyle=":", linewidth=1.2)
+        if ref_l_min is not None:
+            ax_len.axvline(ref_l_min, color="#2c3e50", linestyle=":", linewidth=1.0)
+        if ref_l_max is not None:
+            ax_len.axvline(ref_l_max, color="#2c3e50", linestyle=":", linewidth=1.0)
+        if ref_w_min is not None:
+            ax_wid.axvline(ref_w_min, color="#2c3e50", linestyle=":", linewidth=1.0)
+        if ref_w_max is not None:
+            ax_wid.axvline(ref_w_max, color="#2c3e50", linestyle=":", linewidth=1.0)
         ax_len.set_xlabel("Length (μm)")
         ax_len.set_ylabel("Count")
         ax_wid.set_xlabel("Width (μm)")

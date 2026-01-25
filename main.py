@@ -15,7 +15,7 @@ def main():
 
     # Create and run application
     app = QApplication(sys.argv)
-    app.setApplicationName("Mushroom Spore Analyzer")
+    app.setApplicationName("MycoLog - Mushroom Log and Spore Analyzer")
     app_font = app.font()
     if app_font.pointSize() <= 0:
         app_font.setPointSize(10)
