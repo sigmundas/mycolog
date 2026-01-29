@@ -1,5 +1,5 @@
 """Magnified spore preview widget with draggable sides for fine-tuning."""
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel
 from PySide6.QtGui import QPixmap, QPainter, QPen, QColor, QPolygonF, QBrush, QPainterPath
 from PySide6.QtCore import Qt, QPointF, QRectF, Signal
 import math
@@ -16,6 +16,7 @@ class SporePreviewWidget(QWidget):
         super().__init__(parent)
         self.setMinimumSize(340, 400)
         self.setMaximumHeight(500)
+        self.setFocusPolicy(Qt.StrongFocus)
 
         # Data
         self.original_pixmap = None
@@ -53,31 +54,16 @@ class SporePreviewWidget(QWidget):
 
         # Image display label
         self.image_label = PreviewImageLabel()
+        self.image_label.setFocusPolicy(Qt.NoFocus)
         self.image_label.side_drag_started.connect(self.on_side_drag_started)
         self.image_label.side_dragged.connect(self.on_side_dragged)
         self.image_label.rotation_dragged.connect(self.on_rotation_dragged)
         self.image_label.rectangle_dragged.connect(self.on_rectangle_dragged)
+        self.image_label.interaction_finished.connect(self.apply_changes)
         self.image_label.set_measure_color(self.measure_color)
         layout.addWidget(self.image_label, 1)
 
-        # Action buttons
-        button_row = QHBoxLayout()
-
-        btn_reset = QPushButton("Reset")
-        btn_reset.clicked.connect(self.reset_adjustments)
-        button_row.addWidget(btn_reset)
-
-        btn_apply = QPushButton("Apply Changes")
-        btn_apply.setStyleSheet("background-color: #27ae60; color: white; font-weight: bold;")
-        btn_apply.clicked.connect(self.apply_changes)
-        button_row.addWidget(btn_apply)
-
-        btn_delete = QPushButton("Delete")
-        btn_delete.setStyleSheet("background-color: #e74c3c; color: white; font-weight: bold;")
-        btn_delete.clicked.connect(self._on_delete_clicked)
-        button_row.addWidget(btn_delete)
-
-        layout.addLayout(button_row)
+        # No action buttons; edits auto-apply on release. Delete via keyboard.
 
     def set_spore(self, pixmap, points, length_um, width_um, microns_per_pixel, measurement_id=None):
         """Set the spore to display."""
@@ -103,6 +89,7 @@ class SporePreviewWidget(QWidget):
         self.fixed_center = QPointF((line1_mid.x() + line2_mid.x()) / 2, (line1_mid.y() + line2_mid.y()) / 2)
 
         self.reset_adjustments()
+        self.setFocus(Qt.OtherFocusReason)
 
     def set_measure_color(self, color):
         """Set the measurement color for the preview."""
@@ -125,6 +112,13 @@ class SporePreviewWidget(QWidget):
         if self.measurement_id is None:
             return
         self.delete_requested.emit(self.measurement_id)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Delete:
+            self._on_delete_clicked()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def reset_adjustments(self):
         """Reset all adjustments to zero."""
@@ -355,6 +349,8 @@ class PreviewImageLabel(QLabel):
     rotation_dragged = Signal(float)
     # Signal emitted when rectangle is dragged (delta)
     rectangle_dragged = Signal(QPointF)
+    # Signal emitted when a drag interaction ends
+    interaction_finished = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -566,10 +562,13 @@ class PreviewImageLabel(QLabel):
     def mouseReleaseEvent(self, event):
         """Handle mouse release."""
         if event.button() == Qt.LeftButton:
+            was_dragging = self.dragging_side >= 0 or self.dragging_rotation or self.dragging_rectangle
             self.dragging_side = -1
             self.dragging_rotation = False
             self.dragging_rectangle = False
             self.setCursor(Qt.ArrowCursor)
+            if was_dragging:
+                self.interaction_finished.emit()
 
     def paintEvent(self, event):
         """Custom paint to show magnified spore with draggable corner nodes."""

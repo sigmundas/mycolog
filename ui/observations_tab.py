@@ -4,20 +4,28 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                                 QTableWidget, QTableWidgetItem, QHeaderView,
                                 QDialog, QFormLayout, QLineEdit, QTextEdit,
                                 QDateTimeEdit, QFileDialog, QLabel, QMessageBox,
-                                QSplitter, QRadioButton, QButtonGroup, QScrollArea,
-                                QGridLayout, QFrame, QComboBox, QToolButton,
+                                QSplitter, QRadioButton, QButtonGroup,
+                                QComboBox,
                                 QListWidget, QListWidgetItem, QGroupBox, QCheckBox,
-                                QDoubleSpinBox, QTabWidget, QDialogButtonBox)
-from PySide6.QtCore import Signal, Qt, QDateTime
+                                QDoubleSpinBox, QTabWidget, QDialogButtonBox, QCompleter)
+from PySide6.QtCore import Signal, Qt, QDateTime, QStringListModel, QEvent
 from PySide6.QtGui import QPixmap, QImage
 from PySide6.QtCore import QUrl
 from pathlib import Path
+import sqlite3
 from database.models import ObservationDB, ImageDB, MeasurementDB, SettingsDB
 from database.schema import get_images_dir, load_objectives
 from utils.thumbnail_generator import get_thumbnail_path, generate_all_sizes
 from utils.heic_converter import maybe_convert_heic
 from utils.ml_export import export_coco_format, get_export_summary
 from datetime import datetime
+import re
+from utils.vernacular_utils import (
+    normalize_vernacular_language,
+    vernacular_language_label,
+    resolve_vernacular_db_path,
+)
+from .image_gallery_widget import ImageGalleryWidget
 
 
 class SortableTableWidgetItem(QTableWidgetItem):
@@ -255,8 +263,8 @@ class MapServiceHelper:
 class ObservationsTab(QWidget):
     """Tab for viewing and managing observations."""
 
-    # Signal emitted when observation is selected (id, display_name)
-    observation_selected = Signal(int, str)
+    # Signal emitted when observation is selected (id, display_name, switch_tab)
+    observation_selected = Signal(int, str, bool)
     # Signal emitted when an image is selected to open in Measure tab
     image_selected = Signal(int, int, str)  # image_id, observation_id, display_name
 
@@ -275,38 +283,36 @@ class ObservationsTab(QWidget):
         # Top buttons
         button_layout = QHBoxLayout()
 
-        new_btn = QPushButton("New Observation")
+        new_btn = QPushButton(self.tr("New Observation"))
         new_btn.setObjectName("primaryButton")
         new_btn.clicked.connect(self.create_new_observation)
         button_layout.addWidget(new_btn)
 
-        self.select_btn = QPushButton("Load")
-        self.select_btn.setEnabled(False)
-        self.select_btn.setStyleSheet("background-color: #27ae60;")
-        self.select_btn.clicked.connect(self.set_selected_as_active)
-        button_layout.addWidget(self.select_btn)
-
-        self.rename_btn = QPushButton("Edit")
+        self.rename_btn = QPushButton(self.tr("Edit"))
         self.rename_btn.setEnabled(False)
         self.rename_btn.clicked.connect(self.edit_observation)
         button_layout.addWidget(self.rename_btn)
 
-        self.delete_btn = QPushButton("Delete")
+        self.delete_btn = QPushButton(self.tr("Delete"))
         self.delete_btn.setEnabled(False)
-        self.delete_btn.setStyleSheet("background-color: #e74c3c;")
+        self.delete_btn.setStyleSheet(
+            "QPushButton { background-color: #e74c3c; color: white; font-weight: bold; }"
+            "QPushButton:hover { background-color: #c0392b; }"
+            "QPushButton:pressed { background-color: #a93226; }"
+        )
         self.delete_btn.clicked.connect(self.delete_selected_observation)
         button_layout.addWidget(self.delete_btn)
 
-        refresh_btn = QPushButton("Refresh DB")
+        refresh_btn = QPushButton(self.tr("Refresh DB"))
         refresh_btn.clicked.connect(self.refresh_observations)
         button_layout.addWidget(refresh_btn)
 
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Search observations...")
+        self.search_input.setPlaceholderText(self.tr("Search observations..."))
         self.search_input.textChanged.connect(self.refresh_observations)
         button_layout.addWidget(self.search_input)
 
-        self.needs_id_filter = QCheckBox("Needs ID only")
+        self.needs_id_filter = QCheckBox(self.tr("Needs ID only"))
         self.needs_id_filter.stateChanged.connect(self.refresh_observations)
         button_layout.addWidget(self.needs_id_filter)
 
@@ -319,9 +325,17 @@ class ObservationsTab(QWidget):
 
         # Observations table
         self.table = QTableWidget()
-        self.table.setColumnCount(7)
+        self.table.setColumnCount(9)
         self.table.setHorizontalHeaderLabels([
-            "ID", "Genus", "Species", "Needs ID", "Date", "Location", "Map"
+            self.tr("ID"),
+            self.tr("Genus"),
+            self.tr("Species"),
+            self._common_name_column_title(),
+            self._spore_stats_column_title(),
+            self.tr("Needs ID"),
+            self.tr("Date"),
+            self.tr("Location"),
+            self.tr("Map")
         ])
 
         # Set column properties
@@ -329,10 +343,12 @@ class ObservationsTab(QWidget):
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.Stretch)
         header.setSectionResizeMode(2, QHeaderView.Stretch)
-        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.Stretch)
         header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(5, QHeaderView.Stretch)
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(7, QHeaderView.Stretch)
+        header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
 
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
@@ -360,30 +376,25 @@ class ObservationsTab(QWidget):
         detail_layout.setContentsMargins(5, 5, 5, 5)
         detail_layout.setSpacing(5)
 
-        # Info label
-        self.detail_label = QLabel("")
-        self.detail_label.setWordWrap(True)
-        self.detail_label.setStyleSheet("font-size: 10pt;")
-        detail_layout.addWidget(self.detail_label)
+        # Image gallery (collapsible) in a resizable splitter.
+        self.gallery_widget = ImageGalleryWidget(
+            self.tr("Images"),
+            self,
+            show_delete=True,
+            show_badges=True,
+            min_height=50,
+            default_height=180,
+        )
+        self.gallery_widget.imageClicked.connect(self._on_gallery_image_clicked)
+        self.gallery_widget.deleteRequested.connect(self._confirm_delete_image)
 
-        # Image browser section (single horizontal scroll area for all images)
-        self.images_scroll = QScrollArea()
-        self.images_scroll.setWidgetResizable(True)
-        self.images_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.images_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.images_scroll.setMaximumHeight(260)
-        self.images_container = QWidget()
-        self.images_grid = QHBoxLayout(self.images_container)
-        self.images_grid.setAlignment(Qt.AlignLeft)
-        self.images_grid.setSpacing(10)
-        self.images_scroll.setWidget(self.images_container)
-
-        detail_layout.addWidget(self.images_scroll)
+        detail_layout.addWidget(self.gallery_widget)
 
         splitter.addWidget(self.detail_widget)
 
         splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 3)
+        splitter.setSizes([600, 180])
 
         layout.addWidget(splitter)
 
@@ -391,6 +402,10 @@ class ObservationsTab(QWidget):
         """Load all observations from database."""
         previous_id = self.selected_observation_id
         observations = ObservationDB.get_all_observations()
+        self._vernacular_cache = {}
+        self._table_vernacular_db = self._get_vernacular_db_for_active_language()
+        self._update_table_headers()
+        common_name_map = self._build_common_name_map(observations)
         if hasattr(self, "needs_id_filter") and self.needs_id_filter.isChecked():
             observations = [
                 obs for obs in observations
@@ -427,16 +442,32 @@ class ObservationsTab(QWidget):
             species = obs.get('species') or obs.get('species_guess') or 'sp.'
             self.table.setItem(row, 2, QTableWidgetItem(species))
 
+            # Common name (language-specific)
+            common_name = self._lookup_common_name(obs, common_name_map)
+            display_name = common_name
+            if not display_name:
+                genus_raw = (obs.get('genus') or '').strip()
+                species_raw = (obs.get('species') or '').strip()
+                if genus_raw and species_raw:
+                    display_name = f"- ({genus_raw} {species_raw})"
+                else:
+                    display_name = "-"
+            self.table.setItem(row, 3, QTableWidgetItem(display_name))
+
+            # Spore stats (simplified)
+            spore_short = self._format_spore_stats_short(obs.get("spore_statistics"))
+            self.table.setItem(row, 4, QTableWidgetItem(spore_short or "-"))
+
             needs_id = not (obs.get('genus') and obs.get('species'))
-            needs_item = SortableTableWidgetItem("Yes" if needs_id else "")
+            needs_item = SortableTableWidgetItem(self.tr("Yes") if needs_id else "")
             needs_item.setData(Qt.UserRole, 1 if needs_id else 0)
-            self.table.setItem(row, 3, needs_item)
+            self.table.setItem(row, 5, needs_item)
 
             # Date
-            self.table.setItem(row, 4, QTableWidgetItem(obs['date'] or '-'))
+            self.table.setItem(row, 6, QTableWidgetItem(obs['date'] or '-'))
 
             # Location
-            self.table.setItem(row, 5, QTableWidgetItem(obs['location'] or '-'))
+            self.table.setItem(row, 7, QTableWidgetItem(obs['location'] or '-'))
 
             # Map link
             lat = obs.get('gps_latitude')
@@ -445,7 +476,7 @@ class ObservationsTab(QWidget):
             map_item = SortableTableWidgetItem("" if has_coords else "-")
             map_item.setData(Qt.UserRole, 1 if has_coords else 0)
             map_item.setFlags(map_item.flags() & ~Qt.ItemIsEditable)
-            self.table.setItem(row, 6, map_item)
+            self.table.setItem(row, 8, map_item)
             if has_coords:
                 map_label = QLabel('<a href="#">Map</a>')
                 map_label.setTextFormat(Qt.RichText)
@@ -456,14 +487,12 @@ class ObservationsTab(QWidget):
                 map_label.linkActivated.connect(
                     lambda _=None, la=lat, lo=lon, sn=species_name: self.show_map_service_dialog(la, lo, sn)
                 )
-                self.table.setCellWidget(row, 6, map_label)
+                self.table.setCellWidget(row, 8, map_label)
 
         # Clear detail view
-        self.detail_label.setText("")
-        self.select_btn.setEnabled(False)
         self.rename_btn.setEnabled(False)
         self.delete_btn.setEnabled(False)
-        self._clear_image_browser()
+        self.gallery_widget.clear()
         self.selected_observation_id = None
 
         if previous_id:
@@ -473,6 +502,155 @@ class ObservationsTab(QWidget):
                     self.selected_observation_id = previous_id
                     self.on_selection_changed()
                     break
+
+    def _get_vernacular_db_for_active_language(self):
+        lang = normalize_vernacular_language(SettingsDB.get_setting("vernacular_language", "no"))
+        db_path = resolve_vernacular_db_path(lang)
+        if not db_path:
+            return None
+        return VernacularDB(db_path, language_code=lang)
+
+    def _build_common_name_map(self, observations: list[dict]) -> dict[tuple[str, str], str | None]:
+        """Pre-build a cache of all common names for the observations."""
+        if not self._table_vernacular_db:
+            return {}
+        
+        # Collect all unique genus+species combinations from observations
+        taxa = set()
+        for obs in observations:
+            genus = self._normalize_taxon_text(obs.get("genus"))
+            species = self._normalize_taxon_text(obs.get("species"))
+            if not genus or not species:
+                guess = self._normalize_taxon_text(obs.get("species_guess"))
+                parts = guess.split() if guess else []
+                if len(parts) >= 2:
+                    genus, species = parts[0], parts[1]
+            if genus and species:
+                taxa.add((genus, species))
+        
+        if not taxa:
+            return {}
+        
+        # Fetch all common names in one database session
+        name_map: dict[tuple[str, str], str | None] = {}
+        for genus, species in taxa:
+            try:
+                name_map[(genus, species)] = self._table_vernacular_db.vernacular_from_taxon(genus, species)
+            except Exception:
+                name_map[(genus, species)] = None
+        
+        return name_map
+
+    def _lookup_common_name(self, obs: dict, name_map: dict[tuple[str, str], str | None]) -> str | None:
+        """Look up common name from the pre-built cache."""
+        genus = self._normalize_taxon_text(obs.get("genus"))
+        species = self._normalize_taxon_text(obs.get("species"))
+        
+        if not genus or not species:
+            guess = self._normalize_taxon_text(obs.get("species_guess"))
+            parts = guess.split() if guess else []
+            if len(parts) >= 2:
+                genus, species = parts[0], parts[1]
+        
+        if not genus or not species:
+            return None
+        
+        # Use the pre-built cache - no database access needed here!
+        return name_map.get((genus, species))
+
+    def _normalize_taxon_text(self, value: str | None) -> str:
+        if not value:
+            return ""
+        try:
+            import unicodedata
+            text = unicodedata.normalize("NFKC", str(value))
+        except Exception:
+            text = str(value)
+        text = text.replace("\u00a0", " ")
+        text = text.strip()
+        if text.startswith("?"):
+            text = text.lstrip("?").strip()
+        return " ".join(text.split())
+
+    def _common_name_column_title(self) -> str:
+        lang = normalize_vernacular_language(SettingsDB.get_setting("vernacular_language", "no"))
+        label = vernacular_language_label(lang)
+        base = self.tr("Common name")
+        return f"{base} ({label})" if label else base
+
+    def _spore_stats_column_title(self) -> str:
+        lang = (SettingsDB.get_setting("ui_language", "en") or "en").lower()
+        return "Sporer" if lang.startswith("nb") or lang.startswith("no") else "Spores"
+
+    def _update_table_headers(self) -> None:
+        if not hasattr(self, "table"):
+            return
+        item = self.table.horizontalHeaderItem(3)
+        if item:
+            item.setText(self._common_name_column_title())
+        spore_item = self.table.horizontalHeaderItem(4)
+        if spore_item:
+            spore_item.setText(self._spore_stats_column_title())
+
+    def _format_spore_stats_short(self, stats: str | None) -> str | None:
+        if not stats:
+            return None
+        text = str(stats)
+        length_seg = None
+        width_seg = None
+        match_len = re.search(r"Spores?:\\s*([^,]+?)\\s*um\\s*x", text, re.IGNORECASE)
+        match_wid = re.search(r"\\s*x\\s*([^,]+?)\\s*um", text, re.IGNORECASE)
+        if match_len:
+            length_seg = match_len.group(1)
+        if match_wid:
+            width_seg = match_wid.group(1)
+
+        def _extract_p05_p95(segment: str | None) -> tuple[str | None, str | None]:
+            if not segment:
+                return None, None
+            nums = re.findall(r"[0-9]+(?:\\.[0-9]+)?", segment)
+            if len(nums) >= 3:
+                return nums[1], nums[2]
+            if len(nums) == 2:
+                return nums[0], nums[1]
+            return None, None
+
+        l5, l95 = _extract_p05_p95(length_seg)
+        w5, w95 = _extract_p05_p95(width_seg)
+        if not l5 or not l95 or not w5 or not w95:
+            return None
+
+        qm_match = re.search(r"Qm\\s*=\\s*([0-9]+(?:\\.[0-9]+)?)", text)
+        qm = qm_match.group(1) if qm_match else None
+        qm_short = None
+        if qm:
+            try:
+                qm_short = f"{float(qm):.1f}"
+            except ValueError:
+                qm_short = qm
+
+        base = f"{l5}-{l95} x {w5}-{w95}"
+        if qm_short:
+            return f"{base} Q={qm_short}"
+        return base
+
+    def apply_vernacular_language_change(self) -> None:
+        self._table_vernacular_db = self._get_vernacular_db_for_active_language()
+        self._vernacular_cache = {}
+        self._update_table_headers()
+        self.refresh_observations()
+
+    def _question_yes_no(self, title, text, default_yes=False):
+        """Show a localized Yes/No confirmation dialog."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle(title)
+        box.setText(text)
+        yes_btn = box.addButton(self.tr("Yes"), QMessageBox.YesRole)
+        no_btn = box.addButton(self.tr("No"), QMessageBox.NoRole)
+        box.setDefaultButton(yes_btn if default_yes else no_btn)
+        box.exec()
+        return box.clickedButton() == yes_btn
 
     def _get_measurements_for_image(self, image_id):
         """Get measurements for a specific image."""
@@ -490,173 +668,40 @@ class ObservationsTab(QWidget):
         """Show a dialog to choose a map service."""
         self.map_helper.show_map_service_dialog(lat, lon, species_name)
 
-    def _has_spore_measurements(self, image_id):
-        """Check if an image has any spore measurements."""
-        measurements = self._get_measurements_for_image(image_id)
-        for measurement in measurements:
-            measurement_type = (measurement.get('measurement_type') or '').lower()
-            if measurement_type in ('', 'manual', 'spore'):
-                return True
-        return False
-
-    def _clear_image_browser(self):
-        """Clear all thumbnails from the image browser."""
-        while self.images_grid.count():
-            item = self.images_grid.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-    def _populate_image_browser(self, observation_id):
-        """Populate the image browser with thumbnails for the observation."""
-        self._clear_image_browser()
-
-        images = ImageDB.get_images_for_observation(observation_id)
-
-        # Add all images to single row
-        for img in images:
-            thumb_widget = self._create_thumbnail_widget(img)
-            self.images_grid.addWidget(thumb_widget)
-
-        # Add "no images" label if empty
-        if not images:
-            return
-
-    def _create_thumbnail_widget(self, image_data):
-        """Create a clickable thumbnail widget for an image."""
-        frame = QFrame()
-        frame.setFrameStyle(QFrame.Box)
-        frame.setStyleSheet("""
-            QFrame {
-                border: 2px solid #bdc3c7;
-                border-radius: 5px;
-                background: white;
-            }
-            QFrame:hover {
-                border-color: #3498db;
-            }
-        """)
-        frame.setFixedSize(150, 170)
-        frame.setCursor(Qt.PointingHandCursor)
-
-        layout = QVBoxLayout(frame)
-        layout.setContentsMargins(5, 5, 5, 5)
-        layout.setSpacing(2)
-
-        # Thumbnail image
-        thumb_label = QLabel()
-        thumb_label.setAlignment(Qt.AlignCenter)
-        thumb_label.setFixedSize(140, 120)
-
-        # Try to load thumbnail
-        thumb_path = get_thumbnail_path(image_data['id'], '224x224')
-        if thumb_path and Path(thumb_path).exists():
-            pixmap = QPixmap(thumb_path)
-        else:
-            # Fall back to original image
-            pixmap = QPixmap(image_data['filepath'])
-
-        if not pixmap.isNull():
-            scaled = pixmap.scaled(140, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            thumb_label.setPixmap(scaled)
-        else:
-            thumb_label.setText("No preview")
-            thumb_label.setStyleSheet("color: #7f8c8d;")
-
-        image_container = QWidget()
-        image_layout = QGridLayout(image_container)
-        image_layout.setContentsMargins(0, 0, 0, 0)
-        image_layout.setSpacing(0)
-        image_layout.addWidget(thumb_label, 0, 0, alignment=Qt.AlignCenter)
-
-        overlay = QWidget()
-        overlay_layout = QHBoxLayout(overlay)
-        overlay_layout.setContentsMargins(2, 2, 2, 2)
-        overlay_layout.setSpacing(4)
-        overlay_layout.addStretch()
-
-        if self._has_spore_measurements(image_data['id']):
-            badge = QLabel("M")
-            badge.setFixedSize(16, 16)
-            badge.setAlignment(Qt.AlignCenter)
-            badge.setStyleSheet(
-                "background-color: #27ae60; color: white; border-radius: 8px; font-size: 8pt;"
-            )
-            overlay_layout.addWidget(badge)
-
-        delete_btn = QToolButton()
-        delete_btn.setText("X")
-        delete_btn.setFixedSize(16, 16)
-        delete_btn.setStyleSheet(
-            "QToolButton { background-color: #e74c3c; color: white; border-radius: 8px; font-size: 8pt; }"
-        )
-        delete_btn.clicked.connect(lambda _, img_id=image_data['id']: self._confirm_delete_image(img_id))
-        overlay_layout.addWidget(delete_btn)
-
-        image_layout.addWidget(overlay, 0, 0, alignment=Qt.AlignTop | Qt.AlignRight)
-        layout.addWidget(image_container)
-
-        # Label with info
-        filename = Path(image_data['filepath']).stem[:15]
-        info_text = filename
-
-        info_label = QLabel(info_text)
-        info_label.setAlignment(Qt.AlignCenter)
-        info_label.setStyleSheet("font-size: 8pt; color: #2c3e50;")
-        info_label.setWordWrap(True)
-        layout.addWidget(info_label)
-
-        # Store image data for click handler
-        frame.image_data = image_data
-
-        # Make clickable
-        frame.mousePressEvent = lambda e, img=image_data: self._on_thumbnail_clicked(img)
-
-        return frame
-
     def _confirm_delete_image(self, image_id):
         """Confirm and delete an image (and measurements if present)."""
         measurements = self._get_measurements_for_image(image_id)
         if measurements:
-            prompt = "Delete image and associated measurements?"
+            prompt = self.tr("Delete image and associated measurements?")
         else:
-            prompt = "Delete image?"
+            prompt = self.tr("Delete image?")
 
-        reply = QMessageBox.question(
-            self,
-            "Confirm Delete",
+        confirmed = self._question_yes_no(
+            self.tr("Confirm Delete"),
             prompt,
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+            default_yes=False
         )
-
-        if reply == QMessageBox.Yes:
+        if confirmed:
             ImageDB.delete_image(image_id)
             self.refresh_observations()
 
-    def _on_thumbnail_clicked(self, image_data):
+    def _on_gallery_image_clicked(self, image_id, _filepath):
         """Handle thumbnail click - emit signal to open in Measure tab."""
-        if self.selected_observation_id:
-            # Get observation info for display name
+        if self.selected_observation_id and image_id:
             obs = ObservationDB.get_observation(self.selected_observation_id)
             if obs:
                 genus = obs.get('genus') or ''
                 species = obs.get('species') or obs.get('species_guess') or 'sp.'
                 display_name = f"{genus} {species} {obs['date'] or ''}".strip()
-                self.image_selected.emit(
-                    image_data['id'],
-                    self.selected_observation_id,
-                    display_name
-                )
+                self.image_selected.emit(image_id, self.selected_observation_id, display_name)
 
     def on_selection_changed(self):
         """Update detail view when selection changes."""
         selected_rows = self.table.selectionModel().selectedRows()
         if not selected_rows:
-            self.detail_label.setText("")
-            self.select_btn.setEnabled(False)
             self.rename_btn.setEnabled(False)
             self.delete_btn.setEnabled(False)
-            self._clear_image_browser()
+            self.gallery_widget.clear()
             self.selected_observation_id = None
             return
 
@@ -669,28 +714,19 @@ class ObservationsTab(QWidget):
         obs = next((o for o in observations if o['id'] == obs_id), None)
 
         if obs:
-            detail_text = ""
-            if obs.get('spore_statistics'):
-                detail_text += "<b>Spore Statistics:</b><br>"
-                detail_text += (
-                    f"<span style='font-family: monospace; color: #2c3e50;'>"
-                    f"{obs['spore_statistics']}</span>"
-                )
-
-            self.detail_label.setText(detail_text)
-            self.select_btn.setEnabled(True)
             self.rename_btn.setEnabled(True)
             self.delete_btn.setEnabled(True)
 
             # Populate image browser
-            self._populate_image_browser(obs_id)
+            self.gallery_widget.set_observation_id(obs_id)
+            self.set_selected_as_active(switch_tab=False)
 
     def on_row_double_clicked(self, item):
         """Double-click to select observation as active."""
-        self.set_selected_as_active()
+        self.set_selected_as_active(switch_tab=True)
 
-    def set_selected_as_active(self):
-        """Set the selected observation as active and switch to Measure tab."""
+    def set_selected_as_active(self, switch_tab=True):
+        """Set the selected observation as active, optionally switching to Measure tab."""
         selected_rows = self.table.selectionModel().selectedRows()
         if not selected_rows:
             return
@@ -699,11 +735,11 @@ class ObservationsTab(QWidget):
         obs_id = int(self.table.item(row, 0).text())
         genus = self.table.item(row, 1).text()
         species = self.table.item(row, 2).text()
-        date = self.table.item(row, 4).text()
+        date = self.table.item(row, 6).text()
         display_name = f"{genus} {species} {date}"
 
         # Emit signal to set as active observation
-        self.observation_selected.emit(obs_id, display_name)
+        self.observation_selected.emit(obs_id, display_name, switch_tab)
 
     def get_selected_observation(self):
         """Return (observation_id, display_name) for current selection."""
@@ -714,7 +750,7 @@ class ObservationsTab(QWidget):
         obs_id = int(self.table.item(row, 0).text())
         genus = self.table.item(row, 1).text()
         species = self.table.item(row, 2).text()
-        date = self.table.item(row, 4).text()
+        date = self.table.item(row, 6).text()
         display_name = f"{genus} {species} {date}"
         return obs_id, display_name
 
@@ -957,14 +993,14 @@ class ObservationsTab(QWidget):
         species = self.table.item(row, 1).text()
 
         # Confirm deletion
-        reply = QMessageBox.question(
-            self, "Confirm Delete",
-            f"Delete observation '{species}'?\n\nThis will also delete all associated images and measurements.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+        confirmed = self._question_yes_no(
+            self.tr("Confirm Delete"),
+            self.tr("Delete observation '{species}'?\n\nThis will also delete all associated images and measurements.").format(
+                species=species
+            ),
+            default_yes=False
         )
-
-        if reply == QMessageBox.Yes:
+        if confirmed:
             ObservationDB.delete_observation(obs_id)
             self.refresh_observations()
 
@@ -1014,9 +1050,20 @@ class NewObservationDialog(QDialog):
             "sample_default",
             self.sample_options[0] if self.sample_options else "Not set"
         )
+        self.vernacular_db = None
+        self._vernacular_model = None
+        self._vernacular_completer = None
+        self._genus_model = None
+        self._genus_completer = None
+        self._species_model = None
+        self._species_completer = None
+        self._suppress_taxon_autofill = False
+        self._last_genus = ""
+        self._last_species = ""
         self.init_ui()
         if self.edit_mode:
             self._load_existing_observation()
+        self._sync_taxon_cache()
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -1024,21 +1071,27 @@ class NewObservationDialog(QDialog):
 
         # ===== TOP BUTTONS =====
         top_buttons = QHBoxLayout()
-        add_images_btn = QPushButton("Add Images...")
+        add_images_btn = QPushButton(self.tr("Add Images..."))
         add_images_btn.setObjectName("primaryButton")
         add_images_btn.setMinimumHeight(35)
         add_images_btn.clicked.connect(self.select_images)
         top_buttons.addWidget(add_images_btn)
-        self.delete_image_btn = QPushButton("Delete Image")
+        self.delete_image_btn = QPushButton(self.tr("Delete Image"))
         self.delete_image_btn.setMinimumHeight(35)
-        self.delete_image_btn.setStyleSheet("background-color: #e74c3c;")
+        self.delete_image_btn.setStyleSheet(
+            "QPushButton { background-color: #e74c3c; color: white; font-weight: bold; }"
+            "QPushButton:hover { background-color: #c0392b; }"
+            "QPushButton:pressed { background-color: #a93226; }"
+        )
         self.delete_image_btn.setEnabled(False)
         self.delete_image_btn.clicked.connect(self.delete_selected_image)
         top_buttons.addWidget(self.delete_image_btn)
         tips_label = QLabel(
-            "Select the image you want to use for time stamp and GPS location<br>"
-            "You can change the default objective in Settings - Calibration<br>"
-            "Add or remove contrast methods, mount and sample types in Settings - Database"
+            self.tr(
+                "Select the image you want to use for time stamp and GPS location<br>"
+                "You can change the default objective in Settings - Calibration<br>"
+                "Add or remove contrast methods, mount and sample types in Settings - Database"
+            )
         )
         tips_label.setWordWrap(True)
         tips_label.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
@@ -1057,7 +1110,15 @@ class NewObservationDialog(QDialog):
         self.image_table = QTableWidget()
         self.image_table.setColumnCount(7)
         self.image_table.setHorizontalHeaderLabels(
-            ["Image", "Field", "Micro", "Objective", "Contrast", "Mount", "Sample"]
+            [
+                self.tr("Image"),
+                self.tr("Field"),
+                self.tr("Micro"),
+                self.tr("Objective"),
+                self.tr("Contrast"),
+                self.tr("Mount"),
+                self.tr("Sample")
+            ]
         )
         self.image_table.setMinimumHeight(180)
         self.image_table.setMaximumHeight(220)
@@ -1086,7 +1147,7 @@ class NewObservationDialog(QDialog):
         images_content.addWidget(self.image_table, 3)
 
         # Thumbnail preview
-        self.thumbnail_label = QLabel("No image selected")
+        self.thumbnail_label = QLabel(self.tr("No image selected"))
         self.thumbnail_label.setAlignment(Qt.AlignCenter)
         self.thumbnail_label.setMinimumSize(180, 150)
         self.thumbnail_label.setMaximumSize(200, 180)
@@ -1100,7 +1161,7 @@ class NewObservationDialog(QDialog):
         main_layout.addWidget(images_group)
 
         # ===== OBSERVATION DETAILS SECTION =====
-        details_group = QGroupBox("Observation Details")
+        details_group = QGroupBox(self.tr("Observation Details"))
         details_layout = QFormLayout()
         details_layout.setSpacing(8)
 
@@ -1119,36 +1180,47 @@ class NewObservationDialog(QDialog):
         self.datetime_input.setMaximumWidth(250)
         datetime_layout.addWidget(self.datetime_input)
         datetime_layout.addStretch()
-        details_layout.addRow("Date && Time:", datetime_container)
+        details_layout.addRow(self.tr("Date & time:"), datetime_container)
 
         # Taxonomy tab widget (Species vs Unknown)
         self.taxonomy_tabs = QTabWidget()
-        self.taxonomy_tabs.setMaximumHeight(80)
+        self.taxonomy_tabs.setMinimumHeight(120)
         self.taxonomy_tabs.currentChanged.connect(self.on_taxonomy_tab_changed)
 
-        # Tab 1: Identified (genus/species)
+        # Tab 1: Identified (vernacular + genus/species)
         identified_tab = QWidget()
-        identified_layout = QHBoxLayout(identified_tab)
+        identified_layout = QVBoxLayout(identified_tab)
         identified_layout.setContentsMargins(8, 8, 8, 8)
-        identified_layout.setSpacing(8)
+        identified_layout.setSpacing(6)
 
-        identified_layout.addWidget(QLabel("Genus:"))
+        vern_row = QHBoxLayout()
+        self.vernacular_label = QLabel(self._vernacular_label())
+        vern_row.addWidget(self.vernacular_label)
+        self.vernacular_input = QLineEdit()
+        self.vernacular_input.setPlaceholderText(self._vernacular_placeholder())
+        vern_row.addWidget(self.vernacular_input, 1)
+        identified_layout.addLayout(vern_row)
+
+        taxon_row = QHBoxLayout()
+        taxon_row.setSpacing(8)
+        taxon_row.addWidget(QLabel("Genus:"))
         self.genus_input = QLineEdit()
         self.genus_input.setPlaceholderText("e.g., Flammulina")
-        identified_layout.addWidget(self.genus_input, 1)
+        taxon_row.addWidget(self.genus_input, 1)
 
-        identified_layout.addWidget(QLabel("Species:"))
+        taxon_row.addWidget(QLabel("Species:"))
         self.species_input = QLineEdit()
-        self.species_input.setPlaceholderText("e.g., elastica")
-        identified_layout.addWidget(self.species_input, 1)
+        self.species_input.setPlaceholderText("e.g., velutipes")
+        taxon_row.addWidget(self.species_input, 1)
 
-        self.uncertain_checkbox = QCheckBox("Uncertain")
+        self.uncertain_checkbox = QCheckBox(self.tr("Uncertain"))
         self.uncertain_checkbox.setToolTip(
             "Check this if you're not confident about the identification"
         )
-        identified_layout.addWidget(self.uncertain_checkbox)
+        taxon_row.addWidget(self.uncertain_checkbox)
+        identified_layout.addLayout(taxon_row)
 
-        self.taxonomy_tabs.addTab(identified_tab, "Species")
+        self.taxonomy_tabs.addTab(identified_tab, self.tr("Species"))
 
         # Tab 2: Unknown (working title only)
         unknown_tab = QWidget()
@@ -1162,14 +1234,14 @@ class NewObservationDialog(QDialog):
         unknown_layout.addWidget(self.title_input, 1)
         unknown_layout.addStretch()
 
-        self.taxonomy_tabs.addTab(unknown_tab, "Unknown")
+        self.taxonomy_tabs.addTab(unknown_tab, self.tr("Unknown"))
 
         details_layout.addRow("Taxonomy:", self.taxonomy_tabs)
 
         # Location (text)
         self.location_input = QLineEdit()
         self.location_input.setPlaceholderText("e.g., Bymarka, Trondheim")
-        details_layout.addRow("Location:", self.location_input)
+        details_layout.addRow(self.tr("Location:"), self.location_input)
 
         # GPS Coordinates
         gps_layout = QHBoxLayout()
@@ -1190,7 +1262,7 @@ class NewObservationDialog(QDialog):
         gps_layout.addWidget(self.lon_input)
 
         # Map button - opens location in browser
-        self.map_btn = QPushButton("  Map  ")
+        self.map_btn = QPushButton(self.tr("  Map  "))
         self.map_btn.setToolTip("Open location in Google Maps")
         self.map_btn.setMinimumWidth(70)
         self.map_btn.clicked.connect(self.open_map)
@@ -1211,20 +1283,20 @@ class NewObservationDialog(QDialog):
 
         # Habitat
         self.habitat_input = QLineEdit()
-        self.habitat_input.setPlaceholderText("e.g., Spruce forest")
-        details_layout.addRow("Habitat:", self.habitat_input)
+        self.habitat_input.setPlaceholderText(self.tr("e.g., Spruce forest"))
+        details_layout.addRow(self.tr("Habitat:"), self.habitat_input)
 
         # Notes
         self.notes_input = QTextEdit()
         self.notes_input.setMaximumHeight(80)
-        self.notes_input.setPlaceholderText("Any additional notes...")
-        details_layout.addRow("Notes:", self.notes_input)
+        self.notes_input.setPlaceholderText(self.tr("Any additional notes..."))
+        details_layout.addRow(self.tr("Notes:"), self.notes_input)
 
         # Info about folder structure
         images_root = get_images_dir()
         info_path = f"{images_root}\\[genus]\\[species] - [date time]"
         info_label = QLabel(
-            f"<small><i>Images will be stored in: {info_path}</i></small>"
+            f"<small><i>{self.tr('Images will be stored in: {path}').format(path=info_path)}</i></small>"
         )
         info_label.setStyleSheet("color: #7f8c8d;")
         details_layout.addRow("", info_label)
@@ -1235,16 +1307,20 @@ class NewObservationDialog(QDialog):
         # ===== BOTTOM BUTTONS =====
         bottom_buttons = QHBoxLayout()
         bottom_buttons.addStretch()
-        cancel_btn = QPushButton("Cancel")
+        cancel_btn = QPushButton(self.tr("Cancel"))
         cancel_btn.setMinimumHeight(35)
         cancel_btn.clicked.connect(self.reject)
         bottom_buttons.addWidget(cancel_btn)
-        create_btn = QPushButton("Save Observation" if self.edit_mode else "Create Observation")
+        create_btn = QPushButton(
+            self.tr("Save Observation") if self.edit_mode else self.tr("Create Observation")
+        )
         create_btn.setObjectName("primaryButton")
         create_btn.setMinimumHeight(35)
         create_btn.clicked.connect(self.accept)
         bottom_buttons.addWidget(create_btn)
         main_layout.addLayout(bottom_buttons)
+
+        self._setup_vernacular_autocomplete()
 
         self.on_taxonomy_tab_changed(self.taxonomy_tabs.currentIndex())
         self._update_datetime_width()
@@ -1424,7 +1500,7 @@ class NewObservationDialog(QDialog):
         """Handle image selection in the table."""
         selected_rows = self.image_table.selectionModel().selectedRows()
         if not selected_rows or selected_rows[0].row() >= len(self.image_metadata):
-            self.thumbnail_label.setText("No image selected")
+            self.thumbnail_label.setText(self.tr("No image selected"))
             if hasattr(self, "delete_image_btn"):
                 self.delete_image_btn.setEnabled(False)
             self.selected_image_index = -1
@@ -1498,20 +1574,18 @@ class NewObservationDialog(QDialog):
         if image_id:
             measurements = MeasurementDB.get_measurements_for_image(image_id)
             if measurements:
-                prompt = "Delete image and associated measurements?"
+                prompt = self.tr("Delete image and associated measurements?")
             else:
-                prompt = "Delete image?"
+                prompt = self.tr("Delete image?")
         else:
-            prompt = "Remove image from this observation?"
+            prompt = self.tr("Remove image from this observation?")
 
-        reply = QMessageBox.question(
-            self,
-            "Confirm Delete",
+        confirmed = self._question_yes_no(
+            self.tr("Confirm Delete"),
             prompt,
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+            default_yes=False
         )
-        if reply != QMessageBox.Yes:
+        if not confirmed:
             return
 
         if image_id:
@@ -1526,9 +1600,21 @@ class NewObservationDialog(QDialog):
         self.selected_image_index = -1
         self._update_image_table()
         if self.image_table.rowCount() == 0:
-            self.thumbnail_label.setText("No image selected")
+            self.thumbnail_label.setText(self.tr("No image selected"))
             if hasattr(self, "delete_image_btn"):
                 self.delete_image_btn.setEnabled(False)
+
+    def _question_yes_no(self, title, text, default_yes=False):
+        """Show a localized Yes/No confirmation dialog."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle(title)
+        box.setText(text)
+        yes_btn = box.addButton(self.tr("Yes"), QMessageBox.YesRole)
+        no_btn = box.addButton(self.tr("No"), QMessageBox.NoRole)
+        box.setDefaultButton(yes_btn if default_yes else no_btn)
+        box.exec()
+        return box.clickedButton() == yes_btn
 
     def _apply_metadata_from_index(self, index):
         """Apply date/time and GPS from the image at the given index."""
@@ -1620,6 +1706,8 @@ class NewObservationDialog(QDialog):
         self.uncertain_checkbox.setEnabled(not is_unknown)
         if is_unknown:
             self.uncertain_checkbox.setChecked(False)
+        if hasattr(self, "vernacular_input"):
+            self.vernacular_input.setEnabled(not is_unknown)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1630,6 +1718,255 @@ class NewObservationDialog(QDialog):
         if hasattr(self, "datetime_input"):
             target = max(220, int(self.width() * 0.5))
             self.datetime_input.setFixedWidth(target)
+
+    def _vernacular_label(self) -> str:
+        lang = normalize_vernacular_language(SettingsDB.get_setting("vernacular_language", "no"))
+        label = vernacular_language_label(lang)
+        base = self.tr("Common name")
+        return f"{base} ({label}):" if label else f"{base}:"
+
+    def _vernacular_placeholder(self) -> str:
+        lang = normalize_vernacular_language(SettingsDB.get_setting("vernacular_language", "no"))
+        if lang == "no":
+            return self.tr("e.g., Kantarell")
+        if lang == "de":
+            return self.tr("e.g., Pfifferling")
+        if lang == "fr":
+            return self.tr("e.g., Girolle")
+        if lang == "es":
+            return self.tr("e.g., Rebozuelo")
+        if lang == "da":
+            return self.tr("e.g., Kantarel")
+        if lang == "sv":
+            return self.tr("e.g., Kantarell")
+        if lang == "fi":
+            return self.tr("e.g., Kantarelli")
+        if lang == "pl":
+            return self.tr("e.g., Kurka")
+        if lang == "pt":
+            return self.tr("e.g., Cantarelo")
+        if lang == "it":
+            return self.tr("e.g., Gallinaccio")
+        return self.tr("e.g., Chanterelle")
+
+    def apply_vernacular_language_change(self) -> None:
+        if hasattr(self, "vernacular_label"):
+            self.vernacular_label.setText(self._vernacular_label())
+        if hasattr(self, "vernacular_input"):
+            self.vernacular_input.setPlaceholderText(self._vernacular_placeholder())
+        lang = normalize_vernacular_language(SettingsDB.get_setting("vernacular_language", "no"))
+        db_path = resolve_vernacular_db_path(lang)
+        if not db_path:
+            return
+        if self.vernacular_db and self.vernacular_db.db_path == db_path:
+            self.vernacular_db.language_code = lang
+        else:
+            self.vernacular_db = VernacularDB(db_path, language_code=lang)
+        self._maybe_set_vernacular_from_taxon()
+
+    def _setup_vernacular_autocomplete(self):
+        """Wire vernacular lookup/completion if taxonomy DB is available."""
+        if not hasattr(self, "vernacular_input"):
+            return
+        lang = normalize_vernacular_language(SettingsDB.get_setting("vernacular_language", "no"))
+        db_path = resolve_vernacular_db_path(lang)
+        if not db_path:
+            return
+        self.vernacular_db = VernacularDB(db_path, language_code=lang)
+        self._vernacular_model = QStringListModel()
+        self._vernacular_completer = QCompleter(self._vernacular_model, self)
+        self._vernacular_completer.setCaseSensitivity(Qt.CaseInsensitive)
+        self._vernacular_completer.setCompletionMode(QCompleter.PopupCompletion)
+        self.vernacular_input.setCompleter(self._vernacular_completer)
+        self._vernacular_completer.activated.connect(self._on_vernacular_selected)
+        self.vernacular_input.textChanged.connect(self._on_vernacular_text_changed)
+        self.vernacular_input.editingFinished.connect(self._on_vernacular_editing_finished)
+        self.vernacular_input.installEventFilter(self)
+
+        self._genus_model = QStringListModel()
+        self._genus_completer = QCompleter(self._genus_model, self)
+        self._genus_completer.setCaseSensitivity(Qt.CaseInsensitive)
+        self._genus_completer.setCompletionMode(QCompleter.PopupCompletion)
+        self.genus_input.setCompleter(self._genus_completer)
+        self.genus_input.textChanged.connect(self._on_genus_text_changed)
+        self.genus_input.editingFinished.connect(self._on_genus_editing_finished)
+
+        self._species_model = QStringListModel()
+        self._species_completer = QCompleter(self._species_model, self)
+        self._species_completer.setCaseSensitivity(Qt.CaseInsensitive)
+        self._species_completer.setCompletionMode(QCompleter.PopupCompletion)
+        self.species_input.setCompleter(self._species_completer)
+        self.species_input.textChanged.connect(self._on_species_text_changed)
+        self.species_input.editingFinished.connect(self._on_species_editing_finished)
+
+        self.genus_input.installEventFilter(self)
+        self.species_input.installEventFilter(self)
+
+    def _on_vernacular_text_changed(self, text):
+        if not self.vernacular_db:
+            return
+        if self._suppress_taxon_autofill:
+            return
+        if not text.strip():
+            self._update_vernacular_suggestions_for_taxon()
+            return
+        genus = self.genus_input.text().strip() or None
+        species = self.species_input.text().strip() or None
+        suggestions = self.vernacular_db.suggest_vernacular(text, genus=genus, species=species)
+        self._vernacular_model.setStringList(suggestions)
+
+    def _update_vernacular_suggestions_for_taxon(self):
+        if not self.vernacular_db:
+            return
+        genus = self.genus_input.text().strip() or None
+        species = self.species_input.text().strip() or None
+        if not genus and not species:
+            self._vernacular_model.setStringList([])
+            self._set_vernacular_placeholder_from_suggestions([])
+            return
+        suggestions = self.vernacular_db.suggest_vernacular_for_taxon(genus=genus, species=species)
+        self._vernacular_model.setStringList(suggestions)
+        self._set_vernacular_placeholder_from_suggestions(suggestions)
+
+    def _set_vernacular_placeholder_from_suggestions(self, suggestions: list[str]) -> None:
+        if not hasattr(self, "vernacular_input"):
+            return
+        if not suggestions:
+            self.vernacular_input.setPlaceholderText(self._vernacular_placeholder())
+            return
+        preview = "; ".join(suggestions[:4])
+        self.vernacular_input.setPlaceholderText(f"{self.tr('e.g.,')} {preview}")
+
+    def _on_vernacular_selected(self, name):
+        if not self.vernacular_db:
+            return
+        taxon = self.vernacular_db.taxon_from_vernacular(name)
+        if taxon:
+            genus, species, _family = taxon
+            self._suppress_taxon_autofill = True
+            self.genus_input.setText(genus)
+            self.species_input.setText(species)
+            self._suppress_taxon_autofill = False
+            self._sync_taxon_cache()
+
+    def _on_vernacular_editing_finished(self):
+        if not self.vernacular_db:
+            return
+        name = self.vernacular_input.text().strip()
+        if not name:
+            return
+        taxon = self.vernacular_db.taxon_from_vernacular(name)
+        if taxon:
+            genus, species, _family = taxon
+            self._suppress_taxon_autofill = True
+            self.genus_input.setText(genus)
+            self.species_input.setText(species)
+            self._suppress_taxon_autofill = False
+            self._sync_taxon_cache()
+
+    def _on_genus_text_changed(self, text):
+        if not self.vernacular_db:
+            return
+        if self._suppress_taxon_autofill:
+            return
+        text = text.strip()
+        suggestions = self.vernacular_db.suggest_genus(text)
+        self._genus_model.setStringList(suggestions)
+        if not text:
+            self._suppress_taxon_autofill = True
+            self.species_input.clear()
+            self._suppress_taxon_autofill = False
+            self._species_model.setStringList([])
+
+    def _on_genus_editing_finished(self):
+        if not self.vernacular_db or self._suppress_taxon_autofill:
+            return
+        self._handle_taxon_change()
+        self._maybe_set_vernacular_from_taxon()
+
+    def _on_species_editing_finished(self):
+        if not self.vernacular_db or self._suppress_taxon_autofill:
+            return
+        self._handle_taxon_change()
+        self._maybe_set_vernacular_from_taxon()
+
+    def _on_species_text_changed(self, text):
+        if not self.vernacular_db:
+            return
+        if self._suppress_taxon_autofill:
+            return
+        genus = self.genus_input.text().strip()
+        if not genus:
+            self._species_model.setStringList([])
+            return
+        suggestions = self.vernacular_db.suggest_species(genus, text.strip())
+        self._species_model.setStringList(suggestions)
+        if text.strip():
+            self._maybe_set_vernacular_from_taxon()
+
+    def _handle_taxon_change(self):
+        if not hasattr(self, "_last_genus"):
+            self._sync_taxon_cache()
+            return
+        genus = self.genus_input.text().strip()
+        species = self.species_input.text().strip()
+        if genus != self._last_genus or species != self._last_species:
+            if genus and species and self.vernacular_input.text().strip():
+                self._suppress_taxon_autofill = True
+                self.vernacular_input.clear()
+                self._suppress_taxon_autofill = False
+        self._last_genus = genus
+        self._last_species = species
+
+    def _sync_taxon_cache(self):
+        self._last_genus = self.genus_input.text().strip()
+        self._last_species = self.species_input.text().strip()
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.FocusIn and self.vernacular_db:
+            if obj == self.vernacular_input:
+                if not self.vernacular_input.text().strip():
+                    self._update_vernacular_suggestions_for_taxon()
+                    if self._vernacular_model.stringList():
+                        self._vernacular_completer.complete()
+            elif obj == self.genus_input:
+                text = self.genus_input.text().strip()
+                suggestions = self.vernacular_db.suggest_genus(text)
+                self._genus_model.setStringList(suggestions)
+                if suggestions:
+                    self._genus_completer.complete()
+            elif obj == self.species_input:
+                genus = self.genus_input.text().strip()
+                if genus:
+                    text = self.species_input.text().strip()
+                    suggestions = self.vernacular_db.suggest_species(genus, text)
+                    self._species_model.setStringList(suggestions)
+                    if suggestions:
+                        self._species_completer.complete()
+        return super().eventFilter(obj, event)
+
+    def _maybe_set_vernacular_from_taxon(self):
+        if not self.vernacular_db:
+            return
+        if not hasattr(self, "vernacular_input"):
+            return
+        if self.vernacular_input.text().strip():
+            return
+        genus = self.genus_input.text().strip()
+        species = self.species_input.text().strip()
+        if not genus or not species:
+            return
+        suggestions = self.vernacular_db.suggest_vernacular_for_taxon(genus=genus, species=species)
+        if not suggestions:
+            self._set_vernacular_placeholder_from_suggestions([])
+            return
+        if len(suggestions) == 1:
+            self._suppress_taxon_autofill = True
+            self.vernacular_input.setText(suggestions[0])
+            self._suppress_taxon_autofill = False
+            self._set_vernacular_placeholder_from_suggestions([])
+        else:
+            self._set_vernacular_placeholder_from_suggestions(suggestions)
 
     def get_files(self):
         """Return selected image files."""
@@ -1730,6 +2067,7 @@ class NewObservationDialog(QDialog):
             })
 
         self._update_image_table()
+        self._maybe_set_vernacular_from_taxon()
 
 
 class RenameObservationDialog(QDialog):
@@ -1747,7 +2085,7 @@ class RenameObservationDialog(QDialog):
         layout = QFormLayout(self)
         layout.setSpacing(10)
 
-        self.unknown_checkbox = QCheckBox("Unknown")
+        self.unknown_checkbox = QCheckBox(self.tr("Unknown"))
         self.unknown_checkbox.toggled.connect(self.on_unknown_toggled)
 
         self.title_input = QLineEdit()
@@ -1771,19 +2109,19 @@ class RenameObservationDialog(QDialog):
         layout.addRow("Genus:", self.genus_input)
 
         self.species_input = QLineEdit()
-        self.species_input.setPlaceholderText("e.g., elastica")
+        self.species_input.setPlaceholderText("e.g., velutipes")
         self.species_input.setText(self.observation.get('species') or "")
         layout.addRow("Species:", self.species_input)
 
-        self.uncertain_checkbox = QCheckBox("Uncertain identification")
+        self.uncertain_checkbox = QCheckBox(self.tr("Uncertain identification"))
         self.uncertain_checkbox.setChecked(bool(self.observation.get('uncertain', 0)))
         layout.addRow("", self.uncertain_checkbox)
 
         button_layout = QHBoxLayout()
-        save_btn = QPushButton("Save")
+        save_btn = QPushButton(self.tr("Save"))
         save_btn.setObjectName("primaryButton")
         save_btn.clicked.connect(self.accept)
-        cancel_btn = QPushButton("Cancel")
+        cancel_btn = QPushButton(self.tr("Cancel"))
         cancel_btn.clicked.connect(self.reject)
         button_layout.addStretch()
         button_layout.addWidget(save_btn)
@@ -1818,3 +2156,206 @@ class RenameObservationDialog(QDialog):
         if checked:
             self.genus_input.clear()
             self.species_input.clear()
+
+
+# Helpers for vernacular language lookup are in utils.vernacular_utils.
+
+
+def _normalize_taxon_text_impl(self, value: str | None) -> str:
+    if not value:
+        return ""
+    try:
+        import unicodedata
+        text = unicodedata.normalize("NFKC", str(value))
+    except Exception:
+        text = str(value)
+    text = text.replace("\u00a0", " ")
+    text = text.strip()
+    if text.startswith("?"):
+        text = text.lstrip("?").strip()
+    return " ".join(text.split())
+
+
+class VernacularDB:
+    """Simple helper for vernacular name lookup."""
+
+    def __init__(self, db_path: Path, language_code: str | None = None):
+        self.db_path = db_path
+        self.language_code = normalize_vernacular_language(language_code) if language_code else None
+        self._has_language_column = None
+
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(self.db_path)
+
+    def _has_language(self) -> bool:
+        if self._has_language_column is None:
+            with self._connect() as conn:
+                cur = conn.execute("PRAGMA table_info(vernacular_min)")
+                self._has_language_column = any(row[1] == "language_code" for row in cur.fetchall())
+        return bool(self._has_language_column)
+
+    def _language_clause(self, language_code: str | None) -> tuple[str, list[str]]:
+        if not self._has_language():
+            return "", []
+        raw = language_code or self.language_code
+        if not raw:
+            return "", []
+        lang = normalize_vernacular_language(raw)
+        if not lang:
+            return "", []
+        return " AND v.language_code = ? ", [lang]
+
+    def list_languages(self) -> list[str]:
+        if not self._has_language():
+            return []
+        with self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT DISTINCT language_code
+                FROM vernacular_min
+                WHERE language_code IS NOT NULL AND language_code != ''
+                ORDER BY language_code
+                """
+            )
+            return [row[0] for row in cur.fetchall() if row and row[0]]
+
+    def suggest_vernacular(self, prefix: str, genus: str | None = None, species: str | None = None) -> list[str]:
+        prefix = prefix.strip()
+        if not prefix:
+            return []
+        lang_clause, lang_params = self._language_clause(None)
+        with self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT DISTINCT v.vernacular_name
+                FROM vernacular_min v
+                JOIN taxon_min t ON t.taxon_id = v.taxon_id
+                WHERE v.vernacular_name LIKE ? || '%'
+                  AND (? IS NULL OR t.genus = ?)
+                  AND (? IS NULL OR t.specific_epithet = ?)
+                """
+                + lang_clause
+                + """
+                ORDER BY v.vernacular_name
+                LIMIT 200
+                """,
+                (prefix, genus, genus, species, species, *lang_params),
+            )
+            return [row[0] for row in cur.fetchall() if row and row[0]]
+
+    def suggest_vernacular_for_taxon(
+        self, genus: str | None = None, species: str | None = None, limit: int = 200
+    ) -> list[str]:
+        genus = genus.strip() if genus else None
+        species = species.strip() if species else None
+        if not genus and not species:
+            return []
+        lang_clause, lang_params = self._language_clause(None)
+        with self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT DISTINCT v.vernacular_name
+                FROM vernacular_min v
+                JOIN taxon_min t ON t.taxon_id = v.taxon_id
+                WHERE (? IS NULL OR t.genus = ?)
+                  AND (? IS NULL OR t.specific_epithet = ?)
+                """
+                + lang_clause
+                + """
+                ORDER BY v.is_preferred_name DESC, v.vernacular_name
+                LIMIT ?
+                """,
+                (genus, genus, species, species, *lang_params, limit),
+            )
+            return [row[0] for row in cur.fetchall() if row and row[0]]
+
+    def suggest_genus(self, prefix: str) -> list[str]:
+        prefix = prefix.strip()
+        if not prefix:
+            return []
+        with self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT DISTINCT genus
+                FROM taxon_min
+                WHERE genus LIKE ? || '%'
+                ORDER BY genus
+                LIMIT 200
+                """,
+                (prefix,),
+            )
+            return [row[0] for row in cur.fetchall() if row and row[0]]
+
+    def suggest_species(self, genus: str, prefix: str) -> list[str]:
+        genus = genus.strip()
+        prefix = prefix.strip()
+        if not genus:
+            return []
+        with self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT DISTINCT specific_epithet
+                FROM taxon_min
+                WHERE genus = ?
+                  AND specific_epithet LIKE ? || '%'
+                ORDER BY specific_epithet
+                LIMIT 200
+                """,
+                (genus, prefix),
+            )
+            return [row[0] for row in cur.fetchall() if row and row[0]]
+
+    def taxon_from_vernacular(self, name: str) -> tuple[str, str, str | None] | None:
+        name = name.strip()
+        if not name:
+            return None
+        lang_clause, lang_params = self._language_clause(None)
+        with self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT t.genus, t.specific_epithet, t.family
+                FROM vernacular_min v
+                JOIN taxon_min t ON t.taxon_id = v.taxon_id
+                WHERE v.vernacular_name = ?
+                """
+                + lang_clause
+                + """
+                ORDER BY v.is_preferred_name DESC, v.vernacular_name
+                LIMIT 1
+                """,
+                (name, *lang_params),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            return row[0], row[1], row[2]
+
+    def vernacular_from_taxon(self, genus: str, species: str) -> str | None:
+        if not genus or not species:
+            return None
+        lang_clause, lang_params = self._language_clause(None)
+        with self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT v.vernacular_name
+                FROM vernacular_min v
+                JOIN taxon_min t ON t.taxon_id = v.taxon_id
+                WHERE t.genus = ? COLLATE NOCASE
+                  AND t.specific_epithet = ? COLLATE NOCASE
+                """
+                + lang_clause
+                + """
+                ORDER BY v.is_preferred_name DESC, v.vernacular_name
+                LIMIT 1
+                """,
+                (genus, species, *lang_params),
+            )
+            row = cur.fetchone()
+            return row[0] if row else None

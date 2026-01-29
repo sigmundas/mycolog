@@ -26,11 +26,15 @@ dist/
 *.db-journal
 *.db-wal
 *.db-shm
+*.csv
+*.txt
 
 # App local data folders
 images/
 image_cache/
 thumbnails/
+database/taxon.txt
+database/vernacularnames.txt
 
 # Logs
 *.log

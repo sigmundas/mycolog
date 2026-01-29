@@ -31,6 +31,9 @@ class ZoomableImageLabel(QLabel):
         self.microns_per_pixel = 0.5
         self.show_measure_overlays = True
         self.hover_rect_index = -1
+        self.hover_line_index = -1
+        self.selected_rect_index = -1
+        self.selected_line_indices = set()
         self.pan_without_shift = False
         self.pan_click_candidate = False
         self.measurement_active = False
@@ -181,6 +184,7 @@ class ZoomableImageLabel(QLabel):
     def set_measurement_lines(self, lines):
         """Set the measurement lines to draw."""
         self.measurement_lines = lines
+        self.hover_line_index = -1
         self.update()
 
     def set_measurement_color(self, color):
@@ -205,6 +209,14 @@ class ZoomableImageLabel(QLabel):
         """Set the measurement rectangles to draw."""
         self.measurement_rectangles = rectangles
         self.hover_rect_index = -1
+        self.update()
+
+    def set_selected_rect_index(self, index):
+        self.selected_rect_index = index if index is not None else -1
+        self.update()
+
+    def set_selected_line_indices(self, indices):
+        self.selected_line_indices = set(indices or [])
         self.update()
 
     def set_measurement_labels(self, labels):
@@ -358,6 +370,7 @@ class ZoomableImageLabel(QLabel):
         if self.original_pixmap:
             self.current_mouse_pos = self.screen_to_image(event.position())
             self._update_hover_rect(event.position())
+            self._update_hover_lines(event.position())
 
         if self.is_panning:
             delta = event.position() - self.pan_start_pos
@@ -416,6 +429,55 @@ class ZoomableImageLabel(QLabel):
         if hovered != self.hover_rect_index:
             self.hover_rect_index = hovered
             self.update()
+
+    def _update_hover_lines(self, screen_pos):
+        """Update which measurement line is under the cursor."""
+        if self.measurement_active:
+            if self.hover_line_index != -1:
+                self.hover_line_index = -1
+                self.update()
+            return
+        if not self.measurement_lines or not self.original_pixmap:
+            if self.hover_line_index != -1:
+                self.hover_line_index = -1
+                self.update()
+            return
+
+        image_pos = self.screen_to_image(screen_pos)
+        if not image_pos:
+            if self.hover_line_index != -1:
+                self.hover_line_index = -1
+                self.update()
+            return
+
+        threshold = 6.0 / self.zoom_level if self.zoom_level else 6.0
+        hovered = -1
+        best_dist = threshold
+        for idx, line in enumerate(self.measurement_lines):
+            p1 = QPointF(line[0], line[1])
+            p2 = QPointF(line[2], line[3])
+            dist = self._distance_point_to_segment(image_pos, p1, p2)
+            if dist <= best_dist:
+                best_dist = dist
+                hovered = idx
+
+        if hovered != self.hover_line_index:
+            self.hover_line_index = hovered
+            self.update()
+
+    def _distance_point_to_segment(self, point, a, b):
+        """Return distance between a point and a line segment."""
+        ab = b - a
+        ap = point - a
+        ab_len_sq = ab.x() * ab.x() + ab.y() * ab.y()
+        if ab_len_sq == 0:
+            return math.sqrt(ap.x() * ap.x() + ap.y() * ap.y())
+        t = (ap.x() * ab.x() + ap.y() * ab.y()) / ab_len_sq
+        t = max(0.0, min(1.0, t))
+        closest = QPointF(a.x() + ab.x() * t, a.y() + ab.y() * t)
+        dx = point.x() - closest.x()
+        dy = point.y() - closest.y()
+        return math.sqrt(dx * dx + dy * dy)
 
     def screen_to_image(self, screen_pos):
         """Convert screen position to original image coordinates."""
@@ -647,7 +709,7 @@ class ZoomableImageLabel(QLabel):
                 painter.drawPolygon(QPolygonF(screen_points))
                 painter.setPen(thin_pen)
                 painter.drawPolygon(QPolygonF(screen_points))
-                if idx == self.hover_rect_index:
+                if idx == self.hover_rect_index or (not self.measurement_active and idx == self.selected_rect_index):
                     painter.setPen(hover_light)
                     painter.drawPolygon(QPolygonF(screen_points))
                     painter.setPen(hover_thin)
@@ -657,8 +719,10 @@ class ZoomableImageLabel(QLabel):
         if self.show_measure_overlays and self.measurement_lines:
             light_pen = QPen(self._light_stroke_color(), 3)
             thin_pen = QPen(self.measure_color, 1)
+            hover_light = QPen(QColor(231, 76, 60, 90), 5)
+            hover_thin = QPen(QColor(231, 76, 60), 2)
 
-            for line in self.measurement_lines:
+            for idx, line in enumerate(self.measurement_lines):
                 # Convert original image coordinates to screen coordinates
                 p1_x = display_rect.x() + line[0] * self.zoom_level
                 p1_y = display_rect.y() + line[1] * self.zoom_level
@@ -688,10 +752,17 @@ class ZoomableImageLabel(QLabel):
                         int(p1_x - perp_x * mark_len), int(p1_y - perp_y * mark_len),
                         int(p1_x + perp_x * mark_len), int(p1_y + perp_y * mark_len)
                     )
-                    painter.drawLine(
-                        int(p2_x - perp_x * mark_len), int(p2_y - perp_y * mark_len),
-                        int(p2_x + perp_x * mark_len), int(p2_y + perp_y * mark_len)
-                    )
+                painter.drawLine(
+                    int(p2_x - perp_x * mark_len), int(p2_y - perp_y * mark_len),
+                    int(p2_x + perp_x * mark_len), int(p2_y + perp_y * mark_len)
+                )
+                if idx == self.hover_line_index or (
+                    not self.measurement_active and idx in self.selected_line_indices
+                ):
+                    painter.setPen(hover_light)
+                    painter.drawLine(int(p1_x), int(p1_y), int(p2_x), int(p2_y))
+                    painter.setPen(hover_thin)
+                    painter.drawLine(int(p1_x), int(p1_y), int(p2_x), int(p2_y))
 
         # Draw preview line (from last point to mouse cursor)
         if self.preview_line is not None and self.current_mouse_pos is not None:

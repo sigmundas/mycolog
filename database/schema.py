@@ -22,12 +22,6 @@ DEFAULT_OBJECTIVES = {
         "microns_per_pixel": 0.07875,
         "notes": "Leica DM2000, Olympus MFT 1:1",
     },
-    "63X": {
-        "name": "63X/1.30 Plan Apo Oil",
-        "magnification": "63X",
-        "microns_per_pixel": 0.05,
-        "notes": "Leica DM2000, Olympus MFT 1:1",
-    },
     "100X": {
         "name": "100X/1.25 Plan achro Oil",
         "magnification": "100X",

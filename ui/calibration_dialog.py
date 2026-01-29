@@ -19,7 +19,7 @@ class CalibrationDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Set Scale")
+        self.setWindowTitle(self.tr("Set Scale"))
         self.setMinimumWidth(500)
 
         self.objectives = self.load_objectives()
@@ -39,11 +39,11 @@ class CalibrationDialog(QDialog):
 
         # Tab 1: Fixed Objectives
         objectives_tab = self.create_objectives_tab()
-        self.tab_widget.addTab(objectives_tab, "Fixed Objectives")
+        self.tab_widget.addTab(objectives_tab, self.tr("Fixed Objectives"))
 
         # Tab 2: Custom Scale
         custom_tab = self.create_custom_scale_tab()
-        self.tab_widget.addTab(custom_tab, "Custom Scale")
+        self.tab_widget.addTab(custom_tab, self.tr("Custom Scale"))
 
         layout.addWidget(self.tab_widget)
 
@@ -51,12 +51,12 @@ class CalibrationDialog(QDialog):
         ok_cancel_layout = QHBoxLayout()
         ok_cancel_layout.addStretch()
 
-        ok_btn = QPushButton("Use This Scale")
+        ok_btn = QPushButton(self.tr("Use This Scale"))
         ok_btn.setObjectName("measureButton")
         ok_btn.clicked.connect(self.accept_and_save)
         ok_cancel_layout.addWidget(ok_btn)
 
-        cancel_btn = QPushButton("Cancel")
+        cancel_btn = QPushButton(self.tr("Cancel"))
         cancel_btn.clicked.connect(self.reject)
         ok_cancel_layout.addWidget(cancel_btn)
 
@@ -73,7 +73,7 @@ class CalibrationDialog(QDialog):
         layout = QVBoxLayout(tab)
 
         # Objective selection group
-        select_group = QGroupBox("Select Objective")
+        select_group = QGroupBox(self.tr("Select Objective"))
         select_layout = QVBoxLayout()
 
         self.objective_combo = QComboBox()
@@ -85,20 +85,20 @@ class CalibrationDialog(QDialog):
         layout.addWidget(select_group)
 
         # Objective details group
-        details_group = QGroupBox("Objective Details")
+        details_group = QGroupBox(self.tr("Objective Details"))
         details_layout = QFormLayout()
 
         self.name_input = QLineEdit()
         self.magnification_input = QLineEdit()
         self.microns_per_pixel_input = QLineEdit()
         self.notes_input = QLineEdit()
-        self.default_checkbox = QCheckBox("Default objective")
-        self.default_checkbox.setToolTip("Use this objective as the default for new images")
+        self.default_checkbox = QCheckBox(self.tr("Default objective"))
+        self.default_checkbox.setToolTip(self.tr("Use this objective as the default for new images"))
 
-        details_layout.addRow("Name:", self.name_input)
-        details_layout.addRow("Magnification (e.g., 63X):", self.magnification_input)
-        details_layout.addRow("Microns per pixel:", self.microns_per_pixel_input)
-        details_layout.addRow("Notes:", self.notes_input)
+        details_layout.addRow(self.tr("Name:"), self.name_input)
+        details_layout.addRow(self.tr("Magnification (e.g., 63X):"), self.magnification_input)
+        details_layout.addRow(self.tr("Microns per pixel:"), self.microns_per_pixel_input)
+        details_layout.addRow(self.tr("Notes:"), self.notes_input)
         details_layout.addRow("", self.default_checkbox)
 
         details_group.setLayout(details_layout)
@@ -107,16 +107,20 @@ class CalibrationDialog(QDialog):
         # Action buttons
         button_layout = QHBoxLayout()
 
-        save_new_btn = QPushButton("Save as New Objective")
+        save_new_btn = QPushButton(self.tr("Save as New Objective"))
         save_new_btn.clicked.connect(self.save_new_objective)
         button_layout.addWidget(save_new_btn)
 
-        update_btn = QPushButton("Update Selected")
+        update_btn = QPushButton(self.tr("Update Selected"))
         update_btn.clicked.connect(self.update_selected_objective)
         button_layout.addWidget(update_btn)
 
-        delete_btn = QPushButton("Delete Selected")
-        delete_btn.setStyleSheet("background-color: #e74c3c;")
+        delete_btn = QPushButton(self.tr("Delete Selected"))
+        delete_btn.setStyleSheet(
+            "QPushButton { background-color: #e74c3c; color: white; font-weight: bold; }"
+            "QPushButton:hover { background-color: #c0392b; }"
+            "QPushButton:pressed { background-color: #a93226; }"
+        )
         delete_btn.clicked.connect(self.delete_selected_objective)
         button_layout.addWidget(delete_btn)
 
@@ -132,35 +136,37 @@ class CalibrationDialog(QDialog):
 
         # Instructions
         instructions = QLabel(
-            "<b>Custom Scale Calibration</b><br><br>"
-            "Use this to set a custom scale when you don't have a predefined objective.<br><br>"
-            "<b>To calibrate:</b><br>"
-            "1. Load an image with a scale bar<br>"
-            "2. Click 'Calibrate' and draw a line along the scale bar<br>"
-            "3. Enter the known distance in microns<br>"
-            "4. Click 'Use This Scale' to apply"
+            self.tr(
+                "<b>Custom Scale Calibration</b><br><br>"
+                "Use this to set a custom scale when you don't have a predefined objective.<br><br>"
+                "<b>To calibrate:</b><br>"
+                "1. Load an image with a scale bar<br>"
+                "2. Click 'Calibrate' and draw a line along the scale bar<br>"
+                "3. Enter the known distance in microns<br>"
+                "4. Click 'Use This Scale' to apply"
+            )
         )
         instructions.setWordWrap(True)
         instructions.setStyleSheet("color: #7f8c8d; padding: 10px;")
         layout.addWidget(instructions)
 
         # Calibration group
-        calib_group = QGroupBox("Calibration")
+        calib_group = QGroupBox(self.tr("Calibration"))
         calib_layout = QVBoxLayout()
 
         # Calibrate button
-        self.calibrate_btn = QPushButton("Calibrate (Draw line on scale bar)")
+        self.calibrate_btn = QPushButton(self.tr("Calibrate (Draw line on scale bar)"))
         self.calibrate_btn.clicked.connect(self.start_calibration)
         calib_layout.addWidget(self.calibrate_btn)
 
         # Status label
-        self.calib_status_label = QLabel("No calibration set")
+        self.calib_status_label = QLabel(self.tr("No calibration set"))
         self.calib_status_label.setStyleSheet("color: #7f8c8d;")
         calib_layout.addWidget(self.calib_status_label)
 
         # Known distance input
         distance_layout = QHBoxLayout()
-        distance_layout.addWidget(QLabel("Known distance:"))
+        distance_layout.addWidget(QLabel(self.tr("Known distance:")))
         self.known_distance_input = QDoubleSpinBox()
         self.known_distance_input.setRange(0.1, 10000)
         self.known_distance_input.setValue(100)
@@ -173,7 +179,7 @@ class CalibrationDialog(QDialog):
 
         # Result
         result_layout = QHBoxLayout()
-        result_layout.addWidget(QLabel("Calculated scale:"))
+        result_layout.addWidget(QLabel(self.tr("Calculated scale:")))
         self.custom_scale_label = QLabel("-- um/pixel")
         self.custom_scale_label.setStyleSheet("font-weight: bold; color: #3498db;")
         result_layout.addWidget(self.custom_scale_label)
@@ -220,7 +226,7 @@ class CalibrationDialog(QDialog):
             # Show the Name field in dropdown, store magnification as data
             display_name = obj.get("name", mag)
             if obj.get("is_default", False):
-                display_name += " (Default)"
+                display_name += self.tr(" (Default)")
             self.objective_combo.addItem(display_name, mag)
 
     def on_objective_selected(self):
@@ -309,7 +315,9 @@ class CalibrationDialog(QDialog):
     def set_calibration_distance(self, distance_pixels):
         """Set the measured distance in pixels from calibration and reshow dialog."""
         self.calibration_distance_pixels = distance_pixels
-        self.calib_status_label.setText(f"Measured: {distance_pixels:.1f} pixels")
+        self.calib_status_label.setText(
+            self.tr("Measured: {pixels:.1f} pixels").format(pixels=distance_pixels)
+        )
         self.calib_status_label.setStyleSheet("color: #27ae60; font-weight: bold;")
         self.update_custom_scale()
 
@@ -350,10 +358,15 @@ class CalibrationDialog(QDialog):
             if custom_scale:
                 # Create a custom objective-like dict
                 custom_objective = {
-                    "name": "Custom",
-                    "magnification": "Custom",
+                    "name": self.tr("Custom"),
+                    "magnification": self.tr("Custom"),
                     "microns_per_pixel": custom_scale,
-                    "notes": f"Calibrated from {self.calibration_distance_pixels:.1f} px = {self.known_distance_input.value():.1f} um"
+                    "notes": self.tr(
+                        "Calibrated from {pixels:.1f} px = {microns:.1f} um"
+                    ).format(
+                        pixels=self.calibration_distance_pixels,
+                        microns=self.known_distance_input.value()
+                    )
                 }
                 self.calibration_saved.emit(custom_objective)
                 self.accept()

@@ -39,3 +39,65 @@ jobs:
         with:
           files: MycoLog-${{ github.ref_name }}-windows.zip
           generate_release_notes: true
+
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Build with PyInstaller
+        run: |
+          chmod +x ./build_linux.sh
+          ./build_linux.sh
+
+      - name: Package zip
+        run: |
+          tag="${{ github.ref_name }}"
+          zip_name="MycoLog-${tag}-linux.zip"
+          rm -f "$zip_name"
+          cd dist/MycoLog && zip -r "../../$zip_name" .
+
+      - name: Create Release and upload asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: MycoLog-${{ github.ref_name }}-linux.zip
+          generate_release_notes: true
+
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Build with PyInstaller
+        run: |
+          chmod +x ./build_mac.sh
+          ./build_mac.sh
+
+      - name: Package zip
+        run: |
+          tag="${{ github.ref_name }}"
+          zip_name="MycoLog-${tag}-macos.zip"
+          rm -f "$zip_name"
+          cd dist/MycoLog && zip -r "../../$zip_name" .
+
+      - name: Create Release and upload asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: MycoLog-${{ github.ref_name }}-macos.zip
+          generate_release_notes: true

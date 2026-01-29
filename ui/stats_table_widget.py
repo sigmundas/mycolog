@@ -67,8 +67,8 @@ class StatsTableWidget(QWidget):
             ))
 
             # Q row - no units
-            self.table.setItem(2, 0, QTableWidgetItem(f"{stats['ratio_mean']:.2f}"))
-            self.table.setItem(2, 1, QTableWidgetItem(f"{stats['ratio_min']:.2f} - {stats['ratio_max']:.2f}"))
+            self.table.setItem(2, 0, QTableWidgetItem(f"{stats['ratio_mean']:.1f}"))
+            self.table.setItem(2, 1, QTableWidgetItem(f"{stats['ratio_min']:.1f} - {stats['ratio_max']:.1f}"))
         else:
             self.table.setItem(1, 0, QTableWidgetItem("-"))
             self.table.setItem(1, 1, QTableWidgetItem("-"))

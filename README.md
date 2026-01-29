@@ -7,7 +7,7 @@ A python app for measuring mushroom spores from microscope images, and organizin
 - **Organize field observations:** Store your field photos, macro photos and microscope images in one place.
 - **Measure spores from microscope images**: Easy spore and cell measurements. All measures are possible to review and edit later.
 - **Calibration System**: Set image scale for your objectives 
-- **Statistics**: Spore measurements as text and plots
+- **Spore measurements**: or measures of basidia and cystidia, with histograms and estimated confidence intervals
 - **Reference Values**: Store and compare literature reference values
 
 ## Installation
@@ -96,7 +96,6 @@ Select the type of measures you have taken. Click any graph element to filter th
    - Click Measure Mode
    - Click 4 points on a spore
    - Click any order - app auto-detects length (longer) and width (shorter)
-   - Blue dashed preview line follows your cursor before clicking
    - Check the preview and adjust if you need to. If you adjust here, click "Apply Changes".
 
 4. **View Measurement Preview**

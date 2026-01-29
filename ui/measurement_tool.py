@@ -33,7 +33,7 @@ class MeasurementTool(QWidget):
         # Controls
         controls = QHBoxLayout()
 
-        load_btn = QPushButton("Load Image")
+        load_btn = QPushButton(self.tr("Load Image"))
         load_btn.clicked.connect(self.load_image)
         controls.addWidget(load_btn)
 
@@ -42,7 +42,7 @@ class MeasurementTool(QWidget):
         self.scale_input.setMaximumWidth(100)
         controls.addWidget(self.scale_input)
 
-        measure_btn = QPushButton("Measure (click 2 points)")
+        measure_btn = QPushButton(self.tr("Measure (click 2 points)"))
         measure_btn.clicked.connect(self.start_measurement)
         controls.addWidget(measure_btn)
 
