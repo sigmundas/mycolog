@@ -1,3 +1,10 @@
+"""
+Build a multi-language vernacular CSV for MycoLog from iNaturalist only.
+
+The resulting CSV (vernacular_inat_11lang.csv) is used by
+build_multilang_vernacular_db.py to create the final SQLite database.
+"""
+
 import csv
 import time
 from requests.exceptions import RequestException
@@ -5,8 +12,8 @@ import requests
 from collections import defaultdict
 from pathlib import Path
 
-TAXON_FILE = "taxon.txt"
-OUT_CSV = "vernacular_inat_mushroosm.csv"
+TAXON_FILE = "taxon.txt" # I used Nortaxa
+OUT_CSV = "vernacular_inat_nortaxa.csv"
 
 # Target filters
 ASCO_ORDERS = {"pezizales", "morchellales", "helvellales", "tuberales"}
@@ -118,6 +125,9 @@ def iter_taxa():
                 continue
             rank = (row.get("taxonRank") or "").strip().lower()
             if rank != "species":
+                continue
+            status = (row.get("taxonomicStatus") or "").strip().lower()
+            if status != "valid":
                 continue
             name = (row.get("scientificName") or "").strip()
             if not name:

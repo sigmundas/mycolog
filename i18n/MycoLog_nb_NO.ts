@@ -217,7 +217,7 @@
     <message>
         <location filename="../ui/main_window.py" line="344"/>
         <source>UI language:</source>
-        <translation>UI-spr?k:</translation>
+        <translation>UI-språk:</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="348"/>

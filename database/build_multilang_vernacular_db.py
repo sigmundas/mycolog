@@ -7,8 +7,11 @@ CSV columns:
 
 Multiple names are separated by ';' in each cell.
 
-Norwegian (no) names are merged from the existing Norwegian taxonomy DB
-(taxonomy_NO.sqlite3) if available.
+Norwegian (no) names come from Artsdatabanken artsnavnebase:
+https://ipt.artsdatabanken.no/resource?r=artsnavnebase
+The source files (taxon.txt + vernacularname.txt) are merged here. The other
+10 languages come from iNaturalist via the CSV produced by
+inat_common_names_from_taxon.py.
 """
 
 from __future__ import annotations
@@ -21,6 +24,10 @@ from typing import Iterable
 
 
 DEFAULT_LANGS = ["en", "de", "fr", "es", "da", "sv", "no", "fi", "pl", "pt", "it"]
+DEFAULT_INPUT_CSV = "vernacular_inat_11lang.csv"
+DEFAULT_OUTPUT_DB = "vernacular_multilanguage.sqlite3"
+DEFAULT_NO_TAXON = "taxon.txt"
+DEFAULT_NO_VERNACULAR = "vernacularname.txt"
 
 
 def _set_csv_field_limit() -> None:
@@ -130,7 +137,87 @@ def _insert_taxon(conn: sqlite3.Connection, taxon_id: int, genus: str, species: 
     )
 
 
-def build_db(csv_path: Path, out_db: Path, no_db: Path | None) -> None:
+def _parse_bool(value: str | None) -> bool:
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def _load_art_taxa(taxon_path: Path) -> tuple[dict[str, tuple[str, str, str | None]], int, int]:
+    taxa: dict[str, tuple[str, str, str | None]] = {}
+    total = 0
+    valid = 0
+    with taxon_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        for row in reader:
+            total += 1
+            taxon_id = (row.get("id") or "").strip()
+            if not taxon_id:
+                continue
+            if (row.get("taxonRank") or "").strip().lower() != "species":
+                continue
+            status = (row.get("taxonomicStatus") or "").strip().lower()
+            if status != "valid":
+                continue
+            genus = (row.get("genus") or "").strip()
+            species = (row.get("specificEpithet") or "").strip()
+            if not genus or not species:
+                continue
+            genus, species = _normalize_taxon(genus, species)
+            family = (row.get("family") or "").strip() or None
+            taxa[taxon_id] = (genus, species, family)
+            valid += 1
+    return taxa, total, valid
+
+
+def _merge_norwegian_from_arts(
+    conn: sqlite3.Connection,
+    get_taxon_id,
+    taxon_path: Path,
+    vernacular_path: Path,
+) -> None:
+    if not taxon_path.exists() or not vernacular_path.exists():
+        print("Norwegian source files not found, skipping merge.")
+        return
+
+    taxa, total, valid = _load_art_taxa(taxon_path)
+    print(f"Artsnavnebase taxa: {valid} valid entries out of {total} total")
+    if not taxa:
+        print("No taxa loaded from artsnavnebase taxon.txt")
+        return
+
+    batch: list[tuple[int, str, str, int]] = []
+    conn.execute("BEGIN;")
+    with vernacular_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        for row in reader:
+            taxon_id = (row.get("id") or "").strip()
+            if not taxon_id:
+                continue
+            if (row.get("countryCode") or "").strip().upper() != "NO":
+                continue
+            name = (row.get("vernacularName") or "").strip()
+            if not name:
+                continue
+            taxon = taxa.get(taxon_id)
+            if not taxon:
+                continue
+            genus, species, family = taxon
+            db_taxon_id = get_taxon_id(genus, species, family)
+            is_pref = 1 if _parse_bool(row.get("isPreferredName")) else 0
+            batch.append((db_taxon_id, "no", name, is_pref))
+            if len(batch) >= 5000:
+                _insert_vernacular_rows(conn, batch)
+                batch.clear()
+
+    if batch:
+        _insert_vernacular_rows(conn, batch)
+        batch.clear()
+
+    conn.commit()
+
+
+def build_db(csv_path: Path, out_db: Path, no_taxon: Path | None, no_names: Path | None) -> None:
     _set_csv_field_limit()
     if out_db.exists():
         out_db.unlink()
@@ -159,6 +246,12 @@ def build_db(csv_path: Path, out_db: Path, no_db: Path | None) -> None:
             return taxon_id
 
         # -------- CSV import --------
+        use_arts_no = bool(no_taxon and no_names and no_taxon.exists() and no_names.exists())
+
+        total_rows = 0
+        valid_rows = 0
+        empty_rows = 0
+
         with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
             if not reader.fieldnames:
@@ -177,16 +270,28 @@ def build_db(csv_path: Path, out_db: Path, no_db: Path | None) -> None:
 
             conn.execute("BEGIN;")
             for row in reader:
+                total_rows += 1
                 sci = (row.get("scientificName") or "").strip()
                 parsed = _parse_scientific_name(sci)
                 if not parsed:
                     continue
+                valid_rows += 1
                 genus, species = _normalize_taxon(*parsed)
                 taxon_id = get_taxon_id(genus, species, None)
+
+                has_any = False
+                for lang in lang_columns:
+                    if _split_names((row.get(lang) or "")):
+                        has_any = True
+                        break
+                if not has_any:
+                    empty_rows += 1
 
                 for lang in lang_columns:
                     lang_code = (lang or "").strip().lower()
                     if not lang_code:
+                        continue
+                    if lang_code == "no" and use_arts_no:
                         continue
                     names = _split_names((row.get(lang) or ""))
                     if not names:
@@ -203,49 +308,14 @@ def build_db(csv_path: Path, out_db: Path, no_db: Path | None) -> None:
 
             conn.commit()
 
-        # -------- Norwegian DB merge --------
-        if no_db and no_db.exists():
-            no_conn = sqlite3.connect(no_db)
-            no_conn.row_factory = sqlite3.Row
-            try:
-                query = """
-                    SELECT
-                        t.genus,
-                        t.specific_epithet,
-                        t.family,
-                        v.vernacular_name,
-                        v.is_preferred_name
-                    FROM vernacular_min v
-                    JOIN taxon_min t ON t.taxon_id = v.taxon_id
-                """
-                conn.execute("BEGIN;")
-                batch = []
-                for row in no_conn.execute(query):
-                    genus = row["genus"] or ""
-                    species = row["specific_epithet"] or ""
-                    if not genus or not species:
-                        continue
-                    genus, species = _normalize_taxon(genus, species)
-                    family = row["family"] if row["family"] else None
-                    taxon_id = get_taxon_id(genus, species, family)
-                    name = (row["vernacular_name"] or "").strip()
-                    if not name:
-                        continue
-                    is_pref = 1 if row["is_preferred_name"] else 0
-                    batch.append((taxon_id, "no", name, is_pref))
-                    if len(batch) >= 5000:
-                        _insert_vernacular_rows(conn, batch)
-                        batch.clear()
+        print(f"CSV rows: {total_rows} total, {valid_rows} valid scientific names")
+        print(f"CSV rows without any translations: {empty_rows}")
 
-                if batch:
-                    _insert_vernacular_rows(conn, batch)
-                    batch.clear()
-
-                conn.commit()
-            finally:
-                no_conn.close()
+        # -------- Norwegian merge from artsnavnebase --------
+        if use_arts_no:
+            _merge_norwegian_from_arts(conn, get_taxon_id, no_taxon, no_names)
         else:
-            print(f"Norwegian DB not found, skipping merge: {no_db}")
+            print("Norwegian sources not found, skipping merge.")
 
         conn.execute("VACUUM;")
 
@@ -263,23 +333,29 @@ def build_db(csv_path: Path, out_db: Path, no_db: Path | None) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--csv", default="vernacular_all_languages.csv", help="Input CSV file")
-    ap.add_argument("--out", default="vernacular_multilang.sqlite3", help="Output SQLite DB")
+    ap.add_argument("--csv", default=DEFAULT_INPUT_CSV, help="Input CSV file")
+    ap.add_argument("--out", default=DEFAULT_OUTPUT_DB, help="Output SQLite DB")
     ap.add_argument(
-        "--no-db",
-        default="taxonomy_NO.sqlite3",
-        help="Existing Norwegian taxonomy DB to merge (optional)",
+        "--no-taxon",
+        default=DEFAULT_NO_TAXON,
+        help="Artsdatabanken taxon.txt (optional, preferred Norwegian source)",
+    )
+    ap.add_argument(
+        "--no-vernacular",
+        default=DEFAULT_NO_VERNACULAR,
+        help="Artsdatabanken vernacularname.txt (optional, preferred Norwegian source)",
     )
     args = ap.parse_args()
 
     csv_path = Path(args.csv).resolve()
     out_db = Path(args.out).resolve()
-    no_db = Path(args.no_db).resolve() if args.no_db else None
+    no_taxon = Path(args.no_taxon).resolve() if args.no_taxon else None
+    no_names = Path(args.no_vernacular).resolve() if args.no_vernacular else None
 
     if not csv_path.exists():
         raise SystemExit(f"Missing CSV: {csv_path}")
 
-    build_db(csv_path, out_db, no_db)
+    build_db(csv_path, out_db, no_taxon, no_names)
 
 
 if __name__ == "__main__":

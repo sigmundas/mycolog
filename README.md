@@ -1,4 +1,4 @@
-# ![MycoLog](assets/mycolog%20v1.png)
+# ![MycoLog](assets/mycolog-logo.png)
 
 A python app for measuring mushroom spores from microscope images, and organizing images and field photos.
 

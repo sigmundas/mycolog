@@ -20,14 +20,14 @@ dist/
 *.spec
 
 # App data / local databases
-*.db
-*.sqlite
-*.sqlite3
 *.db-journal
 *.db-wal
 *.db-shm
 *.csv
 *.txt
+
+# Keep required app databases
+!database/vernacular_multilanguage.sqlite3
 
 # App local data folders
 images/

@@ -77,7 +77,7 @@ class ObservationDB:
 
     @staticmethod
     def create_observation(date: str, genus: str = None, species: str = None,
-                          location: str = None, habitat: str = None,
+                          common_name: str = None, location: str = None, habitat: str = None,
                           species_guess: str = None, notes: str = None,
                           uncertain: bool = False, inaturalist_id: int = None,
                           gps_latitude: float = None, gps_longitude: float = None,
@@ -104,11 +104,11 @@ class ObservationDB:
         folder_path = str(_images_dir() / genus_folder / folder_name)
 
         cursor.execute('''
-            INSERT INTO observations (date, genus, species, location, habitat,
+            INSERT INTO observations (date, genus, species, common_name, location, habitat,
                                      species_guess, notes, uncertain, folder_path, inaturalist_id,
                                      gps_latitude, gps_longitude, author)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (date, genus, species, location, habitat, species_guess, notes,
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (date, genus, species, common_name, location, habitat, species_guess, notes,
               1 if uncertain else 0, folder_path, inaturalist_id, gps_latitude,
               gps_longitude, author))
 
@@ -119,7 +119,7 @@ class ObservationDB:
 
     @staticmethod
     def update_observation(observation_id: int, genus: str = None, species: str = None,
-                          location: str = None, habitat: str = None,
+                          common_name: str = None, location: str = None, habitat: str = None,
                           notes: str = None, uncertain: bool = None,
                           species_guess: str = None, date: str = None,
                           gps_latitude: float = None, gps_longitude: float = None,
@@ -178,6 +178,9 @@ class ObservationDB:
         if allow_nulls or species is not None:
             updates.append('species = ?')
             values.append(species)
+        if allow_nulls or common_name is not None:
+            updates.append('common_name = ?')
+            values.append(common_name)
         if allow_nulls or location is not None:
             updates.append('location = ?')
             values.append(location)
@@ -302,6 +305,16 @@ class ObservationDB:
         conn = get_connection()
         cursor = conn.cursor()
 
+        # Collect image filepaths and observation folder before deleting rows
+        cursor.execute('SELECT folder_path FROM observations WHERE id = ?', (observation_id,))
+        obs_row = cursor.fetchone()
+        folder_path = None
+        if obs_row and obs_row[0]:
+            folder_path = obs_row[0]
+
+        cursor.execute('SELECT id, filepath FROM images WHERE observation_id = ?', (observation_id,))
+        image_rows = cursor.fetchall()
+
         # First delete all measurements for images of this observation
         cursor.execute('''
             DELETE FROM spore_measurements
@@ -316,6 +329,35 @@ class ObservationDB:
 
         conn.commit()
         conn.close()
+
+        # Remove thumbnails and image files from disk
+        images_root = _images_dir()
+        for image_id, filepath in image_rows:
+            try:
+                from utils.thumbnail_generator import delete_thumbnails
+                delete_thumbnails(image_id)
+            except Exception as e:
+                print(f"Warning: Could not delete thumbnails for image {image_id}: {e}")
+
+            if not filepath:
+                continue
+            try:
+                path = Path(filepath).resolve()
+                root = images_root.resolve()
+                if path.exists() and path.is_relative_to(root):
+                    path.unlink()
+            except Exception as e:
+                print(f"Warning: Could not delete image file {filepath}: {e}")
+
+        # Remove observation folder if it lives under images root
+        if folder_path:
+            try:
+                obs_folder = Path(folder_path).resolve()
+                root = images_root.resolve()
+                if obs_folder.exists() and obs_folder.is_relative_to(root):
+                    shutil.rmtree(obs_folder, ignore_errors=True)
+            except Exception as e:
+                print(f"Warning: Could not delete observation folder {folder_path}: {e}")
 
 class ImageDB:
     """Handle image database operations"""

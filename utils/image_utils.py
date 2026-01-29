@@ -50,3 +50,34 @@ def is_raw_format(image_path: str) -> bool:
     """
     from config import RAW_FORMATS
     return Path(image_path).suffix.lower() in RAW_FORMATS
+
+
+def cleanup_import_temp_file(
+    source_path: str,
+    converted_path: str,
+    stored_path: str,
+    imports_dir: Path,
+) -> None:
+    """Remove temporary converted files once a stored copy exists."""
+    try:
+        source = Path(source_path).resolve()
+        converted = Path(converted_path).resolve()
+        stored = Path(stored_path).resolve()
+        imports_dir = Path(imports_dir).resolve()
+    except Exception:
+        return
+
+    if converted == source or converted == stored:
+        return
+    if not converted.exists():
+        return
+    try:
+        if not converted.is_relative_to(imports_dir):
+            return
+    except Exception:
+        return
+
+    try:
+        converted.unlink()
+    except Exception as e:
+        print(f"Warning: Could not remove temporary import file: {e}")

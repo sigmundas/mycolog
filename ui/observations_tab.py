@@ -16,6 +16,7 @@ import sqlite3
 from database.models import ObservationDB, ImageDB, MeasurementDB, SettingsDB
 from database.schema import get_images_dir, load_objectives
 from utils.thumbnail_generator import get_thumbnail_path, generate_all_sizes
+from utils.image_utils import cleanup_import_temp_file
 from utils.heic_converter import maybe_convert_heic
 from utils.ml_export import export_coco_format, get_export_summary
 from datetime import datetime
@@ -543,6 +544,9 @@ class ObservationsTab(QWidget):
 
     def _lookup_common_name(self, obs: dict, name_map: dict[tuple[str, str], str | None]) -> str | None:
         """Look up common name from the pre-built cache."""
+        stored_name = self._normalize_taxon_text(obs.get("common_name"))
+        if stored_name:
+            return stored_name
         genus = self._normalize_taxon_text(obs.get("genus"))
         species = self._normalize_taxon_text(obs.get("species"))
         
@@ -776,6 +780,7 @@ class ObservationsTab(QWidget):
             obs_id,
             genus=data.get('genus'),
             species=data.get('species'),
+            common_name=data.get('common_name'),
             species_guess=data.get('species_guess'),
             uncertain=1 if data.get('uncertain') else 0,
             date=data.get('date'),
@@ -836,10 +841,14 @@ class ObservationsTab(QWidget):
                 mount_medium=mount_medium,
                 sample_type=sample_type
             )
+            stored_path = final_path
             try:
-                generate_all_sizes(final_path, image_id)
+                image_data = ImageDB.get_image(image_id)
+                stored_path = image_data.get("filepath") if image_data else final_path
+                generate_all_sizes(stored_path, image_id)
             except Exception as e:
                 print(f"Warning: Could not generate thumbnails for {final_path}: {e}")
+            cleanup_import_temp_file(filepath, final_path, stored_path, output_dir)
 
         self.refresh_observations()
         for row, obs in enumerate(ObservationDB.get_all_observations()):
@@ -904,10 +913,14 @@ class ObservationsTab(QWidget):
                     sample_type=sample_type
                 )
 
+                stored_path = final_path
                 try:
-                    generate_all_sizes(final_path, image_id)
+                    image_data = ImageDB.get_image(image_id)
+                    stored_path = image_data.get("filepath") if image_data else final_path
+                    generate_all_sizes(stored_path, image_id)
                 except Exception as e:
                     print(f"Warning: Could not generate thumbnails for {final_path}: {e}")
+                cleanup_import_temp_file(filepath, final_path, stored_path, output_dir)
 
             # Refresh table
             self.refresh_observations()
@@ -1673,10 +1686,12 @@ class NewObservationDialog(QDialog):
         if is_unknown:
             genus = None
             species = None
+            common_name = None
             working_title = self.title_input.text().strip() or "Unknown"
         else:
             genus = self.genus_input.text().strip() or None
             species = self.species_input.text().strip() or None
+            common_name = self.vernacular_input.text().strip() or None
             working_title = None
 
         # Get GPS values (None if at minimum/special value)
@@ -1690,6 +1705,7 @@ class NewObservationDialog(QDialog):
         return {
             'genus': genus,
             'species': species,
+            'common_name': common_name,
             'species_guess': working_title,
             'uncertain': self.uncertain_checkbox.isChecked() if not is_unknown else False,
             'date': self.datetime_input.dateTime().toString("yyyy-MM-dd HH:mm"),
@@ -1788,6 +1804,7 @@ class NewObservationDialog(QDialog):
         self._genus_completer.setCaseSensitivity(Qt.CaseInsensitive)
         self._genus_completer.setCompletionMode(QCompleter.PopupCompletion)
         self.genus_input.setCompleter(self._genus_completer)
+        self._genus_completer.activated.connect(self._on_genus_selected)
         self.genus_input.textChanged.connect(self._on_genus_text_changed)
         self.genus_input.editingFinished.connect(self._on_genus_editing_finished)
 
@@ -1837,15 +1854,30 @@ class NewObservationDialog(QDialog):
         preview = "; ".join(suggestions[:4])
         self.vernacular_input.setPlaceholderText(f"{self.tr('e.g.,')} {preview}")
 
+    def _set_species_placeholder_from_suggestions(self, suggestions: list[str]) -> None:
+        if not hasattr(self, "species_input"):
+            return
+        if not suggestions:
+            self.species_input.setPlaceholderText("e.g., velutipes")
+            return
+        preview = "; ".join(suggestions[:4])
+        self.species_input.setPlaceholderText(f"{self.tr('e.g.,')} {preview}")
+
     def _on_vernacular_selected(self, name):
         if not self.vernacular_db:
             return
         taxon = self.vernacular_db.taxon_from_vernacular(name)
         if taxon:
             genus, species, _family = taxon
+            current_genus = self.genus_input.text().strip()
+            current_species = self.species_input.text().strip()
+            if current_genus and current_species:
+                return
             self._suppress_taxon_autofill = True
-            self.genus_input.setText(genus)
-            self.species_input.setText(species)
+            if not current_genus:
+                self.genus_input.setText(genus)
+            if not current_species:
+                self.species_input.setText(species)
             self._suppress_taxon_autofill = False
             self._sync_taxon_cache()
 
@@ -1858,9 +1890,15 @@ class NewObservationDialog(QDialog):
         taxon = self.vernacular_db.taxon_from_vernacular(name)
         if taxon:
             genus, species, _family = taxon
+            current_genus = self.genus_input.text().strip()
+            current_species = self.species_input.text().strip()
+            if current_genus and current_species:
+                return
             self._suppress_taxon_autofill = True
-            self.genus_input.setText(genus)
-            self.species_input.setText(species)
+            if not current_genus:
+                self.genus_input.setText(genus)
+            if not current_species:
+                self.species_input.setText(species)
             self._suppress_taxon_autofill = False
             self._sync_taxon_cache()
 
@@ -1877,12 +1915,30 @@ class NewObservationDialog(QDialog):
             self.species_input.clear()
             self._suppress_taxon_autofill = False
             self._species_model.setStringList([])
+            self._set_species_placeholder_from_suggestions([])
+            return
+
+        if not self.species_input.text().strip():
+            species_suggestions = self.vernacular_db.suggest_species(text, "")
+            self._set_species_placeholder_from_suggestions(species_suggestions)
 
     def _on_genus_editing_finished(self):
         if not self.vernacular_db or self._suppress_taxon_autofill:
             return
         self._handle_taxon_change()
         self._maybe_set_vernacular_from_taxon()
+        genus = self.genus_input.text().strip()
+        if genus and not self.species_input.text().strip():
+            species_suggestions = self.vernacular_db.suggest_species(genus, "")
+            self._set_species_placeholder_from_suggestions(species_suggestions)
+
+    def _on_genus_selected(self, genus):
+        if not self.vernacular_db:
+            return
+        if self.species_input.text().strip():
+            return
+        species_suggestions = self.vernacular_db.suggest_species(str(genus).strip(), "")
+        self._set_species_placeholder_from_suggestions(species_suggestions)
 
     def _on_species_editing_finished(self):
         if not self.vernacular_db or self._suppress_taxon_autofill:
@@ -1911,10 +1967,20 @@ class NewObservationDialog(QDialog):
         genus = self.genus_input.text().strip()
         species = self.species_input.text().strip()
         if genus != self._last_genus or species != self._last_species:
-            if genus and species and self.vernacular_input.text().strip():
-                self._suppress_taxon_autofill = True
-                self.vernacular_input.clear()
-                self._suppress_taxon_autofill = False
+            current_common = self.vernacular_input.text().strip()
+            if current_common and self.vernacular_db and genus and species:
+                suggestions = self.vernacular_db.suggest_vernacular_for_taxon(
+                    genus=genus,
+                    species=species
+                )
+                matches = any(
+                    name.strip().lower() == current_common.lower()
+                    for name in suggestions
+                )
+                if not matches:
+                    self._suppress_taxon_autofill = True
+                    self.vernacular_input.clear()
+                    self._suppress_taxon_autofill = False
         self._last_genus = genus
         self._last_species = species
 
@@ -2026,6 +2092,8 @@ class NewObservationDialog(QDialog):
             self.genus_input.setText(genus)
             self.species_input.setText(species)
             self.uncertain_checkbox.setChecked(bool(obs.get("uncertain", 0)))
+            if hasattr(self, "vernacular_input"):
+                self.vernacular_input.setText(obs.get("common_name") or "")
         else:
             self.taxonomy_tabs.setCurrentIndex(1)
             self.title_input.setText(obs.get("species_guess") or "")

@@ -270,6 +270,7 @@ def init_database():
             habitat TEXT,
             genus TEXT,
             species TEXT,
+            common_name TEXT,
             species_guess TEXT,
             uncertain INTEGER DEFAULT 0,
             notes TEXT,
@@ -317,6 +318,12 @@ def init_database():
     # Add species column if it doesn't exist
     try:
         cursor.execute('ALTER TABLE observations ADD COLUMN species TEXT')
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Add common_name column if it doesn't exist
+    try:
+        cursor.execute('ALTER TABLE observations ADD COLUMN common_name TEXT')
     except sqlite3.OperationalError:
         pass  # Column already exists
 

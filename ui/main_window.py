@@ -8,9 +8,33 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                 QDialogButtonBox, QSpinBox, QSizePolicy, QToolButton,
                                 QStyle, QLineEdit, QApplication, QProgressDialog,
                                 QToolTip, QCompleter)
-from PySide6.QtGui import QPixmap, QAction, QColor, QImage, QPainter, QPen, QIcon, QKeySequence, QShortcut
-from PySide6.QtCore import Qt, QPointF, QRectF, QSize, QTimer, Signal, QPoint, QEvent, QStringListModel
+from PySide6.QtGui import (
+    QPixmap,
+    QAction,
+    QColor,
+    QImage,
+    QPainter,
+    QPen,
+    QIcon,
+    QKeySequence,
+    QShortcut,
+    QDesktopServices,
+)
+from PySide6.QtCore import (
+    Qt,
+    QPointF,
+    QRectF,
+    QSize,
+    QTimer,
+    Signal,
+    QPoint,
+    QEvent,
+    QStringListModel,
+    QUrl,
+)
 import json
+import threading
+import urllib.request
 import html
 import numpy as np
 import math
@@ -32,6 +56,7 @@ from database.schema import (
 )
 from utils.annotation_capture import save_spore_annotation
 from utils.thumbnail_generator import generate_all_sizes
+from utils.image_utils import cleanup_import_temp_file
 from utils.heic_converter import maybe_convert_heic
 from utils.vernacular_utils import (
     normalize_vernacular_language,
@@ -1095,10 +1120,12 @@ class ReferenceValuesDialog(QDialog):
 class MainWindow(QMainWindow):
     """Main application window with modern UI and measurement table."""
 
-    def __init__(self):
+    def __init__(self, app_version: str | None = None):
         super().__init__()
         self.setWindowTitle("MycoLog")
         self.setGeometry(100, 100, 1600, 900)
+        self.app_version = app_version or ""
+        self._update_check_started = False
 
         self.current_image_path = None
         self.current_image_id = None
@@ -1280,6 +1307,86 @@ class MainWindow(QMainWindow):
         language_action = QAction(self.tr("Language"), self)
         language_action.triggered.connect(self.open_language_settings_dialog)
         settings_menu.addAction(language_action)
+
+    def start_update_check(self):
+        """Check GitHub for newer releases without blocking the UI."""
+        if self._update_check_started:
+            return
+        self._update_check_started = True
+        current_version = self._parse_version(self.app_version)
+        if current_version is None:
+            return
+
+        def _worker():
+            latest = self._fetch_latest_release()
+            if not latest:
+                return
+            if self._is_newer_version(latest["version"], current_version):
+                QTimer.singleShot(
+                    0,
+                    lambda: self._show_update_dialog(latest["version"], latest["url"]),
+                )
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _fetch_latest_release(self) -> dict | None:
+        url = "https://api.github.com/repos/sigmundas/mycolog/releases/latest"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "MycoLog"})
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                data = json.load(resp)
+        except Exception:
+            return None
+        tag = str(data.get("tag_name") or "").strip()
+        version = tag.lstrip("v") if tag else ""
+        html_url = data.get("html_url") or "https://github.com/sigmundas/mycolog/releases/latest"
+        if not version:
+            return None
+        return {"version": version, "url": html_url}
+
+    def _parse_version(self, version: str | None) -> tuple[int, ...] | None:
+        if not version:
+            return None
+        raw = str(version).strip()
+        if raw.startswith("v"):
+            raw = raw[1:]
+        raw = raw.split("-", 1)[0].split("+", 1)[0]
+        parts = raw.split(".")
+        if not parts:
+            return None
+        values = []
+        for part in parts:
+            if not part.isdigit():
+                return None
+            values.append(int(part))
+        return tuple(values)
+
+    def _is_newer_version(self, latest: str, current: tuple[int, ...]) -> bool:
+        latest_parsed = self._parse_version(latest)
+        if latest_parsed is None:
+            return False
+        max_len = max(len(latest_parsed), len(current))
+        latest_padded = latest_parsed + (0,) * (max_len - len(latest_parsed))
+        current_padded = current + (0,) * (max_len - len(current))
+        return latest_padded > current_padded
+
+    def _show_update_dialog(self, latest_version: str, url: str):
+        current = self.app_version or self.tr("Unknown")
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Information)
+        box.setWindowTitle(self.tr("Update available"))
+        box.setText(self.tr("A newer version of MycoLog is available."))
+        box.setInformativeText(
+            self.tr("Current version: {current}\nLatest version: {latest}").format(
+                current=current,
+                latest=latest_version
+            )
+        )
+        open_btn = box.addButton(self.tr("Open download page"), QMessageBox.AcceptRole)
+        box.addButton(self.tr("Later"), QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() == open_btn:
+            QDesktopServices.openUrl(QUrl(url))
 
     def create_control_panel(self):
         """Create the left control panel."""
@@ -2105,7 +2212,8 @@ class MainWindow(QMainWindow):
         if not paths:
             return
 
-        output_dir = Path(__file__).parent.parent / "data" / "imports"
+        output_dir = get_images_dir() / "imports"
+        output_dir.mkdir(parents=True, exist_ok=True)
         last_image_data = None
         for path in paths:
             converted_path = maybe_convert_heic(path, output_dir)
@@ -2129,13 +2237,17 @@ class MainWindow(QMainWindow):
                 )
             )
 
+            image_data = ImageDB.get_image(image_id)
+            stored_path = image_data.get("filepath") if image_data else converted_path
+
             # Generate thumbnails for ML training
             try:
-                generate_all_sizes(converted_path, image_id)
+                generate_all_sizes(stored_path, image_id)
             except Exception as e:
                 print(f"Warning: Could not generate thumbnails: {e}")
 
             last_image_data = ImageDB.get_image(image_id)
+            cleanup_import_temp_file(path, converted_path, stored_path, output_dir)
 
         if last_image_data:
             self.load_image_record(last_image_data, refresh_table=True)
@@ -5468,7 +5580,8 @@ class MainWindow(QMainWindow):
         if not paths:
             return
 
-        output_dir = Path(__file__).parent.parent / "data" / "imports"
+        output_dir = get_images_dir() / "imports"
+        output_dir.mkdir(parents=True, exist_ok=True)
         last_image_data = None
         for path in paths:
             converted_path = maybe_convert_heic(path, output_dir)
@@ -5492,12 +5605,16 @@ class MainWindow(QMainWindow):
                 )
             )
 
+            image_data = ImageDB.get_image(image_id)
+            stored_path = image_data.get("filepath") if image_data else converted_path
+
             try:
-                generate_all_sizes(converted_path, image_id)
+                generate_all_sizes(stored_path, image_id)
             except Exception as e:
                 print(f"Warning: Could not generate thumbnails: {e}")
 
             last_image_data = ImageDB.get_image(image_id)
+            cleanup_import_temp_file(path, converted_path, stored_path, output_dir)
 
         if last_image_data:
             self.load_image_record(last_image_data, refresh_table=True)
