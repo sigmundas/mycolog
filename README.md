@@ -9,6 +9,9 @@ A python app for measuring mushroom spores from microscope images, and organizin
 - **Calibration System**: Set image scale for your objectives 
 - **Spore measurements**: or measures of basidia and cystidia, with histograms and estimated confidence intervals
 - **Reference Values**: Store and compare literature reference values
+- **Languages**:
+  - User interface languages: Norwegian, English, German
+  - Mushroom names in 11 languages: English, German, French, Spanish, Danish, Swedish, Norwegian, Finnish, Polish, Portuguese, Italian
 
 ## Installation
 
