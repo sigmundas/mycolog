@@ -23,7 +23,7 @@ from datetime import datetime
 import re
 from utils.vernacular_utils import (
     normalize_vernacular_language,
-    vernacular_language_label,
+    common_name_display_label,
     resolve_vernacular_db_path,
 )
 from .image_gallery_widget import ImageGalleryWidget
@@ -578,9 +578,8 @@ class ObservationsTab(QWidget):
 
     def _common_name_column_title(self) -> str:
         lang = normalize_vernacular_language(SettingsDB.get_setting("vernacular_language", "no"))
-        label = vernacular_language_label(lang)
         base = self.tr("Common name")
-        return f"{base} ({label})" if label else base
+        return common_name_display_label(lang, base)
 
     def _spore_stats_column_title(self) -> str:
         lang = (SettingsDB.get_setting("ui_language", "en") or "en").lower()
@@ -726,8 +725,8 @@ class ObservationsTab(QWidget):
             self.set_selected_as_active(switch_tab=False)
 
     def on_row_double_clicked(self, item):
-        """Double-click to select observation as active."""
-        self.set_selected_as_active(switch_tab=True)
+        """Double-click to open edit dialog for the observation."""
+        self.edit_observation()
 
     def set_selected_as_active(self, switch_tab=True):
         """Set the selected observation as active, optionally switching to Measure tab."""
@@ -1737,9 +1736,8 @@ class NewObservationDialog(QDialog):
 
     def _vernacular_label(self) -> str:
         lang = normalize_vernacular_language(SettingsDB.get_setting("vernacular_language", "no"))
-        label = vernacular_language_label(lang)
         base = self.tr("Common name")
-        return f"{base} ({label}):" if label else f"{base}:"
+        return f"{common_name_display_label(lang, base)}:"
 
     def _vernacular_placeholder(self) -> str:
         lang = normalize_vernacular_language(SettingsDB.get_setting("vernacular_language", "no"))

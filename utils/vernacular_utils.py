@@ -20,6 +20,12 @@ VERNACULAR_LANGUAGE_LABELS = {
     "it": "Italian",
 }
 
+COMMON_NAME_LABEL_OVERRIDES = {
+    "de": "Trivialnamen",
+    "no": "Norsk navn",
+    "en": "Common name",
+}
+
 # Preferred ordering for UI language pickers.
 VERNACULAR_LANGUAGE_ORDER = ["en", "de", "fr", "es", "da", "sv", "no", "fi", "pl", "pt", "it"]
 
@@ -50,6 +56,18 @@ def vernacular_language_label(code: str | None) -> str:
     """Return a human-friendly label for a vernacular language code."""
     lang = normalize_vernacular_language(code)
     return VERNACULAR_LANGUAGE_LABELS.get(lang, lang.upper() if lang else "")
+
+
+def common_name_display_label(lang_code: str | None, default_label: str) -> str:
+    """Return the preferred label for the common name field/header."""
+    lang = normalize_vernacular_language(lang_code)
+    override = COMMON_NAME_LABEL_OVERRIDES.get(lang)
+    if override:
+        return override
+    label = vernacular_language_label(lang)
+    if label:
+        return f"{default_label} ({label})"
+    return default_label
 
 
 def _order_vernacular_languages(languages: Iterable[str]) -> list[str]:

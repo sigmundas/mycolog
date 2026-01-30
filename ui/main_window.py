@@ -32,9 +32,8 @@ from PySide6.QtCore import (
     QStringListModel,
     QUrl,
 )
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 import json
-import threading
-import urllib.request
 import html
 import numpy as np
 import math
@@ -61,6 +60,7 @@ from utils.heic_converter import maybe_convert_heic
 from utils.vernacular_utils import (
     normalize_vernacular_language,
     vernacular_language_label,
+    common_name_display_label,
     resolve_vernacular_db_path,
     list_available_vernacular_languages,
 )
@@ -759,9 +759,8 @@ class ReferenceValuesDialog(QDialog):
 
     def _vernacular_label(self) -> str:
         lang = normalize_vernacular_language(SettingsDB.get_setting("vernacular_language", "no"))
-        label = vernacular_language_label(lang)
         base = self.tr("Common name")
-        return f"{base} ({label}):" if label else f"{base}:"
+        return f"{common_name_display_label(lang, base)}:"
 
     def apply_vernacular_language_change(self) -> None:
         if hasattr(self, "vernacular_label"):
@@ -1126,6 +1125,10 @@ class MainWindow(QMainWindow):
         self.setGeometry(100, 100, 1600, 900)
         self.app_version = app_version or ""
         self._update_check_started = False
+        self._pixmap_cache: dict[str, QPixmap] = {}
+        self._pixmap_cache_order: list[str] = []
+        self._pixmap_cache_max = 6
+        self._pixmap_cache_observation_id = None
 
         self.current_image_path = None
         self.current_image_id = None
@@ -1219,7 +1222,7 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(10, 10, 10, 10)
 
         # Observation header
-        self.observation_header_label = QLabel("No active observation")
+        self.observation_header_label = QLabel("")
         self.observation_header_label.setStyleSheet(
             "font-size: 12pt; font-weight: bold; color: #2c3e50;"
         )
@@ -1308,6 +1311,22 @@ class MainWindow(QMainWindow):
         language_action.triggered.connect(self.open_language_settings_dialog)
         settings_menu.addAction(language_action)
 
+        help_menu = menubar.addMenu(self.tr("Help"))
+        version_text = self.tr("Version: {version}").format(
+            version=self.app_version or self.tr("Unknown")
+        )
+        version_action = QAction(version_text, self)
+        version_action.setEnabled(False)
+        help_menu.addAction(version_action)
+
+        release_action = QAction(self.tr("Open latest release"), self)
+        release_action.triggered.connect(
+            lambda: QDesktopServices.openUrl(
+                QUrl("https://github.com/sigmundas/mycolog/releases/latest")
+            )
+        )
+        help_menu.addAction(release_action)
+
     def start_update_check(self):
         """Check GitHub for newer releases without blocking the UI."""
         if self._update_check_started:
@@ -1316,33 +1335,58 @@ class MainWindow(QMainWindow):
         current_version = self._parse_version(self.app_version)
         if current_version is None:
             return
+        if not hasattr(self, "_update_network"):
+            self._update_network = QNetworkAccessManager(self)
+        
+        # Use Atom feed instead of API - no rate limits!
+        req = QNetworkRequest(QUrl("https://github.com/sigmundas/mycolog/releases.atom"))
+        req.setHeader(QNetworkRequest.UserAgentHeader, f"MycoLog/{self.app_version}")
+        
+        reply = self._update_network.get(req)
+        reply.finished.connect(
+            lambda: self._handle_atom_reply(reply, current_version)
+        )
 
-        def _worker():
-            latest = self._fetch_latest_release()
-            if not latest:
-                return
-            if self._is_newer_version(latest["version"], current_version):
-                QTimer.singleShot(
-                    0,
-                    lambda: self._show_update_dialog(latest["version"], latest["url"]),
-                )
-
-        threading.Thread(target=_worker, daemon=True).start()
-
-    def _fetch_latest_release(self) -> dict | None:
-        url = "https://api.github.com/repos/sigmundas/mycolog/releases/latest"
+    def _handle_atom_reply(self, reply: QNetworkReply, current_version: tuple[int, ...]):
+        """Handle Atom feed response from GitHub releases."""
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "MycoLog"})
-            with urllib.request.urlopen(req, timeout=6) as resp:
-                data = json.load(resp)
+            if reply.error() != QNetworkReply.NoError:
+                return  # Silently fail - update check is non-critical
+            
+            payload = bytes(reply.readAll())
+            
+            # Parse XML properly
+            from xml.etree import ElementTree as ET
+            root = ET.fromstring(payload.decode("utf-8"))
+            
+            # Atom namespace
+            ns = {'atom': 'http://www.w3.org/2005/Atom'}
+            
+            # Find first entry (latest release)
+            entry = root.find('atom:entry', ns)
+            if entry is None:
+                return
+            
+            title_elem = entry.find('atom:title', ns)
+            link_elem = entry.find('atom:link[@rel="alternate"]', ns)
+            
+            if title_elem is None or link_elem is None:
+                return
+            
+            title = title_elem.text.strip()
+            url = link_elem.get('href', '').strip()
+            
+            # Extract version from title (e.g., "v0.2.2" -> "0.2.2")
+            version = title.lower().replace("release", "").strip().lstrip("v").strip()
+            
+            if self._is_newer_version(version, current_version):
+                self._show_update_dialog(version, url)
+                
         except Exception:
-            return None
-        tag = str(data.get("tag_name") or "").strip()
-        version = tag.lstrip("v") if tag else ""
-        html_url = data.get("html_url") or "https://github.com/sigmundas/mycolog/releases/latest"
-        if not version:
-            return None
-        return {"version": version, "url": html_url}
+            pass  # Silently fail - update check is non-critical
+        finally:
+            reply.deleteLater()
+
 
     def _parse_version(self, version: str | None) -> tuple[int, ...] | None:
         if not version:
@@ -2031,7 +2075,7 @@ class MainWindow(QMainWindow):
         self.auto_gray_cache = None
         self.auto_gray_cache_id = None
 
-        self.current_pixmap = QPixmap(self.current_image_path)
+        self.current_pixmap = self._load_pixmap_cached(self.current_image_path)
         self.image_label.set_image(self.current_pixmap)
         self.update_exif_panel(self.current_image_path)
         QTimer.singleShot(0, self.image_label.reset_view)
@@ -2069,15 +2113,25 @@ class MainWindow(QMainWindow):
         if not self._suppress_gallery_update:
             self.schedule_gallery_refresh()
 
+        self._prefetch_adjacent_images()
+
     def refresh_observation_images(self, select_image_id=None):
         """Refresh the image list for the active observation."""
         if not self.active_observation_id:
             self.observation_images = []
             self.current_image_index = -1
+            self._pixmap_cache.clear()
+            self._pixmap_cache_order.clear()
+            self._pixmap_cache_observation_id = None
             self.update_image_navigation_ui()
             if hasattr(self, "measure_gallery"):
                 self.measure_gallery.clear()
             return
+
+        if self._pixmap_cache_observation_id != self.active_observation_id:
+            self._pixmap_cache.clear()
+            self._pixmap_cache_order.clear()
+            self._pixmap_cache_observation_id = self.active_observation_id
 
         self.observation_images = ImageDB.get_images_for_observation(self.active_observation_id)
         if hasattr(self, "measure_gallery"):
@@ -2123,6 +2177,50 @@ class MainWindow(QMainWindow):
         if hasattr(self, "next_image_btn"):
             self.next_image_btn.setEnabled(self.current_image_index < total - 1)
 
+    def _cache_pixmap(self, path: str, pixmap: QPixmap) -> None:
+        if not path or pixmap is None or pixmap.isNull():
+            return
+        if path in self._pixmap_cache_order:
+            self._pixmap_cache_order.remove(path)
+        self._pixmap_cache[path] = pixmap
+        self._pixmap_cache_order.append(path)
+        while len(self._pixmap_cache_order) > self._pixmap_cache_max:
+            oldest = self._pixmap_cache_order.pop(0)
+            self._pixmap_cache.pop(oldest, None)
+
+    def _load_pixmap_cached(self, path: str) -> QPixmap:
+        if path in self._pixmap_cache:
+            return self._pixmap_cache[path]
+        pixmap = QPixmap(path)
+        self._cache_pixmap(path, pixmap)
+        return pixmap
+
+    def _prefetch_adjacent_images(self) -> None:
+        if not self.observation_images:
+            return
+        if self.current_image_index < 0:
+            idx = -1
+            if self.current_image_id:
+                for i, image in enumerate(self.observation_images):
+                    if image.get("id") == self.current_image_id:
+                        idx = i
+                        break
+            if idx < 0:
+                return
+        else:
+            idx = self.current_image_index
+
+        targets = [idx - 1, idx + 1]
+        for target in targets:
+            if target < 0 or target >= len(self.observation_images):
+                continue
+            path = self.observation_images[target].get("filepath")
+            if not path:
+                continue
+            if path in self._pixmap_cache:
+                continue
+            QTimer.singleShot(0, lambda p=path: self._load_pixmap_cached(p))
+
     def goto_previous_image(self):
         """Navigate to the previous image."""
         if self.current_image_index <= 0:
@@ -2167,12 +2265,12 @@ class MainWindow(QMainWindow):
     def update_observation_header(self, observation_id):
         """Update the observation header label."""
         if not observation_id:
-            self.observation_header_label.setText("No active observation")
+            self.observation_header_label.setText("")
             return
 
         observation = ObservationDB.get_observation(observation_id)
         if not observation:
-            self.observation_header_label.setText("No active observation")
+            self.observation_header_label.setText("")
             return
 
         genus = observation.get('genus') or ''

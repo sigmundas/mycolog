@@ -7,7 +7,8 @@ if (-not (Test-Path $mainPath)) {
 }
 
 $content = Get-Content $mainPath -Raw
-$match = [regex]::Match($content, 'APP_VERSION\\s*=\\s*\"([^\"]+)\"')
+$pattern = 'APP_VERSION\s*=\s*["'']([^"''\r\n]+)["'']'
+$match = [regex]::Match($content, $pattern)
 if (-not $match.Success) {
     throw "APP_VERSION not found in main.py"
 }
@@ -26,3 +27,8 @@ if ($currentTag) {
 
 & git tag -a $tag -m $tag
 Write-Host "Created tag $tag"
+
+Write-Host "Pushing commits..."
+& git push
+Write-Host "Pushing tags..."
+& git push --tags

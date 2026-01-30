@@ -20,7 +20,7 @@ class CalibrationDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle(self.tr("Set Scale"))
-        self.setMinimumWidth(500)
+        self.setMinimumWidth(650)
 
         self.objectives = self.load_objectives()
 
