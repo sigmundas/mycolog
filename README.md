@@ -50,12 +50,14 @@ python main.py
 First step is to create a new observation by importing photos. Select a field photo taken with a phone if you want GPS coordinates.
 ![New Observation](assets/1-new-observation.png)
 
-Start by clicking measure mode. Hold shift to pan, mouse-wheel etc to zoom.
-![Measure Spores](assets/2-measure-spores.png)
+When images are imported and tagged, select species or Unknown if you haven't determined the species yet. You can enter common name, and the scientific name will be automatically filled. Or you can enter genus, and species will be suggested as you type.
+![Measure Spores](assets/2-new-observation.png)
 
+Measure spores by drawing a rectangle around spores. You can fine tune in the preview pane.
+![Measure Spores](assets/3-measure-spores.png)
 
-Select the type of measures you have taken. Click any graph element to filter thumbnails.
-![Stats and Reference](assets/3-stats-reference.png)
+Create plots and copmare with published values. Generate a mosaic of thumbnails + rectangles to document how you measured, spore appearance etc:
+![Stats and Reference](assets/4-stats-reference.png)
 
 
 ### First Time Setup
@@ -81,16 +83,17 @@ Select the type of measures you have taken. Click any graph element to filter th
 
 1. **Register a new observation**
    - Click New Observation
-   - Click Add Images. You can select multiple files. Support for png, jpg, tif, orf, nef, heic, heif
-   - Tick for Field (macro photos from the field), or Micro (microscope images)
-   - For microscope images, you can set objective, contrast, mount and sample type
-   - The date&time and GPS coordinates are taken from the image you select in the table.
+   - In the Prepare Images dialog, click Add Images (multi-select supported; png, jpg, tif, orf, nef, heic, heif)
+   - Select one or more thumbnails; the current image is shown in the center
+   - Set Image type (Field or Micro). For Micro, choose objective/scale, contrast, mount, and sample type
+   - Use **Apply to all** to copy the current image settings to the rest
+   - On the right, the Current image panel shows EXIF date/GPS. Click **Set from current image** to set the observation date/GPS (enabled only when a single image with EXIF date+GPS is selected)
    - If you are sure, or pretty sure what the species is, fill out Genus and Species. If you don't know, select the "Unknown" tab, and fill out a working title.
    - Click Create Observation
 
 2. **Navigate the Image**
    - **Zoom**: Use mouse wheel or View menu (Ctrl++ / Ctrl+-)
-   - **Pan**: Hold Shift and drag the image
+   - **Pan**: Click and drag the image
    - **Reset**: Click "Reset View" or press Ctrl+0
 
 3. **Measure Spores**
@@ -145,6 +148,7 @@ Contents (created on demand):
 
 ```
 MycoLog/
+  assets/                    # Icons, logos, UI assets
   main.py                      # Entry point
   config.py                    # Configuration settings
   requirements.txt             # Dependencies
@@ -152,12 +156,16 @@ MycoLog/
     __init__.py
     schema.py                  # Database tables
     models.py                  # Data access (ObservationDB, ImageDB, MeasurementDB, ReferenceDB)
+  i18n/                        # Qt translations (.ts/.qm)
+  tools/                       # Dev scripts (translations, etc.)
   ui/
     __init__.py
     main_window.py             # Main application window
     measurement_tool.py        # Measurement interaction logic
     observation_list.py        # Observation list widget
     observations_tab.py        # Observations tab
+    image_import_dialog.py     # Prepare Images dialog
+    image_gallery_widget.py    # Thumbnail gallery widget
     zoomable_image_widget.py   # Zoomable/pannable image display
     spore_preview_widget.py    # Magnified rotated spore preview
     stats_table_widget.py      # Statistics table
@@ -173,6 +181,7 @@ MycoLog/
     ml_export.py               # ML export
     stats.py                   # Statistical calculations
     thumbnail_generator.py     # Thumbnail generation
+    vernacular_utils.py        # Mushroom name localization
   build.ps1                    # Windows build script (PyInstaller)
   build_mac.sh                 # macOS build script (PyInstaller)
   build_linux.sh               # Linux build script (PyInstaller)
@@ -207,27 +216,6 @@ Stored in the same Database folder as `reference_values.db`.
 
 - Reference values table (genus, species, source, mount medium, length/width/Q min/5%/50%/95%/max)
 
-## Troubleshooting
-
-### "No module named PySide6"
-Run: `pip install -r requirements.txt`
-
-### "No module named 'database'"
-Make sure you're running from the MycoLog directory: `cd MycoLog && python main.py`
-
-### "sqlite3.OperationalError: no such column: image_id"
-Your database has an old schema. Run the migration:
-```bash
-python database/migrate.py
-```
-
-Or reset the database (WARNING: deletes all data):
-```bash
-python reset_database.py
-```
-
-### Calibration not saving
-Check that your OS user data folder (see Data Location above) has write permissions
 
 ## Building from source
 

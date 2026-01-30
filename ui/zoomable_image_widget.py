@@ -17,6 +17,10 @@ class ZoomableImageLabel(QLabel):
 
         # Image data
         self.original_pixmap = None
+        self._full_image_path = None
+        self._preview_is_scaled = False
+        self._preview_tag_text = ""
+        self._full_loaded = False
         self.measurement_lines = []
         self.measurement_rectangles = []
         self.preview_line = None  # Temporary line being drawn
@@ -51,6 +55,16 @@ class ZoomableImageLabel(QLabel):
 
         # Mouse tracking for preview line
         self.current_mouse_pos = None
+
+    def set_image_sources(self, pixmap, full_path=None, preview_scaled=False):
+        """Set image with optional full-resolution source."""
+        self.original_pixmap = pixmap
+        self._full_image_path = str(full_path) if full_path else None
+        self._preview_is_scaled = bool(preview_scaled)
+        self._preview_tag_text = "Preview" if self._preview_is_scaled else ""
+        self._full_loaded = not self._preview_is_scaled
+        self.pan_offset = QPointF(0, 0)
+        self.reset_view()
 
     def _light_stroke_color(self):
         """Return a lighter, low-opacity version of the measure color."""
@@ -177,6 +191,10 @@ class ZoomableImageLabel(QLabel):
     def set_image(self, pixmap):
         """Set the image to display, fitting it to the widget."""
         self.original_pixmap = pixmap
+        self._full_image_path = None
+        self._preview_is_scaled = False
+        self._preview_tag_text = ""
+        self._full_loaded = True if pixmap else False
         self.pan_offset = QPointF(0, 0)
         # Fit image to screen by default
         self.reset_view()
@@ -308,6 +326,8 @@ class ZoomableImageLabel(QLabel):
     def zoom_in(self):
         """Zoom in by 20%."""
         self.zoom_level = min(self.zoom_level * 1.2, self.max_zoom)
+        if self.zoom_level > 1.0 and self._preview_is_scaled and not self._full_loaded:
+            self._load_full_resolution()
         self.update()
 
     def zoom_out(self):
@@ -345,7 +365,55 @@ class ZoomableImageLabel(QLabel):
             # Update pan offset to keep point under cursor fixed
             self.pan_offset = cursor_pos - widget_center - new_relative_pos
 
+        if self.zoom_level > 1.0 and self._preview_is_scaled and not self._full_loaded:
+            self._load_full_resolution()
         self.update()
+
+    def _load_full_resolution(self):
+        if not self._full_image_path:
+            return
+        try:
+            full_pixmap = QPixmap(self._full_image_path)
+        except Exception:
+            return
+        if full_pixmap.isNull() or not self.original_pixmap:
+            return
+
+        preview_pixmap = self.original_pixmap
+        preview_width = max(1, preview_pixmap.width())
+        preview_height = max(1, preview_pixmap.height())
+        full_width = max(1, full_pixmap.width())
+        full_height = max(1, full_pixmap.height())
+
+        center_preview = self.screen_to_image(QPointF(self.width() / 2, self.height() / 2))
+        if not center_preview:
+            center_preview = QPointF(preview_width / 2, preview_height / 2)
+
+        scale_x = full_width / preview_width
+        scale_y = full_height / preview_height
+        center_full = QPointF(center_preview.x() * scale_x, center_preview.y() * scale_y)
+
+        new_zoom = self.zoom_level * (preview_width / full_width)
+        new_zoom = max(self.min_zoom, min(self.max_zoom, new_zoom))
+
+        self.original_pixmap = full_pixmap
+        self.zoom_level = new_zoom
+        self._preview_is_scaled = False
+        self._preview_tag_text = ""
+        self._full_loaded = True
+
+        scaled_width = self.original_pixmap.width() * self.zoom_level
+        scaled_height = self.original_pixmap.height() * self.zoom_level
+        self.pan_offset = QPointF(
+            scaled_width / 2 - center_full.x() * self.zoom_level,
+            scaled_height / 2 - center_full.y() * self.zoom_level,
+        )
+        self.update()
+
+    def ensure_full_resolution(self):
+        """Load full-resolution image if currently showing a preview."""
+        if self._preview_is_scaled and not self._full_loaded:
+            self._load_full_resolution()
 
     def mousePressEvent(self, event):
         """Handle mouse press for panning or clicking."""
@@ -889,37 +957,36 @@ class ZoomableImageLabel(QLabel):
                         painter, f"{width_um:.2f}", width_edge, center_screen, 3
                     )
 
-        # Draw objective tag in upper right corner
-        if self.objective_text:
-            tag_padding = 12
+        def _draw_tag(text, y_offset, bg_color, font_size=10):
+            tag_padding = 10
             tag_margin = 10
-
             font = painter.font()
-            font.setPointSize(11)
+            font.setPointSize(font_size)
             font.setBold(True)
             painter.setFont(font)
-
             metrics = painter.fontMetrics()
-            text_width = metrics.horizontalAdvance(self.objective_text)
+            text_width = metrics.horizontalAdvance(text)
             text_height = metrics.height()
-
             tag_rect = QRect(
                 self.width() - text_width - tag_padding * 2 - tag_margin,
-                tag_margin,
+                y_offset,
                 text_width + tag_padding * 2,
                 text_height + tag_padding
             )
-
-            # Draw rounded rectangle background
             painter.setPen(Qt.NoPen)
-            tag_color = QColor(self.objective_color)
+            tag_color = QColor(bg_color)
             tag_color.setAlpha(200)
             painter.setBrush(tag_color)
             painter.drawRoundedRect(tag_rect, 6, 6)
-
-            # Draw text
             painter.setPen(Qt.white)
-            painter.drawText(tag_rect, Qt.AlignCenter, self.objective_text)
+            painter.drawText(tag_rect, Qt.AlignCenter, text)
+            return tag_rect.bottom() + 6
+
+        next_tag_y = 10
+        if self.objective_text:
+            next_tag_y = _draw_tag(self.objective_text, next_tag_y, self.objective_color, 11)
+        if self._preview_tag_text:
+            _draw_tag(self._preview_tag_text, next_tag_y, QColor(149, 165, 166), 9)
 
         # Draw zoom info in lower left corner
         zoom_text = f"Zoom: {self.zoom_level * 100:.0f}%"

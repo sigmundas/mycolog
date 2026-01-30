@@ -3,13 +3,15 @@ from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                                 QLineEdit, QPushButton, QComboBox, QFormLayout,
                                 QGroupBox, QTabWidget, QWidget, QDoubleSpinBox,
                                 QCheckBox)
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Signal, QPointF
+from PySide6.QtGui import QPixmap
 import json
 from database.schema import (
     load_objectives,
     save_objectives,
     get_last_objective_path,
 )
+from .spore_preview_widget import SporePreviewWidget
 
 
 class CalibrationDialog(QDialog):
@@ -26,6 +28,7 @@ class CalibrationDialog(QDialog):
 
         # For custom calibration
         self.calibration_distance_pixels = None
+        self.preview_points = []
 
         self.init_ui()
         self.load_last_used()
@@ -189,6 +192,19 @@ class CalibrationDialog(QDialog):
         calib_group.setLayout(calib_layout)
         layout.addWidget(calib_group)
 
+        # Preview/fine-tune widget
+        self.preview_group = QGroupBox(self.tr("Calibration preview"))
+        preview_layout = QVBoxLayout()
+        self.preview_widget = SporePreviewWidget(self)
+        self.preview_widget.setMinimumHeight(220)
+        self.preview_widget.setMaximumHeight(320)
+        self.preview_widget.set_show_dimension_labels(False)
+        self.preview_widget.dimensions_changed.connect(self._on_preview_dimensions_changed)
+        preview_layout.addWidget(self.preview_widget)
+        self.preview_group.setLayout(preview_layout)
+        self.preview_group.setVisible(False)
+        layout.addWidget(self.preview_group)
+
         layout.addStretch()
         return tab
 
@@ -325,6 +341,40 @@ class CalibrationDialog(QDialog):
         self.show()
         self.raise_()
         self.activateWindow()
+
+    def set_calibration_preview(self, pixmap: QPixmap, points: list[QPointF]):
+        if not pixmap or pixmap.isNull():
+            return
+        if not points or len(points) != 4:
+            return
+        self.preview_points = points
+        length_px = self._distance(points[0], points[1])
+        width_px = self._distance(points[2], points[3])
+        self.preview_widget.set_spore(
+            pixmap,
+            points,
+            length_px,
+            width_px,
+            1.0,
+            0
+        )
+        self.preview_group.setVisible(True)
+
+    def _on_preview_dimensions_changed(self, _measurement_id, new_length_um, _new_width_um, new_points):
+        if new_length_um and new_length_um > 0:
+            self.calibration_distance_pixels = new_length_um
+            self.preview_points = new_points or self.preview_points
+            self.calib_status_label.setText(
+                self.tr("Measured: {pixels:.1f} pixels").format(pixels=new_length_um)
+            )
+            self.calib_status_label.setStyleSheet("color: #27ae60; font-weight: bold;")
+            self.update_custom_scale()
+
+    @staticmethod
+    def _distance(p1: QPointF, p2: QPointF) -> float:
+        dx = p2.x() - p1.x()
+        dy = p2.y() - p1.y()
+        return (dx * dx + dy * dy) ** 0.5
 
     def update_custom_scale(self):
         """Update the calculated scale based on measured pixels and known distance."""

@@ -29,6 +29,7 @@ class ImageGalleryWidget(QGroupBox):
     imageClicked = Signal(object, str)
     imageSelected = Signal(object, str)
     deleteRequested = Signal(int)
+    selectionChanged = Signal(list)
 
     def __init__(
         self,
@@ -49,12 +50,15 @@ class ImageGalleryWidget(QGroupBox):
 
         self._show_delete = show_delete
         self._show_badges = show_badges
+        self._multi_select = False
         self._base_thumb_size = max(80, int(thumbnail_size))
         self._min_thumb_size = 80
         self._thumb_size = self._base_thumb_size
         self._items: list[dict] = []
         self._frames: list[QFrame] = []
         self._selected_id = None
+        self._selected_keys: set[str | int] = set()
+        self._last_clicked_index: int | None = None
         self._content = QWidget(self)
         content_layout = QVBoxLayout(self._content)
         content_layout.setContentsMargins(0, 0, 0, 0)
@@ -79,6 +83,7 @@ class ImageGalleryWidget(QGroupBox):
     def clear(self) -> None:
         self._items = []
         self._selected_id = None
+        self._selected_keys = set()
         self._clear_widgets()
 
     def _clear_widgets(self) -> None:
@@ -89,10 +94,10 @@ class ImageGalleryWidget(QGroupBox):
         self._frames = []
 
     def set_images(self, image_paths: Iterable[str]) -> None:
-        self._items = []
+        items = []
         for idx, path in enumerate(image_paths):
             if path:
-                self._items.append(
+                items.append(
                     {
                         "id": None,
                         "filepath": str(path),
@@ -100,6 +105,28 @@ class ImageGalleryWidget(QGroupBox):
                         "image_number": idx + 1,
                     }
                 )
+        self.set_items(items)
+
+    def set_items(self, items: Iterable[dict]) -> None:
+        self._items = []
+        for idx, item in enumerate(items):
+            if not item:
+                continue
+            filepath = item.get("filepath")
+            if not filepath:
+                continue
+            self._items.append(
+                {
+                    "id": item.get("id"),
+                    "filepath": str(filepath),
+                    "preview_path": item.get("preview_path"),
+                    "has_measurements": item.get("has_measurements", False),
+                    "image_number": item.get("image_number", idx + 1),
+                    "badges": item.get("badges", []),
+                    "gps_tag_text": item.get("gps_tag_text"),
+                    "gps_tag_highlight": item.get("gps_tag_highlight", False),
+                }
+            )
         self._render()
 
     def set_observation_id(self, observation_id: int | None) -> None:
@@ -123,6 +150,10 @@ class ImageGalleryWidget(QGroupBox):
 
     def select_image(self, image_id: int | None) -> None:
         self._selected_id = image_id
+        self._selected_keys = set()
+        if image_id is not None:
+            self._selected_keys.add(image_id)
+        self._last_clicked_index = self._index_for_key(image_id)
         for frame in self._frames:
             is_selected = getattr(frame, "image_id", None) == image_id and image_id is not None
             frame.setProperty("selected", is_selected)
@@ -137,6 +168,8 @@ class ImageGalleryWidget(QGroupBox):
             self._grid.addWidget(frame)
         if self._selected_id is not None:
             self.select_image(self._selected_id)
+        elif self._selected_keys:
+            self._apply_selection_styles()
 
     def eventFilter(self, obj, event):
         if obj == self._scroll.viewport() and event.type() == QEvent.Resize:
@@ -177,8 +210,7 @@ class ImageGalleryWidget(QGroupBox):
         pixmap = self._load_pixmap(item)
         if pixmap and not pixmap.isNull():
             thumb_label._orig_pixmap = pixmap
-            scaled = pixmap.scaled(self._thumb_size, self._thumb_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            thumb_label.setPixmap(scaled)
+            thumb_label.setPixmap(self._scaled_thumb(pixmap, self._thumb_size))
         else:
             thumb_label.setText("No preview")
             thumb_label.setStyleSheet("color: #7f8c8d;")
@@ -198,6 +230,39 @@ class ImageGalleryWidget(QGroupBox):
             )
             number_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             image_layout.addWidget(number_label, 0, 0, alignment=Qt.AlignTop | Qt.AlignLeft)
+
+        gps_tag_text = item.get("gps_tag_text")
+        if gps_tag_text:
+            gps_label = QLabel(str(gps_tag_text))
+            gps_highlight = bool(item.get("gps_tag_highlight"))
+            color = "#ffffff" if gps_highlight else "#000000"
+            background = "#c0392b" if gps_highlight else "rgba(255, 255, 255, 77)"
+            weight = "bold" if gps_highlight else "normal"
+            gps_label.setStyleSheet(
+                "color: %s; background-color: %s;"
+                "font-size: 8pt; font-weight: %s; padding: 1px 4px; border-radius: 3px; border: none;"
+                % (color, background, weight)
+            )
+            gps_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            image_layout.addWidget(gps_label, 0, 0, alignment=Qt.AlignTop | Qt.AlignRight)
+
+        badges = item.get("badges") or []
+        if badges:
+            badge_container = QWidget()
+            badge_layout = QVBoxLayout(badge_container)
+            badge_layout.setContentsMargins(2, 2, 2, 2)
+            badge_layout.setSpacing(2)
+            for badge_text in badges:
+                if not badge_text:
+                    continue
+                badge = QLabel(str(badge_text))
+                badge.setStyleSheet(
+                    "color: #000000; background-color: rgba(255, 255, 255, 180);"
+                    "font-size: 7pt; padding: 1px 4px; border-radius: 3px; border: none;"
+                )
+                badge.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+                badge_layout.addWidget(badge)
+            image_layout.addWidget(badge_container, 0, 0, alignment=Qt.AlignBottom | Qt.AlignLeft)
 
         overlay = QWidget()
         overlay_layout = QHBoxLayout(overlay)
@@ -229,10 +294,99 @@ class ImageGalleryWidget(QGroupBox):
 
         frame.image_id = item.get("id")
         frame.image_path = item.get("filepath")
+        frame.image_key = item.get("id") if item.get("id") is not None else item.get("filepath")
         frame.thumb_label = thumb_label
-        frame.mousePressEvent = lambda e, img_id=frame.image_id, path=frame.image_path: self._on_click(img_id, path)
+        frame.mousePressEvent = lambda e, img_id=frame.image_id, path=frame.image_path: self._on_click(e, img_id, path)
 
         return frame
+
+    def set_multi_select(self, enabled: bool) -> None:
+        self._multi_select = bool(enabled)
+        if not self._multi_select:
+            self._selected_keys = set()
+            if self._selected_id is not None:
+                self._selected_keys.add(self._selected_id)
+            self._apply_selection_styles()
+
+    def selected_paths(self) -> list[str]:
+        selected = []
+        for item in self._items:
+            key = item.get("id") if item.get("id") is not None else item.get("filepath")
+            if key in self._selected_keys:
+                selected.append(item.get("filepath"))
+        return selected
+
+    def select_paths(self, paths: list[str]) -> None:
+        keys: set[str | int] = set()
+        for item in self._items:
+            filepath = item.get("filepath")
+            if filepath in paths:
+                key = item.get("id") if item.get("id") is not None else filepath
+                keys.add(key)
+        self._selected_keys = keys
+        self._selected_id = None
+        self._last_clicked_index = None
+        if keys:
+            for item in self._items:
+                key = item.get("id") if item.get("id") is not None else item.get("filepath")
+                if key in keys:
+                    self._selected_id = item.get("id")
+                    self._last_clicked_index = self._index_for_key(key)
+                    break
+        self._apply_selection_styles()
+
+    def _index_for_key(self, key) -> int | None:
+        if key is None:
+            return None
+        for idx, item in enumerate(self._items):
+            item_key = item.get("id") if item.get("id") is not None else item.get("filepath")
+            if item_key == key:
+                return idx
+        return None
+
+    def _apply_selection_styles(self) -> None:
+        for frame in self._frames:
+            key = getattr(frame, "image_key", None)
+            is_selected = key in self._selected_keys if key is not None else False
+            frame.setProperty("selected", is_selected)
+            frame.setStyleSheet(self._frame_style(selected=is_selected))
+
+    def _on_click(self, event, img_id, path):
+        key = img_id if img_id is not None else path
+        index = self._index_for_key(key)
+        if self._multi_select:
+            if event.modifiers() & Qt.ShiftModifier and index is not None and self._last_clicked_index is not None:
+                start = min(self._last_clicked_index, index)
+                end = max(self._last_clicked_index, index)
+                range_keys = set()
+                for idx in range(start, end + 1):
+                    item = self._items[idx]
+                    item_key = item.get("id") if item.get("id") is not None else item.get("filepath")
+                    range_keys.add(item_key)
+                if event.modifiers() & Qt.ControlModifier:
+                    self._selected_keys |= range_keys
+                else:
+                    self._selected_keys = range_keys
+            elif event.modifiers() & Qt.ControlModifier:
+                if key in self._selected_keys:
+                    self._selected_keys.discard(key)
+                else:
+                    self._selected_keys.add(key)
+            else:
+                self._selected_keys = {key}
+            self._selected_id = img_id
+            if index is not None:
+                self._last_clicked_index = index
+            self._apply_selection_styles()
+            self.selectionChanged.emit(self.selected_paths())
+        else:
+            self._selected_id = img_id
+            self._selected_keys = {key} if key is not None else set()
+            if index is not None:
+                self._last_clicked_index = index
+            self._apply_selection_styles()
+            self.imageSelected.emit(img_id, path)
+        self.imageClicked.emit(img_id, path)
 
     def _target_thumb_size(self) -> int:
         viewport_h = self._scroll.viewport().height() if self._scroll else self._base_thumb_size
@@ -253,12 +407,11 @@ class ImageGalleryWidget(QGroupBox):
             frame.thumb_label.setFixedSize(self._thumb_size, self._thumb_size)
             pixmap = getattr(frame.thumb_label, "_orig_pixmap", None)
             if isinstance(pixmap, QPixmap) and not pixmap.isNull():
-                scaled = pixmap.scaled(self._thumb_size, self._thumb_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                frame.thumb_label.setPixmap(scaled)
+                frame.thumb_label.setPixmap(self._scaled_thumb(pixmap, self._thumb_size))
 
     def _load_pixmap(self, item: dict) -> QPixmap | None:
         img_id = item.get("id")
-        filepath = item.get("filepath")
+        filepath = item.get("preview_path") or item.get("filepath")
         if img_id:
             thumb_path = get_thumbnail_path(img_id, "224x224")
             if thumb_path and Path(thumb_path).exists():
@@ -267,11 +420,14 @@ class ImageGalleryWidget(QGroupBox):
             return QPixmap(filepath)
         return None
 
-    def _on_click(self, image_id: int | None, filepath: str | None) -> None:
-        self._selected_id = image_id
-        self.select_image(image_id)
-        self.imageClicked.emit(image_id, filepath or "")
-        self.imageSelected.emit(image_id, filepath or "")
+    @staticmethod
+    def _scaled_thumb(pixmap: QPixmap, size: int) -> QPixmap:
+        scaled = pixmap.scaled(size, size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+        if scaled.width() == size and scaled.height() == size:
+            return scaled
+        x = max(0, (scaled.width() - size) // 2)
+        y = max(0, (scaled.height() - size) // 2)
+        return scaled.copy(x, y, size, size)
 
     def _has_spore_measurements(self, image_id: int) -> bool:
         measurements = MeasurementDB.get_measurements_for_image(image_id)

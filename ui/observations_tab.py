@@ -27,6 +27,7 @@ from utils.vernacular_utils import (
     resolve_vernacular_db_path,
 )
 from .image_gallery_widget import ImageGalleryWidget
+from .image_import_dialog import ImageImportDialog, ImageImportResult
 
 
 class SortableTableWidgetItem(QTableWidgetItem):
@@ -82,23 +83,15 @@ class MapServiceHelper:
     def _inat_map_link(self, species_name, lat, lon, radius_km):
         from urllib.parse import urlencode
 
-        taxon_id = self._inat_taxon_id(species_name)
-        return (
-            "https://www.inaturalist.org/observations?"
-            + urlencode({"taxon_id": taxon_id, "lat": lat, "lng": lon, "radius": radius_km})
-        )
+        params = {"lat": lat, "lng": lon, "radius": radius_km}
+        if species_name:
+            taxon_id = self._inat_taxon_id(species_name)
+            params["taxon_id"] = taxon_id
+        return "https://www.inaturalist.org/observations?" + urlencode(params)
 
     def open_inaturalist_map(self, lat, lon, species_name):
         """Open iNaturalist observations map for the selected species."""
         import webbrowser
-
-        if not species_name:
-            QMessageBox.warning(
-                self.parent,
-                "Missing Species",
-                "iNaturalist requires a known genus and species."
-            )
-            return
         try:
             url = self._inat_map_link(species_name, lat, lon, 50.0)
         except Exception as exc:
@@ -232,16 +225,12 @@ class MapServiceHelper:
                     "&projects=&layers=&plannedOmlop=0&plannedGeovekst=0"
                 )
             elif selection == "Artskart":
-                if not species_name:
-                    QMessageBox.warning(
-                        self.parent,
-                        "Missing Species",
-                        "Artskart requires a known genus and species."
-                    )
-                    return
                 try:
-                    taxon_id = self._artskart_taxon_id(species_name)
-                    url = self._artskart_link(taxon_id, lat, lon)
+                    if species_name:
+                        taxon_id = self._artskart_taxon_id(species_name)
+                        url = self._artskart_link(taxon_id, lat, lon)
+                    else:
+                        url = self._artskart_base_link(lat, lon)
                 except Exception as exc:
                     QMessageBox.warning(
                         self.parent,
@@ -770,166 +759,94 @@ class ObservationsTab(QWidget):
             return
 
         existing_images = ImageDB.get_images_for_observation(obs_id)
-        dialog = NewObservationDialog(self, observation=observation, existing_images=existing_images)
-        if not dialog.exec():
-            return
+        image_results = self._build_import_results_from_images(existing_images)
 
-        data = dialog.get_data()
-        ObservationDB.update_observation(
-            obs_id,
-            genus=data.get('genus'),
-            species=data.get('species'),
-            common_name=data.get('common_name'),
-            species_guess=data.get('species_guess'),
-            uncertain=1 if data.get('uncertain') else 0,
-            date=data.get('date'),
-            location=data.get('location'),
-            habitat=data.get('habitat'),
-            notes=data.get('notes'),
-            gps_latitude=data.get('gps_latitude'),
-            gps_longitude=data.get('gps_longitude'),
-            allow_nulls=True
-        )
-
-        for image_id in getattr(dialog, "deleted_image_ids", set()):
-            ImageDB.delete_image(image_id)
-
-        objectives = dialog._load_objectives()
-        entries = dialog.get_image_entries()
-        output_dir = get_images_dir() / "imports"
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        for entry in entries:
-            image_type = entry.get("image_type", "field")
-            objective_key = entry.get("objective")
-            contrast = entry.get("contrast")
-            mount_medium = entry.get("mount_medium")
-            sample_type = entry.get("sample_type")
-
-            scale = None
-            objective_name = None
-            if image_type == "microscope" and objective_key and objective_key in objectives:
-                scale = float(objectives[objective_key]["microns_per_pixel"])
-                objective_name = objective_key
-
-            if entry.get("image_id"):
-                ImageDB.update_image(
-                    entry["image_id"],
-                    image_type=image_type,
-                    objective_name=objective_name,
-                    scale=scale,
-                    contrast=contrast,
-                    mount_medium=mount_medium,
-                    sample_type=sample_type
-                )
-                continue
-
-            filepath = entry.get("filepath")
-            if not filepath:
-                continue
-            final_path = maybe_convert_heic(filepath, output_dir)
-            if final_path is None:
-                continue
-            image_id = ImageDB.add_image(
-                observation_id=obs_id,
-                filepath=final_path,
-                image_type=image_type,
-                scale=scale,
-                objective_name=objective_name,
-                contrast=contrast,
-                mount_medium=mount_medium,
-                sample_type=sample_type
+        while True:
+            dialog = ObservationDetailsDialog(
+                self,
+                observation=observation,
+                image_results=image_results,
+                allow_edit_images=True,
             )
-            stored_path = final_path
-            try:
-                image_data = ImageDB.get_image(image_id)
-                stored_path = image_data.get("filepath") if image_data else final_path
-                generate_all_sizes(stored_path, image_id)
-            except Exception as e:
-                print(f"Warning: Could not generate thumbnails for {final_path}: {e}")
-            cleanup_import_temp_file(filepath, final_path, stored_path, output_dir)
+            if dialog.exec():
+                data = dialog.get_data()
+                ObservationDB.update_observation(
+                    obs_id,
+                    genus=data.get('genus'),
+                    species=data.get('species'),
+                    common_name=data.get('common_name'),
+                    species_guess=data.get('species_guess'),
+                    uncertain=1 if data.get('uncertain') else 0,
+                    date=data.get('date'),
+                    location=data.get('location'),
+                    habitat=data.get('habitat'),
+                    notes=data.get('notes'),
+                    gps_latitude=data.get('gps_latitude'),
+                    gps_longitude=data.get('gps_longitude'),
+                    allow_nulls=True
+                )
 
-        self.refresh_observations()
-        for row, obs in enumerate(ObservationDB.get_all_observations()):
-            if obs['id'] == obs_id:
-                self.table.selectRow(row)
-                self.selected_observation_id = obs_id
-                self.on_selection_changed()
-                break
+                self._apply_import_results_to_observation(
+                    obs_id,
+                    image_results,
+                    existing_images=existing_images
+                )
+
+                self.refresh_observations()
+                for row, obs in enumerate(ObservationDB.get_all_observations()):
+                    if obs['id'] == obs_id:
+                        self.table.selectRow(row)
+                        self.selected_observation_id = obs_id
+                        self.on_selection_changed()
+                        break
+                return
+
+            if dialog.request_edit_images:
+                image_dialog = ImageImportDialog(self, import_results=image_results)
+                if image_dialog.exec():
+                    image_results = image_dialog.import_results
+                continue
+            return
 
     def create_new_observation(self):
         """Show dialog to create new observation."""
-        dialog = NewObservationDialog(self)
-        if dialog.exec():
-            obs_data = dialog.get_data()
-            profile = SettingsDB.get_profile()
-            author = profile.get("name")
-            if author:
-                obs_data["author"] = author
+        image_results: list[ImageImportResult] = []
+        primary_index = None
+        while True:
+            image_dialog = ImageImportDialog(self, import_results=image_results or None)
+            if not image_dialog.exec():
+                return
+            image_results = image_dialog.import_results
+            primary_index = image_dialog.primary_index
 
-            # Create in database
-            obs_id = ObservationDB.create_observation(**obs_data)
+            dialog = ObservationDetailsDialog(
+                self,
+                image_results=image_results,
+                primary_index=primary_index,
+                allow_edit_images=True,
+            )
+            if dialog.exec():
+                obs_data = dialog.get_data()
+                profile = SettingsDB.get_profile()
+                author = profile.get("name")
+                if author:
+                    obs_data["author"] = author
 
-            # Import images directly with settings from dialog
-            files = dialog.get_files()
-            settings = dialog.get_image_settings()
-            objectives = dialog._load_objectives()
+                obs_id = ObservationDB.create_observation(**obs_data)
+                self._apply_import_results_to_observation(obs_id, image_results)
 
-            output_dir = get_images_dir() / "imports"
-            output_dir.mkdir(parents=True, exist_ok=True)
-            for i, filepath in enumerate(files):
-                final_path = maybe_convert_heic(filepath, output_dir)
-                if final_path is None:
-                    continue
+                self.refresh_observations()
+                for row, obs in enumerate(ObservationDB.get_all_observations()):
+                    if obs['id'] == obs_id:
+                        self.table.selectRow(row)
+                        self.selected_observation_id = obs_id
+                        self.on_selection_changed()
+                        break
+                return
 
-                img_settings = settings[i] if i < len(settings) else {
-                    'image_type': 'field',
-                    'objective': None,
-                    'contrast': self.contrast_default,
-                    'mount_medium': self.mount_default,
-                    'sample_type': self.sample_default
-                }
-                image_type = img_settings.get('image_type', 'field')
-                objective_key = img_settings.get('objective')
-                contrast = img_settings.get('contrast')
-                mount_medium = img_settings.get('mount_medium')
-                sample_type = img_settings.get('sample_type')
-
-                scale = None
-                objective_name = None
-                if image_type == 'microscope' and objective_key and objective_key in objectives:
-                    scale = float(objectives[objective_key]["microns_per_pixel"])
-                    objective_name = objective_key
-
-                image_id = ImageDB.add_image(
-                    observation_id=obs_id,
-                    filepath=final_path,
-                    image_type=image_type,
-                    scale=scale,
-                    objective_name=objective_name,
-                    contrast=contrast,
-                    mount_medium=mount_medium,
-                    sample_type=sample_type
-                )
-
-                stored_path = final_path
-                try:
-                    image_data = ImageDB.get_image(image_id)
-                    stored_path = image_data.get("filepath") if image_data else final_path
-                    generate_all_sizes(stored_path, image_id)
-                except Exception as e:
-                    print(f"Warning: Could not generate thumbnails for {final_path}: {e}")
-                cleanup_import_temp_file(filepath, final_path, stored_path, output_dir)
-
-            # Refresh table
-            self.refresh_observations()
-
-            for row, obs in enumerate(ObservationDB.get_all_observations()):
-                if obs['id'] == obs_id:
-                    self.table.selectRow(row)
-                    self.selected_observation_id = obs_id
-                    self.on_selection_changed()
-                    break
+            if dialog.request_edit_images:
+                continue
+            return
 
     def export_for_ml(self):
         """Export annotations in COCO format for ML training."""
@@ -1016,26 +933,131 @@ class ObservationsTab(QWidget):
             ObservationDB.delete_observation(obs_id)
             self.refresh_observations()
 
+    def _build_import_results_from_images(self, images: list[dict]) -> list[ImageImportResult]:
+        results: list[ImageImportResult] = []
+        for img in images:
+            if not img:
+                continue
+            scale_value = img.get("scale_microns_per_pixel")
+            objective_name = img.get("objective_name")
+            custom_scale = None
+            if scale_value is not None and (objective_name == "Custom" or not objective_name):
+                try:
+                    custom_scale = float(scale_value)
+                except (TypeError, ValueError):
+                    custom_scale = None
+            results.append(
+                ImageImportResult(
+                    filepath=img.get("filepath"),
+                    image_id=img.get("id"),
+                    image_type=img.get("image_type") or "field",
+                    objective=objective_name if objective_name != "Custom" else None,
+                    custom_scale=custom_scale,
+                    contrast=img.get("contrast"),
+                    mount_medium=img.get("mount_medium"),
+                    sample_type=img.get("sample_type"),
+                )
+            )
+        return results
 
-class NewObservationDialog(QDialog):
-    """Dialog for creating or editing an observation with image-first workflow."""
+    def _apply_import_results_to_observation(
+        self,
+        obs_id: int,
+        results: list[ImageImportResult],
+        existing_images: list[dict] | None = None,
+    ) -> None:
+        objectives = load_objectives()
+        output_dir = get_images_dir() / "imports"
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-    def __init__(self, parent=None, observation=None, existing_images=None):
+        existing_ids = {img.get("id") for img in (existing_images or []) if img.get("id")}
+        result_ids = {res.image_id for res in results if res.image_id}
+        removed_ids = existing_ids - result_ids
+        for image_id in removed_ids:
+            ImageDB.delete_image(image_id)
+
+        for result in results:
+            image_type = result.image_type or "field"
+            objective_key = result.objective
+            contrast = result.contrast
+            mount_medium = result.mount_medium
+            sample_type = result.sample_type
+
+            scale = None
+            objective_name = None
+            if image_type == "microscope":
+                if result.custom_scale:
+                    scale = float(result.custom_scale)
+                    objective_name = "Custom"
+                elif objective_key and objective_key in objectives:
+                    scale = float(objectives[objective_key]["microns_per_pixel"])
+                    objective_name = objective_key
+
+            if result.image_id:
+                ImageDB.update_image(
+                    result.image_id,
+                    image_type=image_type,
+                    objective_name=objective_name,
+                    scale=scale,
+                    contrast=contrast,
+                    mount_medium=mount_medium,
+                    sample_type=sample_type
+                )
+                continue
+
+            filepath = result.filepath
+            if not filepath:
+                continue
+            final_path = maybe_convert_heic(filepath, output_dir)
+            if final_path is None:
+                continue
+            image_id = ImageDB.add_image(
+                observation_id=obs_id,
+                filepath=final_path,
+                image_type=image_type,
+                scale=scale,
+                objective_name=objective_name,
+                contrast=contrast,
+                mount_medium=mount_medium,
+                sample_type=sample_type
+            )
+
+            stored_path = final_path
+            try:
+                image_data = ImageDB.get_image(image_id)
+                stored_path = image_data.get("filepath") if image_data else final_path
+                generate_all_sizes(stored_path, image_id)
+            except Exception as e:
+                print(f"Warning: Could not generate thumbnails for {final_path}: {e}")
+            cleanup_import_temp_file(filepath, final_path, stored_path, output_dir)
+
+
+class ObservationDetailsDialog(QDialog):
+    """Dialog for creating or editing an observation after image import."""
+
+    def __init__(
+        self,
+        parent=None,
+        observation=None,
+        image_results: list[ImageImportResult] | None = None,
+        primary_index: int | None = None,
+        allow_edit_images: bool = False,
+    ):
         super().__init__(parent)
         self.observation = observation
-        self.existing_images = existing_images or []
         self.edit_mode = observation is not None
+        self.image_results = image_results or []
+        self.primary_index = primary_index
+        self.allow_edit_images = allow_edit_images
+        self.request_edit_images = False
         self.map_helper = MapServiceHelper(self)
         self.setWindowTitle("Edit Observation" if self.edit_mode else "New Observation")
         self.setModal(True)
-        self.setMinimumSize(900, 700)
+        self.setMinimumSize(900, 720)
         self.image_files = []
-        self.image_metadata = []  # List of dicts with datetime, lat, lon, filename
-        self.image_settings = []  # List of dicts with image_type, objective
+        self.image_metadata = []
+        self.image_settings = []
         self.selected_image_index = -1
-        self.gps_latitude = None
-        self.gps_longitude = None
-        self.deleted_image_ids = set()
         self.objectives = self._load_objectives()
         self.default_objective = self._get_default_objective()
         self.contrast_options = SettingsDB.get_list_setting(
@@ -1075,102 +1097,35 @@ class NewObservationDialog(QDialog):
         self.init_ui()
         if self.edit_mode:
             self._load_existing_observation()
+        else:
+            self._apply_primary_metadata()
         self._sync_taxon_cache()
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
         main_layout.setSpacing(10)
 
-        # ===== TOP BUTTONS =====
-        top_buttons = QHBoxLayout()
-        add_images_btn = QPushButton(self.tr("Add Images..."))
-        add_images_btn.setObjectName("primaryButton")
-        add_images_btn.setMinimumHeight(35)
-        add_images_btn.clicked.connect(self.select_images)
-        top_buttons.addWidget(add_images_btn)
-        self.delete_image_btn = QPushButton(self.tr("Delete Image"))
-        self.delete_image_btn.setMinimumHeight(35)
-        self.delete_image_btn.setStyleSheet(
-            "QPushButton { background-color: #e74c3c; color: white; font-weight: bold; }"
-            "QPushButton:hover { background-color: #c0392b; }"
-            "QPushButton:pressed { background-color: #a93226; }"
+        # ===== IMAGES SUMMARY (TOP) =====
+        self.image_gallery = ImageGalleryWidget(
+            self.tr("Images"),
+            self,
+            show_delete=False,
+            show_badges=False,
+            min_height=60,
+            default_height=160,
+            thumbnail_size=110,
         )
-        self.delete_image_btn.setEnabled(False)
-        self.delete_image_btn.clicked.connect(self.delete_selected_image)
-        top_buttons.addWidget(self.delete_image_btn)
-        tips_label = QLabel(
-            self.tr(
-                "Select the image you want to use for time stamp and GPS location<br>"
-                "You can change the default objective in Settings - Calibration<br>"
-                "Add or remove contrast methods, mount and sample types in Settings - Database"
+        items = []
+        for idx, item in enumerate(self.image_results):
+            items.append(
+                {
+                    "filepath": item.filepath,
+                    "preview_path": item.preview_path or item.filepath,
+                    "image_number": idx + 1,
+                }
             )
-        )
-        tips_label.setWordWrap(True)
-        tips_label.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
-        top_buttons.addWidget(tips_label, 1)
-        main_layout.addLayout(top_buttons)
-
-        # ===== IMAGES SECTION (TOP - PROMINENT) =====
-        images_group = QGroupBox("Images")
-        images_group.setStyleSheet("QGroupBox { font-weight: bold; font-size: 11pt; }")
-        images_layout = QVBoxLayout()
-
-        # Horizontal layout for table and thumbnail
-        images_content = QHBoxLayout()
-
-        # Image table with columns: Filename/Date, Field, Micro, Objective, Contrast, Mount, Sample
-        self.image_table = QTableWidget()
-        self.image_table.setColumnCount(7)
-        self.image_table.setHorizontalHeaderLabels(
-            [
-                self.tr("Image"),
-                self.tr("Field"),
-                self.tr("Micro"),
-                self.tr("Objective"),
-                self.tr("Contrast"),
-                self.tr("Mount"),
-                self.tr("Sample")
-            ]
-        )
-        self.image_table.setMinimumHeight(180)
-        self.image_table.setMaximumHeight(220)
-        self.image_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.image_table.setSelectionMode(QTableWidget.SingleSelection)
-        self.image_table.itemSelectionChanged.connect(self.on_image_selected)
-
-        # Set row height for better readability
-        self.image_table.verticalHeader().setDefaultSectionSize(36)
-        self.image_table.verticalHeader().setVisible(False)
-
-        # Column sizing
-        header = self.image_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.Fixed)
-        header.resizeSection(3, 120)  # Objective
-        header.setSectionResizeMode(4, QHeaderView.Fixed)
-        header.resizeSection(4, 90)   # Contrast
-        header.setSectionResizeMode(5, QHeaderView.Fixed)
-        header.resizeSection(5, 110)  # Mount
-        header.setSectionResizeMode(6, QHeaderView.Fixed)
-        header.resizeSection(6, 110)  # Sample
-
-        images_content.addWidget(self.image_table, 3)
-
-        # Thumbnail preview
-        self.thumbnail_label = QLabel(self.tr("No image selected"))
-        self.thumbnail_label.setAlignment(Qt.AlignCenter)
-        self.thumbnail_label.setMinimumSize(180, 150)
-        self.thumbnail_label.setMaximumSize(200, 180)
-        self.thumbnail_label.setStyleSheet(
-            "QLabel { background-color: #ecf0f1; border: 1px solid #bdc3c7; border-radius: 4px; }"
-        )
-        images_content.addWidget(self.thumbnail_label, 1)
-
-        images_layout.addLayout(images_content)
-        images_group.setLayout(images_layout)
-        main_layout.addWidget(images_group)
+        self.image_gallery.set_items(items)
+        main_layout.addWidget(self.image_gallery)
 
         # ===== OBSERVATION DETAILS SECTION =====
         details_group = QGroupBox(self.tr("Observation Details"))
@@ -1318,6 +1273,12 @@ class NewObservationDialog(QDialog):
 
         # ===== BOTTOM BUTTONS =====
         bottom_buttons = QHBoxLayout()
+        if self.allow_edit_images:
+            edit_label = self.tr("Edit Images") if self.edit_mode else self.tr("Back to Images")
+            edit_btn = QPushButton(edit_label)
+            edit_btn.setMinimumHeight(35)
+            edit_btn.clicked.connect(self._on_edit_images_clicked)
+            bottom_buttons.addWidget(edit_btn)
         bottom_buttons.addStretch()
         cancel_btn = QPushButton(self.tr("Cancel"))
         cancel_btn.setMinimumHeight(35)
@@ -1336,6 +1297,37 @@ class NewObservationDialog(QDialog):
 
         self.on_taxonomy_tab_changed(self.taxonomy_tabs.currentIndex())
         self._update_datetime_width()
+
+    def _on_edit_images_clicked(self):
+        self.request_edit_images = True
+        self.reject()
+
+    def _apply_primary_metadata(self):
+        if not self.image_results:
+            return
+        result = self._primary_result()
+        if not result:
+            return
+        if result.captured_at:
+            self.datetime_input.setDateTime(result.captured_at)
+        if result.gps_latitude is not None:
+            self.lat_input.setValue(result.gps_latitude)
+        if result.gps_longitude is not None:
+            self.lon_input.setValue(result.gps_longitude)
+        if result.gps_source:
+            self.gps_info_label.setText(self.tr("From: {source}").format(source=result.gps_source))
+        else:
+            source = Path(result.filepath).name if result.filepath else ""
+            self.gps_info_label.setText(self.tr("From: {source}").format(source=source) if source else "")
+        self._update_map_button()
+
+    def _primary_result(self) -> ImageImportResult | None:
+        if self.primary_index is not None and 0 <= self.primary_index < len(self.image_results):
+            return self.image_results[self.primary_index]
+        for item in self.image_results:
+            if item.captured_at or item.gps_latitude is not None or item.gps_longitude is not None:
+                return item
+        return self.image_results[0] if self.image_results else None
 
     def select_images(self):
         """Select images and extract EXIF metadata."""
@@ -1811,6 +1803,7 @@ class NewObservationDialog(QDialog):
         self._species_completer.setCaseSensitivity(Qt.CaseInsensitive)
         self._species_completer.setCompletionMode(QCompleter.PopupCompletion)
         self.species_input.setCompleter(self._species_completer)
+        self._species_completer.activated.connect(self._on_species_selected)
         self.species_input.textChanged.connect(self._on_species_text_changed)
         self.species_input.editingFinished.connect(self._on_species_editing_finished)
 
@@ -1828,7 +1821,15 @@ class NewObservationDialog(QDialog):
         genus = self.genus_input.text().strip() or None
         species = self.species_input.text().strip() or None
         suggestions = self.vernacular_db.suggest_vernacular(text, genus=genus, species=species)
-        self._vernacular_model.setStringList(suggestions)
+        
+        # If text exactly matches any suggestion, clear the model to prevent popup
+        text_lower = text.strip().lower()
+        if any(s.lower() == text_lower for s in suggestions):
+            self._vernacular_model.setStringList([])
+            if self._vernacular_completer:
+                self._vernacular_completer.popup().hide()
+        else:
+            self._vernacular_model.setStringList(suggestions)
 
     def _update_vernacular_suggestions_for_taxon(self):
         if not self.vernacular_db:
@@ -1862,6 +1863,10 @@ class NewObservationDialog(QDialog):
         self.species_input.setPlaceholderText(f"{self.tr('e.g.,')} {preview}")
 
     def _on_vernacular_selected(self, name):
+        # Hide the popup after selection
+        if self._vernacular_completer:
+            self._vernacular_completer.popup().hide()
+        
         if not self.vernacular_db:
             return
         taxon = self.vernacular_db.taxon_from_vernacular(name)
@@ -1907,15 +1912,30 @@ class NewObservationDialog(QDialog):
             return
         text = text.strip()
         suggestions = self.vernacular_db.suggest_genus(text)
-        self._genus_model.setStringList(suggestions)
+        
+        # If text exactly matches a single suggestion, clear the model to prevent popup
+        if len(suggestions) == 1 and suggestions[0].lower() == text.lower():
+            self._genus_model.setStringList([])
+            if self._genus_completer:
+                self._genus_completer.popup().hide()
+        else:
+            self._genus_model.setStringList(suggestions)
+        
         if not text:
             self._suppress_taxon_autofill = True
             self.species_input.clear()
             self._suppress_taxon_autofill = False
             self._species_model.setStringList([])
+            # Reset species completer filtering
+            if self._species_completer:
+                self._species_completer.setCompletionPrefix("")
             self._set_species_placeholder_from_suggestions([])
             return
 
+        # Reset species completer filtering when genus changes
+        if self._species_completer and not self.species_input.hasFocus():
+            self._species_completer.setCompletionPrefix("")
+        
         if not self.species_input.text().strip():
             species_suggestions = self.vernacular_db.suggest_species(text, "")
             self._set_species_placeholder_from_suggestions(species_suggestions)
@@ -1931,12 +1951,26 @@ class NewObservationDialog(QDialog):
             self._set_species_placeholder_from_suggestions(species_suggestions)
 
     def _on_genus_selected(self, genus):
+        # Hide the popup after selection
+        if self._genus_completer:
+            self._genus_completer.popup().hide()
+        
         if not self.vernacular_db:
             return
         if self.species_input.text().strip():
             return
         species_suggestions = self.vernacular_db.suggest_species(str(genus).strip(), "")
         self._set_species_placeholder_from_suggestions(species_suggestions)
+
+    def _on_species_selected(self, species):
+        """Handle species selection from completer."""
+        # Hide the popup after selection
+        if self._species_completer:
+            self._species_completer.popup().hide()
+        
+        # Update vernacular name suggestions
+        if self.vernacular_db:
+            self._maybe_set_vernacular_from_taxon()
 
     def _on_species_editing_finished(self):
         if not self.vernacular_db or self._suppress_taxon_autofill:
@@ -1954,7 +1988,15 @@ class NewObservationDialog(QDialog):
             self._species_model.setStringList([])
             return
         suggestions = self.vernacular_db.suggest_species(genus, text.strip())
-        self._species_model.setStringList(suggestions)
+        
+        # If text exactly matches a single suggestion, clear the model to prevent popup
+        if len(suggestions) == 1 and suggestions[0].lower() == text.strip().lower():
+            self._species_model.setStringList([])
+            if self._species_completer:
+                self._species_completer.popup().hide()
+        else:
+            self._species_model.setStringList(suggestions)
+        
         if text.strip():
             self._maybe_set_vernacular_from_taxon()
 
@@ -1979,6 +2021,9 @@ class NewObservationDialog(QDialog):
                     self._suppress_taxon_autofill = True
                     self.vernacular_input.clear()
                     self._suppress_taxon_autofill = False
+                    # Reset vernacular completer filtering after clearing
+                    if self._vernacular_completer:
+                        self._vernacular_completer.setCompletionPrefix("")
         self._last_genus = genus
         self._last_species = species
 
@@ -1990,6 +2035,9 @@ class NewObservationDialog(QDialog):
         if event.type() == QEvent.FocusIn and self.vernacular_db:
             if obj == self.vernacular_input:
                 if not self.vernacular_input.text().strip():
+                    # Reset completer filtering when focusing empty field
+                    if self._vernacular_completer:
+                        self._vernacular_completer.setCompletionPrefix("")
                     self._update_vernacular_suggestions_for_taxon()
                     if self._vernacular_model.stringList():
                         self._vernacular_completer.complete()
@@ -2034,25 +2082,33 @@ class NewObservationDialog(QDialog):
 
     def get_files(self):
         """Return selected image files."""
-        return self.image_files
+        return [item.filepath for item in self.image_results]
 
     def get_image_settings(self):
         """Return image settings (type and objective for each image)."""
-        return self.image_settings
+        settings = []
+        for item in self.image_results:
+            settings.append({
+                "image_type": item.image_type,
+                "objective": item.objective,
+                "contrast": item.contrast,
+                "mount_medium": item.mount_medium,
+                "sample_type": item.sample_type,
+            })
+        return settings
 
     def get_image_entries(self):
         """Return images with settings for saving."""
         entries = []
-        for idx, meta in enumerate(self.image_metadata):
-            settings = self.image_settings[idx] if idx < len(self.image_settings) else {}
+        for item in self.image_results:
             entries.append({
-                "image_id": meta.get("image_id"),
-                "filepath": meta.get("filepath"),
-                "image_type": settings.get("image_type", "field"),
-                "objective": settings.get("objective"),
-                "contrast": settings.get("contrast"),
-                "mount_medium": settings.get("mount_medium"),
-                "sample_type": settings.get("sample_type")
+                "image_id": item.image_id,
+                "filepath": item.filepath,
+                "image_type": item.image_type or "field",
+                "objective": item.objective,
+                "contrast": item.contrast,
+                "mount_medium": item.mount_medium,
+                "sample_type": item.sample_type
             })
         return entries
 
@@ -2073,8 +2129,6 @@ class NewObservationDialog(QDialog):
 
     def _load_existing_observation(self):
         """Preload observation details and images for editing."""
-        from utils.exif_reader import get_image_metadata
-
         obs = self.observation or {}
 
         date_str = obs.get("date")
@@ -2108,31 +2162,6 @@ class NewObservationDialog(QDialog):
         if lon is not None:
             self.lon_input.setValue(lon)
         self._update_map_button()
-
-        if not self.existing_images:
-            return
-
-        for img in self.existing_images:
-            filepath = img.get("filepath")
-            if not filepath:
-                continue
-            self.image_files.append(filepath)
-            metadata = get_image_metadata(filepath)
-            metadata["image_id"] = img.get("id")
-            if "filepath" not in metadata:
-                metadata["filepath"] = filepath
-            if "filename" not in metadata:
-                metadata["filename"] = Path(filepath).name
-            self.image_metadata.append(metadata)
-            self.image_settings.append({
-                "image_type": img.get("image_type", "field"),
-                "objective": img.get("objective_name") or self.default_objective,
-                "contrast": img.get("contrast") or self.contrast_default,
-                "mount_medium": img.get("mount_medium") or self.mount_default,
-                "sample_type": img.get("sample_type") or self.sample_default
-            })
-
-        self._update_image_table()
         self._maybe_set_vernacular_from_taxon()
 
 

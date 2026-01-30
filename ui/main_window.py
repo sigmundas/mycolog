@@ -667,6 +667,8 @@ class ReferenceValuesDialog(QDialog):
         self._species_completer.setCompletionMode(QCompleter.PopupCompletion)
         self.genus_input.setCompleter(self._genus_completer)
         self.species_input.setCompleter(self._species_completer)
+        self._genus_completer.activated.connect(self._on_genus_selected)
+        self._species_completer.activated.connect(self._on_species_selected)
         self.genus_input.textChanged.connect(self._on_genus_text_changed)
         self.species_input.textChanged.connect(self._on_species_text_changed)
         self.genus_input.editingFinished.connect(self._on_genus_editing_finished)
@@ -880,6 +882,13 @@ class ReferenceValuesDialog(QDialog):
             self.species_input.setText("")
             self._suppress_taxon_autofill = False
             self._species_model.setStringList([])
+            # Reset species completer filtering
+            if self._species_completer:
+                self._species_completer.setCompletionPrefix("")
+        else:
+            # Reset species completer filtering when genus changes
+            if self._species_completer and not self.species_input.hasFocus():
+                self._species_completer.setCompletionPrefix("")
 
     def _on_species_text_changed(self, text):
         if self._suppress_taxon_autofill:
@@ -896,6 +905,9 @@ class ReferenceValuesDialog(QDialog):
         if event.type() == QEvent.FocusIn:
             if obj == self.vernacular_input:
                 if not self.vernacular_input.text().strip():
+                    # Reset completer filtering when focusing empty field
+                    if self._vernacular_completer:
+                        self._vernacular_completer.setCompletionPrefix("")
                     self._update_vernacular_suggestions_for_taxon()
                     if self._vernacular_model.stringList():
                         self._vernacular_completer.complete()
@@ -1000,7 +1012,15 @@ class ReferenceValuesDialog(QDialog):
         genus = self.genus_input.text().strip() or None
         species = self.species_input.text().strip() or None
         suggestions = self.vernacular_db.suggest_vernacular(text, genus=genus, species=species)
-        self._vernacular_model.setStringList(suggestions)
+        
+        # If text exactly matches any suggestion, clear the model to prevent popup
+        text_lower = text.strip().lower()
+        if any(s.lower() == text_lower for s in suggestions):
+            self._vernacular_model.setStringList([])
+            if self._vernacular_completer:
+                self._vernacular_completer.popup().hide()
+        else:
+            self._vernacular_model.setStringList(suggestions)
 
     def _update_vernacular_suggestions_for_taxon(self):
         if not self.vernacular_db:
@@ -1025,6 +1045,10 @@ class ReferenceValuesDialog(QDialog):
         self.vernacular_input.setPlaceholderText(f"{self.tr('e.g.,')} {preview}")
 
     def _on_vernacular_selected(self, name):
+        # Hide the popup after selection
+        if self._vernacular_completer:
+            self._vernacular_completer.popup().hide()
+        
         if not self.vernacular_db:
             return
         taxon = self.vernacular_db.taxon_from_vernacular(name)
@@ -1051,6 +1075,22 @@ class ReferenceValuesDialog(QDialog):
             self._suppress_taxon_autofill = False
             self._sync_taxon_cache()
 
+    def _on_genus_selected(self, genus):
+        """Handle genus selection from completer."""
+        # Hide the popup after selection
+        if self._genus_completer:
+            self._genus_completer.popup().hide()
+
+    def _on_species_selected(self, species):
+        """Handle species selection from completer."""
+        # Hide the popup after selection
+        if self._species_completer:
+            self._species_completer.popup().hide()
+        
+        # Update vernacular name suggestions
+        if self.vernacular_db:
+            self._maybe_set_vernacular_from_taxon()
+
     def _on_genus_editing_finished(self):
         if not self.vernacular_db or self._suppress_taxon_autofill:
             return
@@ -1074,6 +1114,9 @@ class ReferenceValuesDialog(QDialog):
                 self._suppress_taxon_autofill = True
                 self.vernacular_input.setText("")
                 self._suppress_taxon_autofill = False
+                # Reset vernacular completer filtering after clearing
+                if self._vernacular_completer:
+                    self._vernacular_completer.setCompletionPrefix("")
         self._last_genus = genus
         self._last_species = species
 
@@ -1107,14 +1150,30 @@ class ReferenceValuesDialog(QDialog):
             values = self.vernacular_db.suggest_genus(text)
         else:
             values = ReferenceDB.list_genera(text or "")
-        self._genus_model.setStringList(values)
+        
+        # If text exactly matches a single suggestion, clear the model to prevent popup
+        text_stripped = text.strip()
+        if len(values) == 1 and values[0].lower() == text_stripped.lower():
+            self._genus_model.setStringList([])
+            if self._genus_completer:
+                self._genus_completer.popup().hide()
+        else:
+            self._genus_model.setStringList(values)
 
     def _update_species_suggestions(self, genus, text):
         if self.vernacular_db:
             values = self.vernacular_db.suggest_species(genus, text)
         else:
             values = ReferenceDB.list_species(genus or "", text or "")
-        self._species_model.setStringList(values)
+        
+        # If text exactly matches a single suggestion, clear the model to prevent popup
+        text_stripped = text.strip()
+        if len(values) == 1 and values[0].lower() == text_stripped.lower():
+            self._species_model.setStringList([])
+            if self._species_completer:
+                self._species_completer.popup().hide()
+        else:
+            self._species_model.setStringList(values)
 
 class MainWindow(QMainWindow):
     """Main application window with modern UI and measurement table."""
@@ -2414,7 +2473,7 @@ class MainWindow(QMainWindow):
             self.spore_preview.clear()
         self._clear_measurement_highlight()
         if hasattr(self, "image_label"):
-            self.image_label.set_pan_without_shift(False)
+            self.image_label.set_pan_without_shift(True)
             self.image_label.set_measurement_active(True)
         self.on_measure_mode_changed()
 
@@ -5936,7 +5995,3 @@ class ExportImageDialog(QDialog):
 
         self.measure_status_label.setText(self.tr("Scale calibrated - check dialog for result"))
         self.measure_status_label.setStyleSheet("color: #27ae60; font-weight: bold; font-size: 9pt;")
-
-
-
-

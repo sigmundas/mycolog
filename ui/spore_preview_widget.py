@@ -26,6 +26,7 @@ class SporePreviewWidget(QWidget):
         self.microns_per_pixel = 0.5
         self.measurement_id = None
         self.measure_color = QColor(52, 152, 219)
+        self.show_dimension_labels = True
 
         # Adjustment offsets (in pixels in original image space)
         self.corner_offsets = [QPointF(0, 0), QPointF(0, 0), QPointF(0, 0), QPointF(0, 0)]
@@ -95,6 +96,12 @@ class SporePreviewWidget(QWidget):
         """Set the measurement color for the preview."""
         self.measure_color = QColor(color)
         self.image_label.set_measure_color(self.measure_color)
+        self.update_preview()
+
+    def set_show_dimension_labels(self, show: bool):
+        """Toggle display of length/width labels."""
+        self.show_dimension_labels = bool(show)
+        self.image_label.set_show_dimension_labels(self.show_dimension_labels)
         self.update_preview()
 
     def clear(self):
@@ -365,6 +372,7 @@ class PreviewImageLabel(QLabel):
         self.microns_per_pixel = 0.5
         self.fixed_crop_size = 0
         self.fixed_center = QPointF(0, 0)
+        self.show_dimension_labels = True
 
         # Interaction state
         self.dragging_side = -1
@@ -379,6 +387,10 @@ class PreviewImageLabel(QLabel):
         self.rotation_arrow_positions = []  # Positions of rotation arrow handles
         self.preview_scale = 1.0
         self.measure_color = QColor(52, 152, 219)
+
+    def set_show_dimension_labels(self, show: bool):
+        self.show_dimension_labels = bool(show)
+        self.update()
 
     def _light_stroke_color(self):
         """Return a lighter, low-opacity version of the measure color."""
@@ -717,7 +729,7 @@ class PreviewImageLabel(QLabel):
 
         # Draw rotation arrows on the left and right sides
         self.rotation_arrow_positions = []
-        arrow_distance = max(half_length, half_width) + 30  # Distance from center
+        arrow_distance = half_width + 30  # Distance from center
 
         # Left and right arrow positions (perpendicular to length axis)
         for side_idx, side_sign in enumerate([-1, 1]):  # left, right
@@ -764,60 +776,60 @@ class PreviewImageLabel(QLabel):
             painter.setBrush(QBrush(arrow_color))
             painter.drawPolygon(QPolygonF([p1, p2, p3]))
 
-        # Calculate current dimensions in microns
-        current_length_um = length_px * self.microns_per_pixel
-        current_width_um = width_px * self.microns_per_pixel
+        if self.show_dimension_labels:
+            # Calculate current dimensions in microns
+            current_length_um = length_px * self.microns_per_pixel
+            current_width_um = width_px * self.microns_per_pixel
 
-        # Draw dimension labels CLOSER to rectangle
-        painter.setPen(self.measure_color)
-        font = painter.font()
-        font.setPointSize(10)
-        font.setBold(True)
-        painter.setFont(font)
+            # Draw dimension labels CLOSER to rectangle
+            painter.setPen(self.measure_color)
+            font = painter.font()
+            font.setPointSize(10)
+            font.setBold(True)
+            painter.setFont(font)
 
-        # Calculate midpoints of the sides for label placement
-        left_mid = QPointF(
-            (self.screen_corners[0].x() + self.screen_corners[3].x()) / 2,
-            (self.screen_corners[0].y() + self.screen_corners[3].y()) / 2
-        )
-        top_mid = QPointF(
-            (self.screen_corners[0].x() + self.screen_corners[1].x()) / 2,
-            (self.screen_corners[0].y() + self.screen_corners[1].y()) / 2
-        )
-
-        # Calculate perpendicular offset for labels (just outside the rectangle)
-        offset_distance = 15
-
-        # Left side label (length) - perpendicular to left edge
-        left_edge_vec = QPointF(
-            self.screen_corners[3].x() - self.screen_corners[0].x(),
-            self.screen_corners[3].y() - self.screen_corners[0].y()
-        )
-        left_edge_len = math.sqrt(left_edge_vec.x()**2 + left_edge_vec.y()**2)
-        if left_edge_len > 0:
-            # Perpendicular vector pointing left
-            perp_x = -left_edge_vec.y() / left_edge_len
-            perp_y = left_edge_vec.x() / left_edge_len
-            label_pos = QPointF(
-                left_mid.x() + perp_x * offset_distance,
-                left_mid.y() + perp_y * offset_distance
+            # Calculate midpoints of the sides for label placement
+            left_mid = QPointF(
+                (self.screen_corners[0].x() + self.screen_corners[3].x()) / 2,
+                (self.screen_corners[0].y() + self.screen_corners[3].y()) / 2
             )
-            painter.drawText(int(label_pos.x() - 25), int(label_pos.y() + 5), f"{current_length_um:.2f}")
-
-        # Top side label (width) - perpendicular to top edge
-        top_edge_vec = QPointF(
-            self.screen_corners[1].x() - self.screen_corners[0].x(),
-            self.screen_corners[1].y() - self.screen_corners[0].y()
-        )
-        top_edge_len = math.sqrt(top_edge_vec.x()**2 + top_edge_vec.y()**2)
-        if top_edge_len > 0:
-            # Perpendicular vector pointing up
-            perp_x = -top_edge_vec.y() / top_edge_len
-            perp_y = top_edge_vec.x() / top_edge_len
-            label_pos = QPointF(
-                top_mid.x() + perp_x * offset_distance,
-                top_mid.y() + perp_y * offset_distance
+            top_mid = QPointF(
+                (self.screen_corners[0].x() + self.screen_corners[1].x()) / 2,
+                (self.screen_corners[0].y() + self.screen_corners[1].y()) / 2
             )
-            painter.drawText(int(label_pos.x() - 25), int(label_pos.y() + 5), f"{current_width_um:.2f}")
 
+            # Calculate perpendicular offset for labels (just outside the rectangle)
+            offset_distance = 15
+
+            # Left side label (length) - perpendicular to left edge
+            left_edge_vec = QPointF(
+                self.screen_corners[3].x() - self.screen_corners[0].x(),
+                self.screen_corners[3].y() - self.screen_corners[0].y()
+            )
+            left_edge_len = math.sqrt(left_edge_vec.x()**2 + left_edge_vec.y()**2)
+            if left_edge_len > 0:
+                # Perpendicular vector pointing left
+                perp_x = -left_edge_vec.y() / left_edge_len
+                perp_y = left_edge_vec.x() / left_edge_len
+                label_pos = QPointF(
+                    left_mid.x() + perp_x * offset_distance,
+                    left_mid.y() + perp_y * offset_distance
+                )
+                painter.drawText(int(label_pos.x() - 25), int(label_pos.y() + 5), f"{current_length_um:.2f}")
+
+            # Top side label (width) - perpendicular to top edge
+            top_edge_vec = QPointF(
+                self.screen_corners[1].x() - self.screen_corners[0].x(),
+                self.screen_corners[1].y() - self.screen_corners[0].y()
+            )
+            top_edge_len = math.sqrt(top_edge_vec.x()**2 + top_edge_vec.y()**2)
+            if top_edge_len > 0:
+                # Perpendicular vector pointing up
+                perp_x = -top_edge_vec.y() / top_edge_len
+                perp_y = top_edge_vec.x() / top_edge_len
+                label_pos = QPointF(
+                    top_mid.x() + perp_x * offset_distance,
+                    top_mid.y() + perp_y * offset_distance
+                )
+                painter.drawText(int(label_pos.x() - 25), int(label_pos.y() + 5), f"{current_width_um:.2f}")
         painter.end()

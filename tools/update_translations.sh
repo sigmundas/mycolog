@@ -4,6 +4,7 @@ set -euo pipefail
 files=(
   "main.py"
   "ui/main_window.py"
+  "ui/image_import_dialog.py"
   "ui/observations_tab.py"
   "ui/measurement_tool.py"
   "ui/calibration_dialog.py"
