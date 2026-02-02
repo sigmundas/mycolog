@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, QDateTime, QDate, QTime, Signal, QPointF, QCoreApplication
+from PySide6.QtCore import Qt, QDateTime, QDate, QTime, Signal, QPointF, QCoreApplication, QObject, QThread, Slot
 from PySide6.QtGui import QPixmap, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -30,10 +30,15 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QProgressBar,
     QMessageBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QAbstractItemView,
 )
 
 from database.schema import load_objectives, get_images_dir
 from database.models import SettingsDB
+from utils.vernacular_utils import normalize_vernacular_language
 from utils.exif_reader import get_image_metadata, get_exif_data, get_gps_coordinates
 from utils.heic_converter import maybe_convert_heic
 from .image_gallery_widget import ImageGalleryWidget
@@ -59,6 +64,101 @@ class ImageImportResult:
     exif_has_gps: bool = False
 
 
+class AIGuessWorker(QObject):
+    finished = Signal(int, list, object, object, str)
+    error = Signal(int, str)
+
+    def __init__(
+        self,
+        index: int,
+        image_path: str,
+        crop_box: tuple[float, float, float, float] | None,
+        temp_dir: Path,
+        max_dim: int = 1600,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.index = index
+        self.image_path = image_path
+        self.crop_box = crop_box
+        self.temp_dir = temp_dir
+        self.max_dim = max_dim
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            from uuid import uuid4
+            from PIL import Image
+            import requests
+
+            img = Image.open(self.image_path)
+            orig_w, orig_h = img.size
+            crop_x1 = 0.0
+            crop_y1 = 0.0
+            crop_w = float(orig_w)
+            crop_h = float(orig_h)
+            requires_resize = self.max_dim and max(img.size) > self.max_dim
+            extension = Path(self.image_path).suffix.lower()
+            requires_convert = extension not in {".jpg", ".jpeg"} or img.mode not in {"RGB", "L"}
+            if self.crop_box:
+                x1, y1, x2, y2 = self.crop_box
+                crop_x1 = max(0.0, min(float(orig_w), x1 * float(orig_w)))
+                crop_y1 = max(0.0, min(float(orig_h), y1 * float(orig_h)))
+                crop_x2 = max(0.0, min(float(orig_w), x2 * float(orig_w)))
+                crop_y2 = max(0.0, min(float(orig_h), y2 * float(orig_h)))
+                crop_w = max(1.0, crop_x2 - crop_x1)
+                crop_h = max(1.0, crop_y2 - crop_y1)
+                img = img.crop((crop_x1, crop_y1, crop_x2, crop_y2))
+                requires_convert = True
+
+            if requires_resize:
+                scale = self.max_dim / max(img.size)
+                new_size = (max(1, int(img.size[0] * scale)), max(1, int(img.size[1] * scale)))
+                img = img.resize(new_size, Image.LANCZOS)
+                requires_convert = True
+
+            send_path = Path(self.image_path)
+            temp_path = None
+            if requires_convert:
+                if img.mode not in {"RGB", "L"}:
+                    img = img.convert("RGB")
+                self.temp_dir.mkdir(parents=True, exist_ok=True)
+                temp_path = self.temp_dir / f"ai_guess_{uuid4().hex}.jpg"
+                img.save(temp_path, "JPEG", quality=90)
+                send_path = temp_path
+
+            url = "https://ai.artsdatabanken.no"
+
+            def _post_with_field(field_name: str):
+                with open(send_path, "rb") as handle:
+                    return requests.post(
+                        url,
+                        files={field_name: (send_path.name, handle, "image/jpeg")},
+                        headers={"User-Agent": "MycoLog/AI"},
+                        timeout=30,
+                    )
+
+            response = _post_with_field("image")
+            if response.status_code != 200:
+                response = _post_with_field("file")
+            if response.status_code != 200:
+                detail = (response.text or "").strip()
+                if detail:
+                    detail = detail.replace("\n", " ").strip()
+                    detail = detail[:200]
+                suffix = f" - {detail}" if detail else ""
+                raise Exception(f"API request failed: {response.status_code}{suffix}")
+
+            data = response.json()
+            predictions = [
+                p for p in data.get("predictions", [])
+                if p.get("taxon", {}).get("vernacularName") != "*** Utdatert versjon ***"
+            ]
+
+            warnings = data.get("warnings")
+            self.finished.emit(self.index, predictions, None, warnings, str(temp_path or ""))
+        except Exception as exc:
+            self.error.emit(self.index, str(exc))
 class ImageImportDialog(QDialog):
     """Prepare images before creating or editing an observation."""
 
@@ -75,6 +175,7 @@ class ImageImportDialog(QDialog):
         self.setWindowTitle(self.tr("Prepare Images"))
         self.setModal(True)
         self.setMinimumSize(1200, 800)
+        self.resize(1500, 900)
 
         self.objectives = self._load_objectives()
         self.default_objective = self._get_default_objective()
@@ -127,6 +228,13 @@ class ImageImportDialog(QDialog):
         self._accepted = False
         self._setting_from_image_source = False
         self._last_settings_action: str | None = None
+        self._ai_predictions_by_index: dict[int, list[dict]] = {}
+        self._ai_selected_by_index: dict[int, dict] = {}
+        self._ai_selected_taxon: dict | None = None
+        self._ai_crop_boxes: dict[int, tuple[float, float, float, float]] = {}
+        self._ai_crop_active = False
+        self._ai_thread: QThread | None = None
+        self._ai_worker: QObject | None = None
 
         self._build_ui()
         if import_results:
@@ -146,19 +254,10 @@ class ImageImportDialog(QDialog):
         left_panel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
         content_row.addWidget(left_panel, 0)
 
-        right_container = QWidget()
-        right_layout = QVBoxLayout(right_container)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(8)
-
-        top_row = QSplitter(Qt.Horizontal)
-        top_row.setChildrenCollapsible(False)
-        top_row.addWidget(self._build_center_panel())
-        self.details_panel = self._build_right_panel()
-        top_row.addWidget(self.details_panel)
-        top_row.setStretchFactor(0, 3)
-        top_row.setStretchFactor(1, 1)
-        top_row.setSizes([900, 300])
+        center_container = QWidget()
+        center_layout = QVBoxLayout(center_container)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setSpacing(8)
 
         self.gallery = ImageGalleryWidget(
             self.tr("Images"),
@@ -176,28 +275,20 @@ class ImageImportDialog(QDialog):
         self.delete_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
         self.delete_shortcut.activated.connect(self._on_remove_selected)
 
-        right_splitter = QSplitter(Qt.Vertical)
-        right_splitter.setChildrenCollapsible(False)
-        right_splitter.addWidget(top_row)
-        right_splitter.addWidget(self.gallery)
-        right_splitter.setStretchFactor(0, 4)
-        right_splitter.setStretchFactor(1, 1)
-        right_splitter.setSizes([640, 180])
+        center_splitter = QSplitter(Qt.Vertical)
+        center_splitter.setChildrenCollapsible(False)
+        center_splitter.addWidget(self._build_center_panel())
+        center_splitter.addWidget(self.gallery)
+        center_splitter.setStretchFactor(0, 4)
+        center_splitter.setStretchFactor(1, 1)
+        center_splitter.setSizes([700, 220])
 
-        right_layout.addWidget(right_splitter, 1)
-        content_row.addWidget(right_container, 1)
+        center_layout.addWidget(center_splitter, 1)
+        content_row.addWidget(center_container, 1)
+
+        self.details_panel = self._build_right_panel()
+        content_row.addWidget(self.details_panel, 0)
         main_layout.addLayout(content_row, 1)
-
-        action_row = QHBoxLayout()
-        action_row.addStretch()
-
-        self.cancel_btn = QPushButton(self.tr("Cancel"))
-        self.cancel_btn.clicked.connect(self.reject)
-        self.next_btn = QPushButton(self.tr("Continue"))
-        self.next_btn.clicked.connect(self._accept_continue)
-        action_row.addWidget(self.cancel_btn)
-        action_row.addWidget(self.next_btn)
-        main_layout.addLayout(action_row)
 
     def _build_left_panel(self) -> QWidget:
         container = QWidget()
@@ -302,6 +393,7 @@ class ImageImportDialog(QDialog):
         self.preview.setAlignment(Qt.AlignCenter)
         self.preview.set_pan_without_shift(True)
         self.preview.clicked.connect(self._on_preview_clicked)
+        self.preview.cropChanged.connect(self._on_ai_crop_changed)
 
         self.preview_message = QLabel(self.tr("Multiple images selected"))
         self.preview_message.setAlignment(Qt.AlignCenter)
@@ -314,8 +406,9 @@ class ImageImportDialog(QDialog):
 
     def _build_right_panel(self) -> QWidget:
         panel = QGroupBox(self.tr("Import details"))
-        panel.setMinimumWidth(260)
-        panel.setMaximumWidth(420)
+        panel.setMinimumWidth(300)
+        panel.setMaximumWidth(380)
+        panel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
         layout = QVBoxLayout(panel)
 
         current_group = QGroupBox(self.tr("Current image"))
@@ -346,7 +439,7 @@ class ImageImportDialog(QDialog):
         current_layout.addRow(self.tr("GPS:"), gps_row)
         layout.addWidget(current_group)
 
-        obs_group = QGroupBox(self.tr("Observation details"))
+        obs_group = QGroupBox(self.tr("Time and GPS"))
         obs_layout = QFormLayout(obs_group)
 
         datetime_container = QWidget()
@@ -400,7 +493,61 @@ class ImageImportDialog(QDialog):
 
         layout.addWidget(obs_group)
 
-        layout.addStretch()
+        ai_group = QGroupBox(self.tr("AI suggestions"))
+        ai_layout = QVBoxLayout(ai_group)
+        ai_layout.setContentsMargins(6, 6, 6, 6)
+        ai_controls = QHBoxLayout()
+        self.ai_guess_btn = QPushButton(self.tr("Guess"))
+        self.ai_guess_btn.setToolTip(self.tr("Send image to Artsorakelet"))
+        self.ai_guess_btn.clicked.connect(self._on_ai_guess_clicked)
+        self.ai_crop_btn = QPushButton(self.tr("Crop"))
+        self.ai_crop_btn.setToolTip(self.tr("Draw a crop area for AI"))
+        self.ai_crop_btn.clicked.connect(self._on_ai_crop_clicked)
+        self.ai_guess_btn.setEnabled(False)
+        self.ai_crop_btn.setEnabled(False)
+        self.ai_guess_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.ai_crop_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        ai_controls.addWidget(self.ai_guess_btn)
+        ai_controls.addWidget(self.ai_crop_btn)
+        ai_controls.setStretch(0, 1)
+        ai_controls.setStretch(1, 1)
+        ai_layout.addLayout(ai_controls)
+        self._set_ai_crop_active(False)
+
+        self.ai_table = QTableWidget(0, 3)
+        self.ai_table.setHorizontalHeaderLabels([self.tr("Suggested species"), "Match", "Link"])
+        self.ai_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.ai_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.ai_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.ai_table.verticalHeader().setVisible(False)
+        self.ai_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.ai_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.ai_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.ai_table.setMinimumHeight(140)
+        self.ai_table.setStyleSheet(
+            "QTableWidget::item:selected { background-color: #1f5aa6; color: white; font-weight: bold; }"
+            "QTableWidget::item:selected:!active { background-color: #2f74c0; color: white; font-weight: bold; }"
+        )
+        self.ai_table.itemSelectionChanged.connect(self._on_ai_selection_changed)
+        ai_layout.addWidget(self.ai_table)
+
+        self.ai_status_label = QLabel("")
+        self.ai_status_label.setWordWrap(True)
+        self.ai_status_label.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
+        ai_layout.addWidget(self.ai_status_label)
+
+        layout.addWidget(ai_group)
+
+        layout.addStretch(1)
+        action_row = QHBoxLayout()
+        action_row.addStretch()
+        self.cancel_btn = QPushButton(self.tr("Cancel"))
+        self.cancel_btn.clicked.connect(self.reject)
+        self.next_btn = QPushButton(self.tr("Continue"))
+        self.next_btn.clicked.connect(self._accept_continue)
+        action_row.addWidget(self.cancel_btn)
+        action_row.addWidget(self.next_btn)
+        layout.addLayout(action_row)
         return panel
 
     def _populate_objectives(self) -> None:
@@ -491,6 +638,281 @@ class ImageImportDialog(QDialog):
         )
         self.set_from_image_btn.setEnabled(has_exif_data)
 
+    def _current_single_index(self) -> int | None:
+        indices = self._current_selection_indices()
+        if len(indices) == 1:
+            return indices[0]
+        return None
+
+    def _update_ai_controls_state(self) -> None:
+        if not hasattr(self, "ai_guess_btn"):
+            return
+        index = self._current_single_index()
+        enable = False
+        if index is not None and 0 <= index < len(self.import_results):
+            enable = self.import_results[index].image_type == "field"
+        if self._ai_thread is not None:
+            enable = False
+        self.ai_guess_btn.setEnabled(enable)
+        self.ai_crop_btn.setEnabled(enable)
+        if not enable and self._ai_crop_active:
+            self._set_ai_crop_active(False)
+
+    def _update_ai_table(self) -> None:
+        if not hasattr(self, "ai_table"):
+            return
+        index = self._current_single_index()
+        self.ai_table.setRowCount(0)
+        if index is None:
+            return
+        predictions = self._ai_predictions_by_index.get(index, [])
+        for row, pred in enumerate(predictions):
+            taxon = pred.get("taxon", {})
+            display_name = self._format_ai_taxon_name(taxon)
+            confidence = pred.get("probability", 0.0)
+            name_item = QTableWidgetItem(display_name)
+            name_item.setData(Qt.UserRole, pred)
+            conf_item = QTableWidgetItem(f"{confidence:.1%}")
+            link_widget = self._build_adb_link_widget(self._ai_prediction_link(pred, taxon))
+            self.ai_table.insertRow(row)
+            self.ai_table.setItem(row, 0, name_item)
+            self.ai_table.setItem(row, 1, conf_item)
+            if link_widget:
+                self.ai_table.setCellWidget(row, 2, link_widget)
+        if predictions:
+            selected = self._ai_selected_by_index.get(index)
+            if selected:
+                for row in range(self.ai_table.rowCount()):
+                    item = self.ai_table.item(row, 0)
+                    if item and item.data(Qt.UserRole) == selected:
+                        self.ai_table.selectRow(row)
+                        break
+            else:
+                self.ai_table.selectRow(0)
+        else:
+            self._ai_selected_taxon = None
+
+    def _update_ai_overlay(self) -> None:
+        if not hasattr(self, "preview"):
+            return
+        index = self._current_single_index()
+        preview_pixmap = getattr(self.preview, "original_pixmap", None)
+        if index is not None and preview_pixmap:
+            width = preview_pixmap.width()
+            height = preview_pixmap.height()
+            crop_box = self._ai_crop_boxes.get(index)
+            if crop_box and width > 0 and height > 0:
+                self.preview.set_crop_box(
+                    (crop_box[0] * width, crop_box[1] * height, crop_box[2] * width, crop_box[3] * height)
+                )
+            else:
+                self.preview.set_crop_box(None)
+        else:
+            self.preview.set_crop_box(None)
+        self.preview.set_overlay_boxes([])
+
+    def _format_ai_taxon_name(self, taxon: dict) -> str:
+        scientific = taxon.get("scientificName") or taxon.get("scientific_name") or taxon.get("name") or ""
+        vernacular = ""
+        vernacular_names = taxon.get("vernacularNames") or {}
+        lang = normalize_vernacular_language(SettingsDB.get_setting("vernacular_language", "no"))
+        if isinstance(vernacular_names, dict) and lang:
+            vernacular = vernacular_names.get(lang, "")
+        if not vernacular:
+            vernacular = taxon.get("vernacularName") or ""
+        return vernacular or scientific or self.tr("Unknown")
+
+    def _ai_prediction_link(self, pred: dict, taxon: dict) -> str | None:
+        if isinstance(pred, dict):
+            for key in ("infoURL", "infoUrl", "info_url"):
+                value = pred.get(key)
+                if isinstance(value, str) and value.startswith("http"):
+                    return value
+        if not isinstance(taxon, dict):
+            return None
+        for key in ("url", "link", "href", "uri"):
+            value = taxon.get(key)
+            if isinstance(value, str) and value.startswith("http"):
+                return value
+        taxon_id = (
+            taxon.get("taxonId")
+            or taxon.get("taxon_id")
+            or taxon.get("TaxonId")
+            or taxon.get("id")
+        )
+        if taxon_id:
+            return f"https://artsdatabanken.no/Taxon/{taxon_id}"
+        return "https://artsdatabanken.no"
+
+    def _build_adb_link_widget(self, url: str | None) -> QLabel | None:
+        if not url:
+            return None
+        label = QLabel(f'<a href="{url}">AdB</a>')
+        label.setTextFormat(Qt.RichText)
+        label.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        label.setOpenExternalLinks(True)
+        label.setAlignment(Qt.AlignCenter)
+        label.setStyleSheet("QLabel { padding: 2px 6px; }")
+        return label
+
+    def _extract_genus_species(self, taxon: dict) -> tuple[str | None, str | None]:
+        scientific = taxon.get("scientificName") or taxon.get("scientific_name") or taxon.get("name") or ""
+        parts = [p for p in scientific.replace("/", " ").split() if p]
+        if len(parts) >= 2:
+            return parts[0], parts[1]
+        return None, None
+
+    def get_ai_selected_taxon(self) -> dict | None:
+        if not self._ai_selected_taxon:
+            return None
+        genus, species = self._extract_genus_species(self._ai_selected_taxon)
+        if not genus or not species:
+            return None
+        return {
+            "genus": genus,
+            "species": species,
+            "taxon": self._ai_selected_taxon,
+        }
+
+    def _on_ai_selection_changed(self) -> None:
+        index = self._current_single_index()
+        if index is None:
+            return
+        selected_items = self.ai_table.selectedItems()
+        if not selected_items:
+            self._ai_selected_taxon = None
+            self._set_ai_status(None)
+            return
+        row_item = self.ai_table.item(self.ai_table.currentRow(), 0)
+        if not row_item:
+            return
+        pred = row_item.data(Qt.UserRole) or {}
+        self._ai_selected_by_index[index] = pred
+        self._ai_selected_taxon = pred.get("taxon") or {}
+        self._set_ai_status(self.tr("Applied selected species."), "#27ae60")
+
+    def _set_ai_crop_active(self, active: bool) -> None:
+        self._ai_crop_active = bool(active)
+        if hasattr(self, "preview"):
+            self.preview.set_crop_mode(self._ai_crop_active)
+        if hasattr(self, "ai_crop_btn"):
+            if self._ai_crop_active:
+                self.ai_crop_btn.setStyleSheet(
+                    "background-color: #e74c3c; color: white; font-weight: bold;"
+                )
+            else:
+                self.ai_crop_btn.setStyleSheet(
+                    "background-color: #3498db; color: white; font-weight: bold;"
+                )
+
+    def _on_ai_crop_clicked(self) -> None:
+        index = self._current_single_index()
+        if index is None:
+            return
+        if index in self._ai_crop_boxes:
+            self._ai_crop_boxes.pop(index, None)
+            if hasattr(self, "preview"):
+                self.preview.set_crop_box(None)
+            self._set_ai_crop_active(True)
+            self._update_ai_controls_state()
+            return
+        if self._ai_crop_active:
+            self._set_ai_crop_active(False)
+            return
+        self._set_ai_crop_active(True)
+
+    def _on_ai_crop_changed(self, box: tuple[float, float, float, float] | None) -> None:
+        index = self._current_single_index()
+        if index is None:
+            return
+        if box and getattr(self.preview, "original_pixmap", None):
+            width = self.preview.original_pixmap.width()
+            height = self.preview.original_pixmap.height()
+            if width > 0 and height > 0:
+                x1, y1, x2, y2 = box
+                norm_box = (
+                    max(0.0, min(1.0, x1 / width)),
+                    max(0.0, min(1.0, y1 / height)),
+                    max(0.0, min(1.0, x2 / width)),
+                    max(0.0, min(1.0, y2 / height)),
+                )
+                self._ai_crop_boxes[index] = norm_box
+            else:
+                self._ai_crop_boxes.pop(index, None)
+        else:
+            self._ai_crop_boxes.pop(index, None)
+        if self._ai_crop_active:
+            self._set_ai_crop_active(False)
+        self._update_ai_controls_state()
+
+    def _on_ai_guess_clicked(self) -> None:
+        index = self._current_single_index()
+        if index is None:
+            return
+        if index < 0 or index >= len(self.import_results):
+            return
+        result = self.import_results[index]
+        if result.image_type != "field":
+            self._set_ai_status(self.tr("AI guess only works for field photos"), "#e74c3c")
+            return
+        image_path = result.filepath
+        if not image_path:
+            return
+        if self._ai_thread is not None:
+            return
+        self.ai_guess_btn.setEnabled(False)
+        self.ai_guess_btn.setText(self.tr("AI guessing..."))
+        self._set_ai_status(self.tr("Sending image to Artsdatabanken AI..."), "#3498db")
+        temp_dir = get_images_dir() / "imports"
+        crop_box = self._ai_crop_boxes.get(index)
+        self._ai_thread = QThread(self)
+        self._ai_worker = AIGuessWorker(index, image_path, crop_box, temp_dir, max_dim=1600)
+        self._ai_worker.moveToThread(self._ai_thread)
+        self._ai_thread.started.connect(self._ai_worker.run)
+        self._ai_worker.finished.connect(self._on_ai_guess_finished)
+        self._ai_worker.error.connect(self._on_ai_guess_error)
+        self._ai_worker.finished.connect(self._ai_thread.quit)
+        self._ai_worker.finished.connect(self._ai_worker.deleteLater)
+        self._ai_worker.error.connect(self._ai_thread.quit)
+        self._ai_worker.error.connect(self._ai_worker.deleteLater)
+        self._ai_thread.finished.connect(self._ai_thread.deleteLater)
+        self._ai_thread.finished.connect(self._on_ai_thread_finished)
+        self._ai_thread.start()
+
+    def _on_ai_thread_finished(self) -> None:
+        self._ai_thread = None
+        self._ai_worker = None
+        if hasattr(self, "ai_guess_btn"):
+            self.ai_guess_btn.setText(self.tr("AI guess"))
+        self._update_ai_controls_state()
+
+    def _on_ai_guess_finished(
+        self,
+        index: int,
+        predictions: list,
+        _box: object,
+        _warnings: object,
+        temp_path: str,
+    ) -> None:
+        if temp_path:
+            self._temp_preview_paths.add(temp_path)
+        self._ai_predictions_by_index[index] = predictions or []
+        self._update_ai_table()
+        self._update_ai_overlay()
+        if predictions:
+            self._set_ai_status(self.tr("AI suggestion updated"), "#27ae60")
+        else:
+            self._set_ai_status(self.tr("No AI suggestions found"), "#7f8c8d")
+        self._update_ai_controls_state()
+
+    def _on_ai_guess_error(self, _index: int, message: str) -> None:
+        if "500" in message:
+            hint = self.tr("AI guess failed: server error (500). Try again later.")
+        else:
+            hint = self.tr("AI guess failed: {message}").format(message=message)
+        self._set_ai_status(hint, "#e74c3c")
+        self._update_ai_controls_state()
+
     def _seed_observation_metadata(self) -> None:
         if self._observation_datetime is None:
             for result in self.import_results:
@@ -536,6 +958,15 @@ class ImageImportDialog(QDialog):
             return
         self.settings_hint_label.setText(text)
         self.settings_hint_label.setStyleSheet(f"color: {color}; font-size: 9pt;")
+
+    def _set_ai_status(self, text: str | None, color: str = "#7f8c8d") -> None:
+        if not hasattr(self, "ai_status_label"):
+            return
+        if not text:
+            self.ai_status_label.setText("")
+            return
+        self.ai_status_label.setText(text)
+        self.ai_status_label.setStyleSheet(f"color: {color}; font-size: 9pt;")
 
     def _update_settings_hint_for_indices(self, indices: list[int], action: str | None = None) -> None:
         if not indices:
@@ -609,6 +1040,7 @@ class ImageImportDialog(QDialog):
         self._sync_observation_metadata_inputs()
         self._update_scale_group_state()
         self._update_set_from_image_button_state()
+        self._update_ai_controls_state()
         if self.selected_index is None and self.image_paths:
             self._select_image(0)
 
@@ -632,6 +1064,7 @@ class ImageImportDialog(QDialog):
         self._sync_observation_metadata_inputs()
         self._update_scale_group_state()
         self._update_set_from_image_button_state()
+        self._update_ai_controls_state()
         if self.image_paths:
             self._select_image(0)
 
@@ -660,15 +1093,24 @@ class ImageImportDialog(QDialog):
             self._show_multi_selection_state()
             self._update_scale_group_state()
             self._update_set_from_image_button_state()
+            self._update_ai_controls_state()
+            self._update_ai_table()
+            self._update_ai_overlay()
         elif len(self.selected_indices) == 1:
             self._select_image(self.selected_indices[0], sync_gallery=False)
         else:
             self._update_scale_group_state()
             self._update_set_from_image_button_state()
+            self._update_ai_controls_state()
+            self._update_ai_table()
+            self._update_ai_overlay()
 
     def _select_image(self, index: int, sync_gallery: bool = True) -> None:
         if index < 0 or index >= len(self.image_paths):
             return
+        if self._ai_crop_active:
+            self._set_ai_crop_active(False)
+        self._set_ai_status(None)
         self.selected_index = index
         self.primary_index = index
         result = self.import_results[index]
@@ -686,6 +1128,9 @@ class ImageImportDialog(QDialog):
         self._update_current_image_exif(result)
         self._update_scale_group_state()
         self._update_set_from_image_button_state()
+        self._update_ai_controls_state()
+        self._update_ai_table()
+        self._update_ai_overlay()
 
     def _load_result_into_form(self, result: ImageImportResult) -> None:
         self._loading_form = True
@@ -786,6 +1231,7 @@ class ImageImportDialog(QDialog):
             self._update_settings_hint_for_indices(applied, action or self._last_settings_action)
         self._update_scale_group_state()
         self._update_set_from_image_button_state()
+        self._update_ai_controls_state()
 
     def _apply_metadata_to_index(self, index: int) -> None:
         if index < 0 or index >= len(self.import_results):
@@ -1003,6 +1449,12 @@ class ImageImportDialog(QDialog):
         self.preview_stack.setCurrentWidget(self.preview_message)
         self._clear_current_image_exif()
         self._update_set_from_image_button_state()
+        if self._ai_crop_active:
+            self._set_ai_crop_active(False)
+        self._set_ai_status(None)
+        self._update_ai_controls_state()
+        self._update_ai_table()
+        self._update_ai_overlay()
 
     def _format_exposure(self, value) -> str | None:
         if value is None:
@@ -1135,10 +1587,13 @@ class ImageImportDialog(QDialog):
         if not self.selected_indices:
             return
         removed_numbers = [idx + 1 for idx in self.selected_indices if idx is not None]
+        removed_indices = sorted(idx for idx in self.selected_indices if idx is not None)
         for idx in sorted(self.selected_indices, reverse=True):
             if 0 <= idx < len(self.import_results):
                 del self.import_results[idx]
                 del self.image_paths[idx]
+        if removed_indices:
+            self._remap_ai_indices(removed_indices)
         self.selected_indices = []
         self.selected_index = None
         self.primary_index = None
@@ -1153,6 +1608,27 @@ class ImageImportDialog(QDialog):
         if self.image_paths:
             self._select_image(0)
 
+    def _remap_ai_indices(self, removed_indices: list[int]) -> None:
+        def new_index(old_index: int) -> int:
+            shift = 0
+            for removed in removed_indices:
+                if removed < old_index:
+                    shift += 1
+            return old_index - shift
+
+        def remap_dict(source: dict[int, object]) -> dict[int, object]:
+            remapped = {}
+            for old_index, value in source.items():
+                if old_index in removed_indices:
+                    continue
+                remapped[new_index(old_index)] = value
+            return remapped
+
+        self._ai_predictions_by_index = remap_dict(self._ai_predictions_by_index)
+        self._ai_selected_by_index = remap_dict(self._ai_selected_by_index)
+        self._ai_crop_boxes = remap_dict(self._ai_crop_boxes)
+        self._ai_selected_taxon = None
+
     def _accept_continue(self) -> None:
         self._apply_to_selected()
         self._accepted = True
@@ -1162,6 +1638,8 @@ class ImageImportDialog(QDialog):
     def enter_calibration_mode(self, dialog):
         if not getattr(self, "preview", None) or not self.preview.original_pixmap:
             return
+        if hasattr(self, "ai_crop_btn") and self.ai_crop_btn.isChecked():
+            self.ai_crop_btn.setChecked(False)
         if hasattr(self.preview, "ensure_full_resolution"):
             self.preview.ensure_full_resolution()
         self.calibration_dialog = dialog
@@ -1202,6 +1680,12 @@ class ImageImportDialog(QDialog):
             self.calibration_points = []
 
     def closeEvent(self, event):
+        if self._ai_thread is not None:
+            try:
+                self._ai_thread.quit()
+                self._ai_thread.wait(1000)
+            except Exception:
+                pass
         for path in list(self._temp_preview_paths):
             try:
                 Path(path).unlink(missing_ok=True)

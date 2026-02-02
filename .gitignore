@@ -18,6 +18,8 @@ ENV/
 build/
 dist/
 *.spec
+test_artsdatabanken.py
+sopp.jpg
 
 # App data / local databases
 *.db-journal

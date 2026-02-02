@@ -9,6 +9,7 @@ class ZoomableImageLabel(QLabel):
     """Custom label that supports zoom, pan, and measurement overlays."""
 
     clicked = Signal(QPointF)  # Emits click position in original image coordinates
+    cropChanged = Signal(object)  # Emits (x1, y1, x2, y2) in image coords or None
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -34,6 +35,7 @@ class ZoomableImageLabel(QLabel):
         self.scale_bar_um = 10.0
         self.microns_per_pixel = 0.5
         self.show_measure_overlays = True
+        self.overlay_boxes = []
         self.hover_rect_index = -1
         self.hover_line_index = -1
         self.selected_rect_index = -1
@@ -55,6 +57,10 @@ class ZoomableImageLabel(QLabel):
 
         # Mouse tracking for preview line
         self.current_mouse_pos = None
+        self.crop_mode = False
+        self.crop_start = None
+        self.crop_box = None
+        self.crop_preview = None
 
     def set_image_sources(self, pixmap, full_path=None, preview_scaled=False):
         """Set image with optional full-resolution source."""
@@ -261,6 +267,35 @@ class ZoomableImageLabel(QLabel):
         self.measurement_active = bool(active)
         self.update()
 
+    def set_overlay_boxes(self, boxes):
+        """Set extra overlay boxes drawn on top of the image."""
+        self.overlay_boxes = boxes or []
+        self.update()
+
+    def clear_overlay_boxes(self):
+        """Clear overlay boxes."""
+        self.overlay_boxes = []
+        self.update()
+
+    def set_crop_mode(self, enabled):
+        """Enable crop selection mode."""
+        self.crop_mode = bool(enabled)
+        if not self.crop_mode:
+            self.crop_start = None
+            self.crop_preview = None
+        self.setCursor(Qt.CrossCursor if self.crop_mode else Qt.ArrowCursor)
+        self.update()
+
+    def set_crop_box(self, box):
+        """Set current crop box (x1, y1, x2, y2) in image coords."""
+        self.crop_box = box
+        self.update()
+
+    def clear_crop_box(self):
+        """Clear current crop box."""
+        self.crop_box = None
+        self.update()
+
     def set_preview_line(self, start_point):
         """Set the start point for a preview line that follows the mouse."""
         self.preview_line = start_point
@@ -396,6 +431,25 @@ class ZoomableImageLabel(QLabel):
         new_zoom = self.zoom_level * (preview_width / full_width)
         new_zoom = max(self.min_zoom, min(self.max_zoom, new_zoom))
 
+        if self.overlay_boxes:
+            for item in self.overlay_boxes:
+                box = item.get("box") if isinstance(item, dict) else None
+                if not box:
+                    continue
+                item["box"] = (
+                    box[0] * scale_x,
+                    box[1] * scale_y,
+                    box[2] * scale_x,
+                    box[3] * scale_y,
+                )
+        if self.crop_box:
+            self.crop_box = (
+                self.crop_box[0] * scale_x,
+                self.crop_box[1] * scale_y,
+                self.crop_box[2] * scale_x,
+                self.crop_box[3] * scale_y,
+            )
+
         self.original_pixmap = full_pixmap
         self.zoom_level = new_zoom
         self._preview_is_scaled = False
@@ -418,6 +472,17 @@ class ZoomableImageLabel(QLabel):
     def mousePressEvent(self, event):
         """Handle mouse press for panning or clicking."""
         if event.button() == Qt.LeftButton:
+            if self.crop_mode:
+                if self.original_pixmap:
+                    start = self.screen_to_image(event.position())
+                    if start:
+                        if self.crop_start is None:
+                            self.crop_start = start
+                            self.crop_preview = (start, start)
+                            self.update()
+                        else:
+                            self._finalize_crop(start)
+                return
             if event.modifiers() & Qt.ShiftModifier or self.pan_without_shift:
                 # Start panning
                 self.is_panning = True
@@ -434,6 +499,12 @@ class ZoomableImageLabel(QLabel):
 
     def mouseMoveEvent(self, event):
         """Handle mouse move for panning and preview line."""
+        if self.crop_mode and self.crop_start and self.original_pixmap:
+            current = self.screen_to_image(event.position())
+            if current:
+                self.crop_preview = (self.crop_start, current)
+                self.update()
+            return
         # Track mouse position for preview line
         if self.original_pixmap:
             self.current_mouse_pos = self.screen_to_image(event.position())
@@ -467,6 +538,26 @@ class ZoomableImageLabel(QLabel):
                 if orig_pos:
                     self.clicked.emit(orig_pos)
             self.pan_click_candidate = False
+
+    def _finalize_crop(self, end_point):
+        if not self.crop_start or not self.original_pixmap:
+            self.crop_start = None
+            self.crop_preview = None
+            return
+        width = self.original_pixmap.width()
+        height = self.original_pixmap.height()
+        x1 = max(0.0, min(self.crop_start.x(), end_point.x()))
+        y1 = max(0.0, min(self.crop_start.y(), end_point.y()))
+        x2 = min(float(width), max(self.crop_start.x(), end_point.x()))
+        y2 = min(float(height), max(self.crop_start.y(), end_point.y()))
+        if (x2 - x1) >= 2 and (y2 - y1) >= 2:
+            self.crop_box = (x1, y1, x2, y2)
+        else:
+            self.crop_box = None
+        self.cropChanged.emit(self.crop_box)
+        self.crop_start = None
+        self.crop_preview = None
+        self.update()
 
     def _update_hover_rect(self, screen_pos):
         """Update which measurement rectangle is under the cursor."""
@@ -760,6 +851,46 @@ class ZoomableImageLabel(QLabel):
 
         # Draw the image
         painter.drawPixmap(display_rect, self.original_pixmap)
+
+        # Draw overlay boxes (e.g., AI bounding boxes)
+        if self.overlay_boxes:
+            for item in self.overlay_boxes:
+                box = item.get("box") if isinstance(item, dict) else None
+                if not box:
+                    continue
+                color = item.get("color", QColor(39, 174, 96)) if isinstance(item, dict) else QColor(39, 174, 96)
+                width = item.get("width", 2) if isinstance(item, dict) else 2
+                dashed = item.get("dashed", False) if isinstance(item, dict) else False
+                x1, y1, x2, y2 = box
+                left = display_rect.x() + min(x1, x2) * self.zoom_level
+                top = display_rect.y() + min(y1, y2) * self.zoom_level
+                right = display_rect.x() + max(x1, x2) * self.zoom_level
+                bottom = display_rect.y() + max(y1, y2) * self.zoom_level
+                pen = QPen(QColor(color), width)
+                if dashed:
+                    pen.setStyle(Qt.DashLine)
+                painter.setPen(pen)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRect(QRectF(left, top, right - left, bottom - top))
+
+        # Draw crop box (user-defined)
+        crop_box = None
+        if self.crop_preview and self.crop_start:
+            start, end = self.crop_preview
+            crop_box = (start.x(), start.y(), end.x(), end.y())
+        elif self.crop_box:
+            crop_box = self.crop_box
+        if crop_box:
+            x1, y1, x2, y2 = crop_box
+            left = display_rect.x() + min(x1, x2) * self.zoom_level
+            top = display_rect.y() + min(y1, y2) * self.zoom_level
+            right = display_rect.x() + max(x1, x2) * self.zoom_level
+            bottom = display_rect.y() + max(y1, y2) * self.zoom_level
+            crop_pen = QPen(QColor(243, 156, 18), 2)
+            crop_pen.setStyle(Qt.DashLine)
+            painter.setPen(crop_pen)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRect(QRectF(left, top, right - left, bottom - top))
 
         # Draw measurement rectangles
         if self.show_measure_overlays and self.measurement_rectangles:

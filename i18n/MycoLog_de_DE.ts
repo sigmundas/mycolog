@@ -6,7 +6,7 @@
     <message>
         <location filename="../ui/calibration_dialog.py" line="57"/>
         <source>Use This Scale</source>
-        <translation>Diesen Ma?stab verwenden</translation>
+        <translation>Diesen Maßstab verwenden</translation>
     </message>
     <message>
         <location filename="../ui/calibration_dialog.py" line="62"/>
@@ -262,288 +262,376 @@
 <context>
     <name>ImageImportDialog</name>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="75"/>
+        <location filename="../ui/image_import_dialog.py" line="175"/>
         <source>Prepare Images</source>
         <translation>Bilder vorbereiten</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="164"/>
+        <location filename="../ui/image_import_dialog.py" line="263"/>
         <source>Images</source>
         <translation>Bilder</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="194"/>
+        <location filename="../ui/image_import_dialog.py" line="442"/>
+        <source>Time and GPS</source>
+        <translation>Zeit und GPS</translation>
+    </message>
+    <message>
+        <location filename="../ui/image_import_dialog.py" line="544"/>
         <source>Cancel</source>
         <translation>Abbrechen</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="196"/>
+        <location filename="../ui/image_import_dialog.py" line="546"/>
         <source>Continue</source>
         <translation>Weiter</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="208"/>
+        <location filename="../ui/image_import_dialog.py" line="299"/>
         <source>Add Images...</source>
-        <translation>Bilder hinzuf?gen...</translation>
+        <translation>Bilder hinzufügen...</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="214"/>
+        <location filename="../ui/image_import_dialog.py" line="305"/>
         <source>Loading images... %p%</source>
         <translation>Bilder werden geladen... %p%</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="217"/>
+        <location filename="../ui/image_import_dialog.py" line="308"/>
         <source>Image settings</source>
         <translation>Bildeinstellungen</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="221"/>
+        <location filename="../ui/image_import_dialog.py" line="312"/>
         <source>Image type</source>
         <translation>Bildtyp</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="224"/>
-        <location filename="../ui/image_import_dialog.py" line="1115"/>
+        <location filename="../ui/image_import_dialog.py" line="315"/>
+        <location filename="../ui/image_import_dialog.py" line="1567"/>
         <source>Field</source>
         <translation>Feld</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="225"/>
-        <location filename="../ui/image_import_dialog.py" line="1108"/>
+        <location filename="../ui/image_import_dialog.py" line="316"/>
+        <location filename="../ui/image_import_dialog.py" line="1560"/>
         <source>Micro</source>
         <translation>Mikro</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="234"/>
+        <location filename="../ui/image_import_dialog.py" line="325"/>
         <source>Scale</source>
-        <translation>Ma?stab</translation>
+        <translation>Maßstab</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="240"/>
+        <location filename="../ui/image_import_dialog.py" line="331"/>
         <source>Set scale...</source>
-        <translation>Ma?stab festlegen...</translation>
+        <translation>Maßstab festlegen...</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="245"/>
+        <location filename="../ui/image_import_dialog.py" line="336"/>
         <source>Contrast</source>
         <translation>Kontrast</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="257"/>
+        <location filename="../ui/image_import_dialog.py" line="348"/>
         <source>Mount</source>
         <translation>Montagemedium</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="269"/>
+        <location filename="../ui/image_import_dialog.py" line="360"/>
         <source>Sample type</source>
         <translation>Probentyp</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="287"/>
+        <location filename="../ui/image_import_dialog.py" line="378"/>
         <source>Apply to all</source>
         <translation>Auf alle anwenden</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="306"/>
+        <location filename="../ui/image_import_dialog.py" line="398"/>
         <source>Multiple images selected</source>
-        <translation>Mehrere Bilder ausgew?hlt</translation>
+        <translation>Mehrere Bilder ausgewählt</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="316"/>
+        <location filename="../ui/image_import_dialog.py" line="408"/>
         <source>Import details</source>
         <translation>Importdetails</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="321"/>
+        <location filename="../ui/image_import_dialog.py" line="414"/>
         <source>Current image</source>
         <translation>Aktuelles Bild</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="330"/>
+        <location filename="../ui/image_import_dialog.py" line="423"/>
         <source>Map</source>
         <translation>Karte</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="334"/>
-        <location filename="../ui/image_import_dialog.py" line="357"/>
+        <location filename="../ui/image_import_dialog.py" line="427"/>
+        <location filename="../ui/image_import_dialog.py" line="450"/>
         <source>Date &amp; time:</source>
         <translation>Datum und Uhrzeit:</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="335"/>
+        <location filename="../ui/image_import_dialog.py" line="428"/>
         <source>Camera:</source>
         <translation>Kamera:</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="336"/>
+        <location filename="../ui/image_import_dialog.py" line="429"/>
         <source>ISO:</source>
         <translation>ISO:</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="337"/>
+        <location filename="../ui/image_import_dialog.py" line="430"/>
         <source>Shutter:</source>
         <translation>Verschluss:</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="338"/>
+        <location filename="../ui/image_import_dialog.py" line="431"/>
         <source>F-stop:</source>
         <translation>Blende:</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="346"/>
-        <location filename="../ui/image_import_dialog.py" line="399"/>
+        <location filename="../ui/image_import_dialog.py" line="439"/>
+        <location filename="../ui/image_import_dialog.py" line="492"/>
         <source>GPS:</source>
         <translation>GPS:</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="349"/>
         <source>Observation details</source>
-        <translation>Beobachtungsdetails</translation>
+        <translation type="vanished">Beobachtungsdetails</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="382"/>
+        <location filename="../ui/image_import_dialog.py" line="475"/>
         <source>Lat:</source>
         <translation>Lat:</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="392"/>
+        <location filename="../ui/image_import_dialog.py" line="485"/>
         <source>Lon:</source>
         <translation>Lon:</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="396"/>
+        <location filename="../ui/image_import_dialog.py" line="489"/>
         <source>Set from current image</source>
         <translation>Vom aktuellen Bild</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="408"/>
+        <location filename="../ui/image_import_dialog.py" line="496"/>
+        <source>AI suggestions</source>
+        <translation>AI-Vorschläge</translation>
+    </message>
+    <message>
+        <location filename="../ui/image_import_dialog.py" line="500"/>
+        <source>Guess</source>
+        <translation>Vorschlag</translation>
+    </message>
+    <message>
+        <location filename="../ui/image_import_dialog.py" line="501"/>
+        <source>Send image to Artsorakelet</source>
+        <translation>Bild an Artsorakelet senden</translation>
+    </message>
+    <message>
+        <location filename="../ui/image_import_dialog.py" line="503"/>
+        <source>Crop</source>
+        <translation>Zuschneiden</translation>
+    </message>
+    <message>
+        <location filename="../ui/image_import_dialog.py" line="504"/>
+        <source>Draw a crop area for AI</source>
+        <translation>Einen Zuschnittbereich für die KI zeichnen</translation>
+    </message>
+    <message>
+        <location filename="../ui/image_import_dialog.py" line="518"/>
+        <source>Suggested species</source>
+        <translation>Vorgeschlagene Art</translation>
+    </message>
+    <message>
+        <source>Confidence</source>
+        <translation type="vanished">Wahrscheinlichkeit</translation>
+    </message>
+    <message>
+        <location filename="../ui/image_import_dialog.py" line="555"/>
         <source>Not set</source>
         <translation>Nicht gesetzt</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="410"/>
-        <location filename="../ui/image_import_dialog.py" line="1108"/>
+        <location filename="../ui/image_import_dialog.py" line="557"/>
+        <location filename="../ui/image_import_dialog.py" line="1560"/>
         <source>Custom</source>
         <translation>Benutzerdefiniert</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="544"/>
+        <location filename="../ui/image_import_dialog.py" line="723"/>
+        <source>Unknown</source>
+        <translation>Unbekannt</translation>
+    </message>
+    <message>
+        <location filename="../ui/image_import_dialog.py" line="792"/>
+        <source>Applied selected species.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../ui/image_import_dialog.py" line="856"/>
+        <source>AI guess only works for field photos</source>
+        <translation>AI-Vorschlag funktioniert nur bei Feldfotos</translation>
+    </message>
+    <message>
+        <location filename="../ui/image_import_dialog.py" line="864"/>
+        <source>AI guessing...</source>
+        <translation>AI schlägt vor...</translation>
+    </message>
+    <message>
+        <location filename="../ui/image_import_dialog.py" line="865"/>
+        <source>Sending image to Artsdatabanken AI...</source>
+        <translation>Bild an Artsdatabanken-KI senden...</translation>
+    </message>
+    <message>
+        <location filename="../ui/image_import_dialog.py" line="886"/>
+        <source>AI guess</source>
+        <translation>AI-Vorschlag</translation>
+    </message>
+    <message>
+        <location filename="../ui/image_import_dialog.py" line="903"/>
+        <source>AI suggestion updated</source>
+        <translation>AI-Vorschlag aktualisiert</translation>
+    </message>
+    <message>
+        <location filename="../ui/image_import_dialog.py" line="905"/>
+        <source>No AI suggestions found</source>
+        <translation>Keine AI-Vorschläge gefunden</translation>
+    </message>
+    <message>
+        <location filename="../ui/image_import_dialog.py" line="910"/>
+        <source>AI guess failed: server error (500). Try again later.</source>
+        <translation>AI-Vorschlag fehlgeschlagen: Serverfehler (500). Bitte später erneut versuchen.</translation>
+    </message>
+    <message>
+        <location filename="../ui/image_import_dialog.py" line="912"/>
+        <source>AI guess failed: {message}</source>
+        <translation>AI-Vorschlag fehlgeschlagen: {message}</translation>
+    </message>
+    <message>
+        <location filename="../ui/image_import_dialog.py" line="975"/>
         <source>Scale applied</source>
-        <translation>Ma?stab angewendet</translation>
+        <translation>Maßstab angewendet</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="545"/>
+        <location filename="../ui/image_import_dialog.py" line="976"/>
         <source>Contrast changed</source>
-        <translation>Kontrast ge?ndert</translation>
+        <translation>Kontrast geändert</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="546"/>
+        <location filename="../ui/image_import_dialog.py" line="977"/>
         <source>Mount changed</source>
-        <translation>Montagemedium ge?ndert</translation>
+        <translation>Montagemedium geändert</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="547"/>
+        <location filename="../ui/image_import_dialog.py" line="978"/>
         <source>Sample type changed</source>
-        <translation>Probentyp ge?ndert</translation>
+        <translation>Probentyp geändert</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="548"/>
+        <location filename="../ui/image_import_dialog.py" line="979"/>
         <source>Image type changed</source>
-        <translation>Bildtyp ge?ndert</translation>
+        <translation>Bildtyp geändert</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="550"/>
+        <location filename="../ui/image_import_dialog.py" line="981"/>
         <source>Settings applied</source>
         <translation>Einstellungen angewendet</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="553"/>
+        <location filename="../ui/image_import_dialog.py" line="984"/>
         <source>{base} {prep} all images</source>
         <translation>{base} {prep} alle Bilder</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="555"/>
+        <location filename="../ui/image_import_dialog.py" line="986"/>
         <source>{base} {prep} selected images</source>
-        <translation>{base} {prep} ausgew?hlte Bilder</translation>
+        <translation>{base} {prep} ausgewählte Bilder</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="558"/>
+        <location filename="../ui/image_import_dialog.py" line="989"/>
         <source>{base} {prep} image {num}</source>
         <translation>{base} {prep} Bild {num}</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="564"/>
+        <location filename="../ui/image_import_dialog.py" line="995"/>
         <source>Select Images</source>
-        <translation>Bilder ausw?hlen</translation>
+        <translation>Bilder auswählen</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="566"/>
+        <location filename="../ui/image_import_dialog.py" line="997"/>
         <source>Images (*.png *.jpg *.jpeg *.tif *.tiff *.heic *.heif);;All Files (*)</source>
         <translation>Bilder (*.png *.jpg *.jpeg *.tif *.tiff *.heic *.heif);;Alle Dateien (*)</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="887"/>
+        <location filename="../ui/image_import_dialog.py" line="1333"/>
         <source>Observation date and GPS set based on current image</source>
-        <translation>Beobachtungsdatum und GPS vom aktuellen Bild ?bernommen</translation>
+        <translation>Beobachtungsdatum und GPS vom aktuellen Bild übernommen</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="896"/>
+        <location filename="../ui/image_import_dialog.py" line="1342"/>
         <source>No images added.</source>
-        <translation>Keine Bilder hinzugef?gt.</translation>
+        <translation>Keine Bilder hinzugefügt.</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="901"/>
+        <location filename="../ui/image_import_dialog.py" line="1347"/>
         <source>Images: {total}
 Microscope: {micro}
 Missing scale: {missing}</source>
         <translation>Bilder: {total}
 Mikro: {micro}
-Ma?stab fehlt: {missing}</translation>
+Maßstab fehlt: {missing}</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="964"/>
+        <location filename="../ui/image_import_dialog.py" line="1410"/>
         <source>Missing Dependency</source>
-        <translation>Fehlende Abh?ngigkeit</translation>
+        <translation>Fehlende Abhängigkeit</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="965"/>
+        <location filename="../ui/image_import_dialog.py" line="1411"/>
         <source>pyproj is required for UTM conversions. Install it and try again.</source>
-        <translation>pyproj wird f?r UTM-Konvertierungen ben?tigt. Installieren Sie es und versuchen Sie es erneut.</translation>
+        <translation>pyproj wird für UTM-Konvertierungen benötigt. Installieren Sie es und versuchen Sie es erneut.</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="1047"/>
+        <location filename="../ui/image_import_dialog.py" line="1499"/>
         <source>Open Map</source>
-        <translation>Karte ?ffnen</translation>
+        <translation>Karte öffnen</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="1051"/>
+        <location filename="../ui/image_import_dialog.py" line="1503"/>
         <source>Choose a map service:</source>
-        <translation>Kartendienst ausw?hlen:</translation>
+        <translation>Kartendienst auswählen:</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="1096"/>
+        <location filename="../ui/image_import_dialog.py" line="1548"/>
         <source>Map Lookup Failed</source>
         <translation>Kartenabfrage fehlgeschlagen</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="1113"/>
+        <location filename="../ui/image_import_dialog.py" line="1565"/>
         <source>(!) needs scale</source>
-        <translation>(!) Ma?stab fehlt</translation>
+        <translation>(!) Maßstab fehlt</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="1117"/>
+        <location filename="../ui/image_import_dialog.py" line="1569"/>
         <source>GPS</source>
         <translation>GPS</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="1149"/>
+        <location filename="../ui/image_import_dialog.py" line="1604"/>
         <source>Image {num} deleted</source>
-        <translation>Bild {num} gel?scht</translation>
+        <translation>Bild {num} gelöscht</translation>
     </message>
     <message>
-        <location filename="../ui/image_import_dialog.py" line="1151"/>
+        <location filename="../ui/image_import_dialog.py" line="1606"/>
         <source>Deleted {count} images</source>
-        <translation>{count} Bilder gel?scht</translation>
+        <translation>{count} Bilder gelöscht</translation>
     </message>
 </context>
 <context>
@@ -833,7 +921,7 @@ Neueste Version: {latest}</translation>
     <message>
         <location filename="../ui/main_window.py" line="2490"/>
         <source>Stopped - Start measuring</source>
-        <translation>Angehalten ? Messung starten</translation>
+        <translation>Angehalten - Messung starten</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="2499"/>
@@ -895,7 +983,7 @@ Neueste Version: {latest}</translation>
     <message>
         <location filename="../ui/main_window.py" line="1504"/>
         <source>Scale</source>
-        <translation>Ma?stab</translation>
+        <translation>Maßstab</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="1521"/>
@@ -1069,7 +1157,7 @@ Neueste Version: {latest}</translation>
     <name>NewObservationDialog</name>
     <message>
         <source>Add Images...</source>
-        <translation type="vanished">Bilder hinzuf?gen...</translation>
+        <translation type="vanished">Bilder hinzufügen...</translation>
     </message>
     <message>
         <source>Delete Image</source>
@@ -1105,15 +1193,15 @@ Neueste Version: {latest}</translation>
     </message>
     <message>
         <source>Confirm Delete</source>
-        <translation type="vanished">L?schen best?tigen</translation>
+        <translation type="vanished">Löschen bestätigen</translation>
     </message>
     <message>
         <source>Delete image and associated measurements?</source>
-        <translation type="vanished">Bild und zugeh?rige Messungen l?schen?</translation>
+        <translation type="vanished">Bild und zugehörige Messungen löschen?</translation>
     </message>
     <message>
         <source>Delete image?</source>
-        <translation type="vanished">Bild l?schen?</translation>
+        <translation type="vanished">Bild löschen?</translation>
     </message>
     <message>
         <source>Remove image from this observation?</source>
@@ -1181,7 +1269,7 @@ Neueste Version: {latest}</translation>
     </message>
     <message>
         <source>No image selected</source>
-        <translation type="vanished">Kein Bild ausgew?hlt</translation>
+        <translation type="vanished">Kein Bild ausgewählt</translation>
     </message>
     <message>
         <source>Observation Details</source>
@@ -1247,185 +1335,185 @@ Neueste Version: {latest}</translation>
 <context>
     <name>ObservationDetailsDialog</name>
     <message>
-        <location filename="../ui/observations_tab.py" line="1110"/>
+        <location filename="../ui/observations_tab.py" line="1118"/>
         <source>Images</source>
         <translation>Bilder</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1131"/>
+        <location filename="../ui/observations_tab.py" line="1139"/>
         <source>Observation Details</source>
         <translation>Beobachtungsdetails</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1150"/>
+        <location filename="../ui/observations_tab.py" line="1158"/>
         <source>Date &amp; time:</source>
         <translation>Datum und Uhrzeit:</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1183"/>
+        <location filename="../ui/observations_tab.py" line="1191"/>
         <source>Uncertain</source>
         <translation>Unsicher</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1190"/>
+        <location filename="../ui/observations_tab.py" line="1198"/>
         <source>Species</source>
         <translation>Art</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1204"/>
+        <location filename="../ui/observations_tab.py" line="1212"/>
         <source>Unknown</source>
         <translation>Unbekannt</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1211"/>
+        <location filename="../ui/observations_tab.py" line="1219"/>
         <source>Location:</source>
         <translation>Ort:</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1232"/>
+        <location filename="../ui/observations_tab.py" line="1240"/>
         <source>  Map  </source>
         <translation>  Karte  </translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1253"/>
+        <location filename="../ui/observations_tab.py" line="1261"/>
         <source>e.g., Spruce forest</source>
         <translation>e.g., Spruce forest</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1254"/>
+        <location filename="../ui/observations_tab.py" line="1262"/>
         <source>Habitat:</source>
         <translation>Habitat:</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1259"/>
+        <location filename="../ui/observations_tab.py" line="1267"/>
         <source>Any additional notes...</source>
         <translation>Weitere Notizen...</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1260"/>
+        <location filename="../ui/observations_tab.py" line="1268"/>
         <source>Notes:</source>
         <translation>Notizen:</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1277"/>
+        <location filename="../ui/observations_tab.py" line="1285"/>
         <source>Edit Images</source>
         <translation>Bilder bearbeiten</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1277"/>
+        <location filename="../ui/observations_tab.py" line="1285"/>
         <source>Back to Images</source>
-        <translation>Zur?ck zu den Bildern</translation>
+        <translation>Zurück zu den Bildern</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1283"/>
+        <location filename="../ui/observations_tab.py" line="1291"/>
         <source>Cancel</source>
         <translation>Abbrechen</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1288"/>
+        <location filename="../ui/observations_tab.py" line="1296"/>
         <source>Save Observation</source>
         <translation>Beobachtung speichern</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1288"/>
+        <location filename="../ui/observations_tab.py" line="1296"/>
         <source>Create Observation</source>
         <translation>Beobachtung erstellen</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1318"/>
-        <location filename="../ui/observations_tab.py" line="1321"/>
+        <location filename="../ui/observations_tab.py" line="1326"/>
+        <location filename="../ui/observations_tab.py" line="1329"/>
         <source>From: {source}</source>
         <translation>Von: {source}</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1507"/>
-        <location filename="../ui/observations_tab.py" line="1607"/>
+        <location filename="../ui/observations_tab.py" line="1554"/>
+        <location filename="../ui/observations_tab.py" line="1654"/>
         <source>No image selected</source>
-        <translation>Kein Bild ausgew?hlt</translation>
+        <translation>Kein Bild ausgewählt</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1581"/>
+        <location filename="../ui/observations_tab.py" line="1628"/>
         <source>Delete image and associated measurements?</source>
-        <translation>Bild und zugeh?rige Messungen l?schen?</translation>
+        <translation>Bild und zugehörige Messungen löschen?</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1583"/>
+        <location filename="../ui/observations_tab.py" line="1630"/>
         <source>Delete image?</source>
-        <translation>Bild l?schen?</translation>
+        <translation>Bild löschen?</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1585"/>
+        <location filename="../ui/observations_tab.py" line="1632"/>
         <source>Remove image from this observation?</source>
         <translation>Bild aus dieser Beobachtung entfernen?</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1588"/>
+        <location filename="../ui/observations_tab.py" line="1635"/>
         <source>Confirm Delete</source>
-        <translation>L?schen best?tigen</translation>
+        <translation>Löschen bestätigen</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1617"/>
+        <location filename="../ui/observations_tab.py" line="1664"/>
         <source>Yes</source>
         <translation>Ja</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1618"/>
+        <location filename="../ui/observations_tab.py" line="1665"/>
         <source>No</source>
         <translation>Nein</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1731"/>
+        <location filename="../ui/observations_tab.py" line="1778"/>
         <source>Common name</source>
         <translation>Trivialname</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1737"/>
-        <location filename="../ui/observations_tab.py" line="1747"/>
+        <location filename="../ui/observations_tab.py" line="1784"/>
+        <location filename="../ui/observations_tab.py" line="1794"/>
         <source>e.g., Kantarell</source>
         <translation>e.g., Kantarell</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1739"/>
+        <location filename="../ui/observations_tab.py" line="1786"/>
         <source>e.g., Pfifferling</source>
         <translation>e.g., Pfifferling</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1741"/>
+        <location filename="../ui/observations_tab.py" line="1788"/>
         <source>e.g., Girolle</source>
         <translation>e.g., Girolle</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1743"/>
+        <location filename="../ui/observations_tab.py" line="1790"/>
         <source>e.g., Rebozuelo</source>
         <translation>e.g., Rebozuelo</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1745"/>
+        <location filename="../ui/observations_tab.py" line="1792"/>
         <source>e.g., Kantarel</source>
         <translation>e.g., Kantarel</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1749"/>
+        <location filename="../ui/observations_tab.py" line="1796"/>
         <source>e.g., Kantarelli</source>
         <translation>e.g., Kantarelli</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1751"/>
+        <location filename="../ui/observations_tab.py" line="1798"/>
         <source>e.g., Kurka</source>
         <translation>e.g., Kurka</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1753"/>
+        <location filename="../ui/observations_tab.py" line="1800"/>
         <source>e.g., Cantarelo</source>
         <translation>e.g., Cantarelo</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1755"/>
+        <location filename="../ui/observations_tab.py" line="1802"/>
         <source>e.g., Gallinaccio</source>
         <translation>e.g., Gallinaccio</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="1756"/>
+        <location filename="../ui/observations_tab.py" line="1803"/>
         <source>e.g., Chanterelle</source>
         <translation>e.g., Chanterelle</translation>
     </message>
@@ -1478,19 +1566,19 @@ Neueste Version: {latest}</translation>
     </message>
     <message>
         <location filename="../ui/observations_tab.py" line="672"/>
-        <location filename="../ui/observations_tab.py" line="926"/>
+        <location filename="../ui/observations_tab.py" line="931"/>
         <source>Confirm Delete</source>
-        <translation>L?schen best?tigen</translation>
+        <translation>Löschen bestätigen</translation>
     </message>
     <message>
         <location filename="../ui/observations_tab.py" line="667"/>
         <source>Delete image and associated measurements?</source>
-        <translation>Bild und zugeh?rige Messungen l?schen?</translation>
+        <translation>Bild und zugehörige Messungen löschen?</translation>
     </message>
     <message>
         <location filename="../ui/observations_tab.py" line="669"/>
         <source>Delete image?</source>
-        <translation>Bild l?schen?</translation>
+        <translation>Bild löschen?</translation>
     </message>
     <message>
         <source>Delete observation &apos;{species}&apos;?</source>
@@ -1551,13 +1639,13 @@ Neueste Version: {latest}</translation>
         <translation>Trivialname</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="927"/>
+        <location filename="../ui/observations_tab.py" line="932"/>
         <source>Delete observation &apos;{species}&apos;?
 
 This will also delete all associated images and measurements.</source>
-        <translation>Beobachtung &apos;{species}&apos; l?schen?
+        <translation>Beobachtung &apos;{species}&apos; löschen?
 
-Dadurch werden auch alle zugeh?rigen Bilder und Messungen gel?scht.</translation>
+Dadurch werden auch alle zugehörigen Bilder und Messungen gelöscht.</translation>
     </message>
 </context>
 <context>
@@ -1675,22 +1763,22 @@ Dadurch werden auch alle zugeh?rigen Bilder und Messungen gel?scht.</translation
 <context>
     <name>RenameObservationDialog</name>
     <message>
-        <location filename="../ui/observations_tab.py" line="2183"/>
+        <location filename="../ui/observations_tab.py" line="2230"/>
         <source>Unknown</source>
         <translation>Unbekannt</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="2211"/>
+        <location filename="../ui/observations_tab.py" line="2258"/>
         <source>Uncertain identification</source>
         <translation>Unsichere Bestimmung</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="2216"/>
+        <location filename="../ui/observations_tab.py" line="2263"/>
         <source>Save</source>
         <translation>Speichern</translation>
     </message>
     <message>
-        <location filename="../ui/observations_tab.py" line="2219"/>
+        <location filename="../ui/observations_tab.py" line="2266"/>
         <source>Cancel</source>
         <translation>Abbrechen</translation>
     </message>

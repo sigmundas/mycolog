@@ -761,12 +761,14 @@ class ObservationsTab(QWidget):
         existing_images = ImageDB.get_images_for_observation(obs_id)
         image_results = self._build_import_results_from_images(existing_images)
 
+        ai_taxon = None
         while True:
             dialog = ObservationDetailsDialog(
                 self,
                 observation=observation,
                 image_results=image_results,
                 allow_edit_images=True,
+                suggested_taxon=ai_taxon,
             )
             if dialog.exec():
                 data = dialog.get_data()
@@ -805,6 +807,7 @@ class ObservationsTab(QWidget):
                 image_dialog = ImageImportDialog(self, import_results=image_results)
                 if image_dialog.exec():
                     image_results = image_dialog.import_results
+                    ai_taxon = image_dialog.get_ai_selected_taxon()
                 continue
             return
 
@@ -819,11 +822,13 @@ class ObservationsTab(QWidget):
             image_results = image_dialog.import_results
             primary_index = image_dialog.primary_index
 
+            ai_taxon = image_dialog.get_ai_selected_taxon()
             dialog = ObservationDetailsDialog(
                 self,
                 image_results=image_results,
                 primary_index=primary_index,
                 allow_edit_images=True,
+                suggested_taxon=ai_taxon,
             )
             if dialog.exec():
                 obs_data = dialog.get_data()
@@ -1042,6 +1047,7 @@ class ObservationDetailsDialog(QDialog):
         image_results: list[ImageImportResult] | None = None,
         primary_index: int | None = None,
         allow_edit_images: bool = False,
+        suggested_taxon: dict | None = None,
     ):
         super().__init__(parent)
         self.observation = observation
@@ -1050,6 +1056,7 @@ class ObservationDetailsDialog(QDialog):
         self.primary_index = primary_index
         self.allow_edit_images = allow_edit_images
         self.request_edit_images = False
+        self.suggested_taxon = suggested_taxon
         self.map_helper = MapServiceHelper(self)
         self.setWindowTitle("Edit Observation" if self.edit_mode else "New Observation")
         self.setModal(True)
@@ -1099,6 +1106,7 @@ class ObservationDetailsDialog(QDialog):
             self._load_existing_observation()
         else:
             self._apply_primary_metadata()
+        self._apply_suggested_taxon()
         self._sync_taxon_cache()
 
     def init_ui(self):
@@ -1320,6 +1328,45 @@ class ObservationDetailsDialog(QDialog):
             source = Path(result.filepath).name if result.filepath else ""
             self.gps_info_label.setText(self.tr("From: {source}").format(source=source) if source else "")
         self._update_map_button()
+
+    def _apply_suggested_taxon(self):
+        if not self.suggested_taxon:
+            return
+        if not hasattr(self, "genus_input") or not hasattr(self, "species_input"):
+            return
+        if self.genus_input.text().strip() or self.species_input.text().strip():
+            return
+        genus = self.suggested_taxon.get("genus")
+        species = self.suggested_taxon.get("species")
+        if not genus or not species:
+            return
+        self._suppress_taxon_autofill = True
+        self.genus_input.setText(genus)
+        self.species_input.setText(species)
+        self._suppress_taxon_autofill = False
+        if hasattr(self, "vernacular_input") and not self.vernacular_input.text().strip():
+            vernacular = self._preferred_vernacular_from_taxon(self.suggested_taxon.get("taxon") or {})
+            if vernacular:
+                self._suppress_taxon_autofill = True
+                self.vernacular_input.setText(vernacular)
+                self._suppress_taxon_autofill = False
+        if self.vernacular_db:
+            self._update_vernacular_suggestions_for_taxon()
+            self._maybe_set_vernacular_from_taxon()
+
+    def _preferred_vernacular_from_taxon(self, taxon: dict) -> str | None:
+        if not isinstance(taxon, dict):
+            return None
+        vernacular_names = taxon.get("vernacularNames") or {}
+        lang = normalize_vernacular_language(SettingsDB.get_setting("vernacular_language", "no"))
+        if isinstance(vernacular_names, dict) and lang:
+            name = vernacular_names.get(lang)
+            if name:
+                return str(name)
+        name = taxon.get("vernacularName")
+        if name:
+            return str(name)
+        return None
 
     def _primary_result(self) -> ImageImportResult | None:
         if self.primary_index is not None and 0 <= self.primary_index < len(self.image_results):
