@@ -114,6 +114,11 @@ def get_images_dir() -> Path:
         return Path(path)
     return get_database_path().parent / "images"
 
+
+def get_calibrations_dir() -> Path:
+    """Get the directory for storing calibration images."""
+    return get_images_dir() / "calibrations"
+
 def get_connection():
     """Get a connection to the main observation database."""
     db_path = get_database_path()
@@ -366,6 +371,13 @@ def init_database():
             contrast TEXT,
             measure_color TEXT,
             notes TEXT,
+            ai_crop_x1 REAL,
+            ai_crop_y1 REAL,
+            ai_crop_x2 REAL,
+            ai_crop_y2 REAL,
+            ai_crop_source_w INTEGER,
+            ai_crop_source_h INTEGER,
+            gps_source INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (observation_id) REFERENCES observations(id)
         )
@@ -406,7 +418,45 @@ def init_database():
         cursor.execute('ALTER TABLE images ADD COLUMN measure_color TEXT')
     except sqlite3.OperationalError:
         pass  # Column already exists
-    
+
+    # Add calibration_id column to link images to calibrations
+    try:
+        cursor.execute('ALTER TABLE images ADD COLUMN calibration_id INTEGER')
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Add AI crop columns for Artsorakelet
+    try:
+        cursor.execute('ALTER TABLE images ADD COLUMN ai_crop_x1 REAL')
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute('ALTER TABLE images ADD COLUMN ai_crop_y1 REAL')
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute('ALTER TABLE images ADD COLUMN ai_crop_x2 REAL')
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute('ALTER TABLE images ADD COLUMN ai_crop_y2 REAL')
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute('ALTER TABLE images ADD COLUMN ai_crop_source_w INTEGER')
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute('ALTER TABLE images ADD COLUMN ai_crop_source_h INTEGER')
+    except sqlite3.OperationalError:
+        pass
+
+    # Add GPS source flag for observation metadata
+    try:
+        cursor.execute('ALTER TABLE images ADD COLUMN gps_source INTEGER DEFAULT 0')
+    except sqlite3.OperationalError:
+        pass
+
     # Spore measurements table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS spore_measurements (
@@ -469,6 +519,25 @@ def init_database():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (image_id) REFERENCES images(id),
             FOREIGN KEY (measurement_id) REFERENCES spore_measurements(id)
+        )
+    ''')
+
+    # Calibrations table for storing objective calibration history
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS calibrations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            objective_key TEXT NOT NULL,
+            calibration_date TEXT NOT NULL,
+            microns_per_pixel REAL NOT NULL,
+            microns_per_pixel_std REAL,
+            confidence_interval_low REAL,
+            confidence_interval_high REAL,
+            num_measurements INTEGER,
+            measurements_json TEXT,
+            image_filepath TEXT,
+            notes TEXT,
+            is_active INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
 

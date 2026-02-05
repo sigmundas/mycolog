@@ -42,7 +42,7 @@ import time
 from pathlib import Path
 import re
 from PIL import Image, ExifTags
-from database.models import ObservationDB, ImageDB, MeasurementDB, SettingsDB, ReferenceDB
+from database.models import ObservationDB, ImageDB, MeasurementDB, SettingsDB, ReferenceDB, CalibrationDB
 from database.schema import (
     get_connection,
     get_app_settings,
@@ -125,6 +125,79 @@ class LoadingDialog(QDialog):
         label = QLabel(text)
         label.setAlignment(Qt.AlignCenter)
         layout.addWidget(label)
+
+
+class ScaleBarCalibrationDialog(QDialog):
+    """Simple scale bar calibration dialog for two-point measurement."""
+
+    def __init__(self, main_window, initial_um: float = 10.0, previous_key: str | None = None):
+        super().__init__(main_window)
+        self.setWindowTitle("Scale bar")
+        self.setModal(False)
+        self.main_window = main_window
+        self.previous_key = previous_key
+        self.scale_applied = False
+        self.auto_apply = False
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+
+        self.length_input = QDoubleSpinBox()
+        self.length_input.setRange(0.1, 100000.0)
+        self.length_input.setDecimals(2)
+        self.length_input.setValue(initial_um)
+        self.length_input.setSuffix(" µm")
+        form.addRow("Scale bar length:", self.length_input)
+
+        self.scale_label = QLabel("--")
+        form.addRow("Custom scale:", self.scale_label)
+
+        layout.addLayout(form)
+
+        btn_row = QHBoxLayout()
+        self.select_btn = QPushButton("Select scale bar endpoints")
+        self.select_btn.clicked.connect(self._on_select)
+        btn_row.addWidget(self.select_btn)
+        btn_row.addStretch()
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.close)
+        btn_row.addWidget(close_btn)
+
+        layout.addLayout(btn_row)
+
+    def _on_select(self):
+        if not self.main_window:
+            return
+        self.hide()
+        self.main_window.enter_calibration_mode(self)
+
+    def set_calibration_distance(self, distance_pixels: float):
+        if not distance_pixels or distance_pixels <= 0:
+            return
+        length_um = float(self.length_input.value())
+        scale_um = length_um / distance_pixels
+        scale_nm = scale_um * 1000.0
+        self.scale_label.setText(f"{scale_nm:.2f} nm/px")
+        self.show()
+        self._pending_scale_um = scale_um
+
+    def apply_scale(self, distance_pixels: float):
+        if not distance_pixels or distance_pixels <= 0:
+            return
+        length_um = float(self.length_input.value())
+        scale_um = length_um / distance_pixels
+        scale_nm = scale_um * 1000.0
+        self.scale_label.setText(f"{scale_nm:.2f} nm/px")
+        applied = False
+        if self.main_window:
+            applied = bool(self.main_window.set_custom_scale(scale_um))
+        self.scale_applied = applied
+
+    def closeEvent(self, event):
+        if not self.scale_applied and self.previous_key:
+            self.main_window._populate_scale_combo(self.previous_key)
+        super().closeEvent(event)
 
 
 class DatabaseSettingsDialog(QDialog):
@@ -1225,6 +1298,7 @@ class MainWindow(QMainWindow):
         self.measure_color = QColor(self.default_measure_color)
         self.measurement_labels = []
         self.measurement_active = False
+        self._auto_started_for_microscope = False
         self.auto_threshold = None
         self.auto_threshold_default = 0.12
         self.auto_gray_cache = None
@@ -1512,6 +1586,10 @@ class MainWindow(QMainWindow):
         self.calib_info_label = QLabel("No objective")
         self.calib_info_label.setWordWrap(True)
         self.calib_info_label.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
+        self.calib_info_label.setTextFormat(Qt.RichText)
+        self.calib_info_label.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        self.calib_info_label.setOpenExternalLinks(False)
+        self.calib_info_label.linkActivated.connect(self._on_calibration_link_clicked)
         calib_layout.addWidget(self.calib_info_label)
 
         calib_group.setLayout(calib_layout)
@@ -1694,7 +1772,7 @@ class MainWindow(QMainWindow):
         self.prev_image_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
         self.prev_image_shortcut.activated.connect(self.goto_previous_image)
 
-        self.on_measure_mode_changed()
+        self.start_measurement()
         return tab
 
     def create_image_panel(self):
@@ -1930,13 +2008,51 @@ class MainWindow(QMainWindow):
         if objective:
             self.apply_objective(objective)
 
-    def open_calibration_dialog(self, select_custom=False):
+    def open_calibration_dialog(self, select_custom=False, objective_key=None, calibration_id=None):
         """Open the calibration dialog."""
         dialog = CalibrationDialog(self)
         if select_custom:
             dialog.select_custom_tab()
-        dialog.calibration_saved.connect(self.apply_objective)
+        if objective_key:
+            dialog.select_objective_key(objective_key)
+        if calibration_id:
+            dialog.select_calibration(calibration_id)
+        dialog.calibration_saved.connect(self._on_calibration_saved_from_dialog)
         return dialog.exec() == QDialog.Accepted
+
+    def _on_calibration_link_clicked(self, _link: str) -> None:
+        objective_key = getattr(self, "_calib_link_objective_key", None)
+        calibration_id = getattr(self, "_calib_link_calibration_id", None)
+        if not objective_key or not calibration_id:
+            return
+        self.open_calibration_dialog(
+            select_custom=False,
+            objective_key=objective_key,
+            calibration_id=calibration_id,
+        )
+
+    def _on_calibration_saved_from_dialog(self, objective: dict) -> None:
+        if self.active_observation_id:
+            self._refresh_active_observation_after_calibration()
+            return
+        self.apply_objective(objective)
+
+    def _refresh_active_observation_after_calibration(self) -> None:
+        if not self.active_observation_id:
+            return
+        display_name = self.active_observation_name
+        if not display_name:
+            obs = ObservationDB.get_observation(self.active_observation_id)
+            if obs:
+                display_name = obs.get("display_name") or obs.get("name") or obs.get("species") or ""
+        if not display_name:
+            display_name = f"Observation {self.active_observation_id}"
+        self._on_observation_selected_impl(
+            self.active_observation_id,
+            display_name,
+            switch_tab=False,
+            schedule_gallery=True,
+        )
 
     def _populate_scale_combo(self, selected_key=None):
         """Populate the scale combo with objectives and Custom."""
@@ -1954,7 +2070,7 @@ class MainWindow(QMainWindow):
         for key, obj in sorted(objectives.items(), key=_sort_key):
             label = obj.get("name") or obj.get("magnification") or key
             self.scale_combo.addItem(label, key)
-        self.scale_combo.addItem("Custom", "custom")
+        self.scale_combo.addItem("Scale bar", "custom")
         if selected_key is None:
             selected_key = self.current_objective_name
         if selected_key:
@@ -1962,17 +2078,17 @@ class MainWindow(QMainWindow):
             if idx >= 0:
                 self.scale_combo.setCurrentIndex(idx)
         self.scale_combo.blockSignals(False)
+        self._last_scale_combo_key = self.scale_combo.currentData()
 
     def on_scale_combo_changed(self):
         """Handle objective selection from the scale combo."""
         if not hasattr(self, "scale_combo"):
             return
+        previous_key = getattr(self, "_last_scale_combo_key", None)
         selected_key = self.scale_combo.currentData()
         if selected_key == "custom":
-            previous_key = self.current_objective_name
-            accepted = self.open_calibration_dialog(select_custom=True)
-            if not accepted:
-                self._populate_scale_combo(previous_key)
+            dialog = ScaleBarCalibrationDialog(self, previous_key=previous_key)
+            dialog.show()
             return
 
         if not selected_key:
@@ -1980,18 +2096,36 @@ class MainWindow(QMainWindow):
         objectives = self.load_objective_definitions()
         objective = objectives.get(selected_key)
         if objective:
-            self.apply_objective(objective)
+            if not self.apply_objective(objective):
+                self.scale_combo.blockSignals(True)
+                if previous_key is None:
+                    self.scale_combo.setCurrentIndex(0)
+                else:
+                    idx = self.scale_combo.findData(previous_key)
+                    if idx >= 0:
+                        self.scale_combo.setCurrentIndex(idx)
+                self.scale_combo.blockSignals(False)
+                return
+            self._last_scale_combo_key = selected_key
 
     def apply_objective(self, objective):
         """Apply an objective's settings."""
         old_scale = self.microns_per_pixel
+        previous_key = self.current_objective_name
+        new_scale = objective.get("microns_per_pixel", 0.5)
+        if not self._maybe_rescale_current_image(old_scale, new_scale):
+            self._populate_scale_combo(previous_key)
+            return False
         self.current_objective = objective
         self.current_objective_name = objective.get("magnification") or objective.get("name")
-        self.microns_per_pixel = objective.get("microns_per_pixel", 0.5)
+        self.microns_per_pixel = new_scale
 
         # Update calibration info
         mag = objective.get("magnification", "Unknown")
-        self.calib_info_label.setText(f"{mag}: {self.microns_per_pixel:.4f} um/px")
+        scale_nm = self.microns_per_pixel * 1000.0
+        self.calib_info_label.setText(f"{mag}: {scale_nm:.2f} nm/px")
+        self._calib_link_objective_key = None
+        self._calib_link_calibration_id = None
 
         # Update image overlay
         if self.current_pixmap:
@@ -2005,8 +2139,9 @@ class MainWindow(QMainWindow):
                 scale=self.microns_per_pixel,
                 objective_name=self.current_objective_name
             )
-        self._maybe_rescale_current_image(old_scale, self.microns_per_pixel)
         self._populate_scale_combo(self.current_objective_name)
+        self._last_scale_combo_key = self.current_objective_name
+        return True
 
     def load_objective_definitions(self):
         """Load objective definitions from the calibration database."""
@@ -2015,6 +2150,10 @@ class MainWindow(QMainWindow):
     def set_custom_scale(self, scale, warning_text=None):
         """Apply a custom scale and optionally warn about mismatches."""
         old_scale = self.microns_per_pixel
+        previous_key = self.current_objective_name
+        if not self._maybe_rescale_current_image(old_scale, scale):
+            self._populate_scale_combo(previous_key)
+            return False
         self.current_objective = {
             "name": "Custom",
             "magnification": "Custom",
@@ -2022,10 +2161,13 @@ class MainWindow(QMainWindow):
         }
         self.current_objective_name = "Custom"
         self.microns_per_pixel = scale
-        self.calib_info_label.setText(f"Custom: {scale:.4f} um/px")
+        scale_nm = scale * 1000.0
+        self.calib_info_label.setText(f"Scale bar: {scale_nm:.2f} nm/px")
+        self._calib_link_objective_key = None
+        self._calib_link_calibration_id = None
 
         if self.current_pixmap:
-            self.image_label.set_objective_text("Custom")
+            self.image_label.set_objective_text("Scale bar")
             self.image_label.set_objective_color(QColor("#7f8c8d"))
         self.image_label.set_microns_per_pixel(self.microns_per_pixel)
 
@@ -2041,8 +2183,9 @@ class MainWindow(QMainWindow):
                 scale=scale,
                 objective_name=self.current_objective_name
             )
-        self._maybe_rescale_current_image(old_scale, scale)
         self._populate_scale_combo("custom")
+        self._last_scale_combo_key = "custom"
+        return True
 
     def apply_image_scale(self, image_data):
         """Apply scale/objective metadata from an image record."""
@@ -2050,7 +2193,9 @@ class MainWindow(QMainWindow):
         if scale is not None and scale <= 0:
             scale = None
         objective_name = image_data.get('objective_name')
+        calibration_id = image_data.get('calibration_id')
         objective_lookup = self.load_objective_definitions()
+        show_old_calibration_warning = False
 
         self.suppress_scale_prompt = True
         if objective_name and objective_name in objective_lookup:
@@ -2062,11 +2207,48 @@ class MainWindow(QMainWindow):
                 diff_ratio = 0 if scale is None else 1
 
             if scale and diff_ratio > 0.01:
-                warning = (
-                    f"Warning: {objective_name} calibration mismatch. "
-                    "Using custom scale."
+                self.current_objective = objective
+                self.current_objective_name = objective_name
+                self.microns_per_pixel = scale
+                show_old_calibration_warning = True
+
+                mag = objective.get("magnification") or objective.get("name") or objective_name
+                calib_date = None
+                calib_obj_key = objective_name
+                if calibration_id:
+                    cal = CalibrationDB.get_calibration(calibration_id)
+                    if cal:
+                        raw_date = cal.get("calibration_date", "")
+                        calib_date = raw_date[:10] if raw_date else None
+                        calib_obj_key = cal.get("objective_key", calib_obj_key)
+
+                scale_nm = self.microns_per_pixel * 1000.0
+                if calib_date and calibration_id:
+                    self._calib_link_objective_key = calib_obj_key
+                    self._calib_link_calibration_id = calibration_id
+                    self.calib_info_label.setText(
+                        self.tr("Older scale used: {scale:.2f} nm/px<br/>Calibration: <a href=\"calibration\">{date}</a>")
+                        .format(scale=scale_nm, date=calib_date)
+                    )
+                else:
+                    self._calib_link_objective_key = None
+                    self._calib_link_calibration_id = None
+                    self.calib_info_label.setText(
+                        self.tr("Older scale used: {scale:.2f} nm/px<br/>Calibration: --")
+                        .format(scale=scale_nm)
+                    )
+
+                if self.current_pixmap:
+                    self.image_label.set_objective_text(mag)
+                    self.image_label.set_objective_color(self._objective_color_for_name(mag))
+                self.image_label.set_microns_per_pixel(self.microns_per_pixel)
+
+                self.measure_status_label.setText(self.tr("Warning: Older calibration standard used."))
+                self.measure_status_label.setStyleSheet(
+                    "color: #e67e22; font-weight: bold; font-size: 9pt;"
                 )
-                self.set_custom_scale(scale, warning)
+
+                self._populate_scale_combo(objective_name)
             else:
                 self.apply_objective(objective)
                 if scale:
@@ -2075,18 +2257,37 @@ class MainWindow(QMainWindow):
             self.set_custom_scale(scale)
         elif objective_name:
             self.current_objective_name = objective_name
-            self.calib_info_label.setText(f"{objective_name}: -- um/px")
+            self.calib_info_label.setText(f"{objective_name}: -- nm/px")
+            self._calib_link_objective_key = None
+            self._calib_link_calibration_id = None
             if self.current_pixmap:
                 self.image_label.set_objective_text(objective_name)
                 self.image_label.set_objective_color(self._objective_color_for_name(objective_name))
             self._populate_scale_combo(objective_name)
         else:
             self._populate_scale_combo()
+        if (
+            not show_old_calibration_warning
+            and hasattr(self, "measure_status_label")
+            and self.measure_status_label.text() == self.tr("Warning: Older calibration standard used.")
+        ):
+            self.measure_status_label.setText("")
+            self.measure_status_label.setStyleSheet("")
         self.suppress_scale_prompt = False
 
     def update_controls_for_image_type(self, image_type):
         """Adjust calibration and category controls based on image type."""
         is_field = (image_type == "field")
+        if hasattr(self, "scale_combo"):
+            self.scale_combo.setEnabled(not is_field)
+        if hasattr(self, "measure_category_combo"):
+            self.measure_category_combo.setEnabled(not is_field)
+        if hasattr(self, "measure_button"):
+            self.measure_button.setEnabled(not is_field)
+        if hasattr(self, "mode_lines"):
+            self.mode_lines.setEnabled(not is_field)
+        if hasattr(self, "mode_rect"):
+            self.mode_rect.setEnabled(not is_field)
         if hasattr(self, "measure_category_combo"):
             if not self.measurements_table.selectedIndexes() and not self.measurement_active:
                 target = "other" if is_field else "spore"
@@ -2107,9 +2308,20 @@ class MainWindow(QMainWindow):
             if not has_scale:
                 self.current_objective_name = None
                 self.image_label.set_objective_text("")
-        if hasattr(self, "measure_status_label") and is_field and self.measurement_active:
+        if is_field:
+            if self.measurement_active:
+                self.stop_measurement()
+        else:
+            if not self.measurement_active and not self._auto_started_for_microscope:
+                self.start_measurement()
+                self._auto_started_for_microscope = True
+        if hasattr(self, "measure_status_label") and is_field:
             self.measure_status_label.setText(self.tr("Field photo - no scale set"))
             self.measure_status_label.setStyleSheet("color: #e67e22; font-weight: bold; font-size: 9pt;")
+        elif hasattr(self, "measure_status_label") and not is_field:
+            if self.measure_status_label.text() == self.tr("Field photo - no scale set"):
+                self.measure_status_label.setText("")
+                self.measure_status_label.setStyleSheet("")
 
     def load_image_record(self, image_data, display_name=None, refresh_table=True):
         """Load an image record into the viewer."""
@@ -2382,16 +2594,19 @@ class MainWindow(QMainWindow):
                 )
                 continue
 
+            objective_name = self.get_objective_name_for_storage()
+            calibration_id = CalibrationDB.get_active_calibration_id(objective_name) if objective_name else None
             image_id = ImageDB.add_image(
                 observation_id=self.active_observation_id,
                 filepath=converted_path,
                 image_type='microscope',
                 scale=self.microns_per_pixel,
-                objective_name=self.get_objective_name_for_storage(),
+                objective_name=objective_name,
                 contrast=SettingsDB.get_setting(
                     "contrast_default",
                     SettingsDB.get_list_setting("contrast_options", ["BF", "DF", "DIC", "Phase"])[0]
-                )
+                ),
+                calibration_id=calibration_id
             )
 
             image_data = ImageDB.get_image(image_id)
@@ -5589,27 +5804,29 @@ class MainWindow(QMainWindow):
     def _maybe_rescale_current_image(self, old_scale, new_scale):
         """Prompt to rescale previous measurements for the current image."""
         if self.suppress_scale_prompt:
-            return
+            return True
         if not self.current_image_id or not old_scale or not new_scale:
-            return
+            return True
         if abs(new_scale - old_scale) < 1e-6:
-            return
+            return True
         measurements = MeasurementDB.get_measurements_for_image(self.current_image_id)
         if not measurements:
-            return
+            return True
         has_points = any(
             all(m.get(f"p{i}_{axis}") is not None for i in range(1, 5) for axis in ("x", "y"))
             for m in measurements
         )
         if not has_points:
-            return
-        confirmed = self._question_yes_no(
-            self.tr("Update Measurements"),
-            self.tr("Update previous measures on this image with the new scale?"),
-            default_yes=True
-        )
-        if not confirmed:
-            return
+            return True
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle(self.tr("Changing image scale"))
+        box.setText(self.tr("Changing image scale: This will update previous measurements to match the new scale."))
+        ok_btn = box.addButton(self.tr("OK"), QMessageBox.AcceptRole)
+        box.addButton(self.tr("Cancel"), QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() != ok_btn:
+            return False
 
         conn = get_connection()
         cursor = conn.cursor()
@@ -5635,6 +5852,7 @@ class MainWindow(QMainWindow):
         self.load_measurement_lines()
         self.update_measurements_table()
         self.update_statistics()
+        return True
 
     def _handle_reference_plot(self, data):
         """Plot reference values without saving."""
@@ -5750,16 +5968,19 @@ class MainWindow(QMainWindow):
                 )
                 continue
 
+            objective_name = self.get_objective_name_for_storage()
+            calibration_id = CalibrationDB.get_active_calibration_id(objective_name) if objective_name else None
             image_id = ImageDB.add_image(
                 observation_id=self.active_observation_id,
                 filepath=converted_path,
                 image_type='microscope',
                 scale=self.microns_per_pixel,
-                objective_name=self.get_objective_name_for_storage(),
+                objective_name=objective_name,
                 contrast=SettingsDB.get_setting(
                     "contrast_default",
                     SettingsDB.get_list_setting("contrast_options", ["BF", "DF", "DIC", "Phase"])[0]
-                )
+                ),
+                calibration_id=calibration_id
             )
 
             image_data = ImageDB.get_image(image_id)
@@ -5847,6 +6068,12 @@ class MainWindow(QMainWindow):
             # Show calibration preview in the spore preview widget
             self.show_calibration_preview(p1, p2, distance_pixels)
 
+            if getattr(self.calibration_dialog, "auto_apply", False):
+                self.apply_calibration_scale()
+                self.measure_status_label.setText(self.tr("Scale calibrated"))
+                self.measure_status_label.setStyleSheet("color: #27ae60; font-weight: bold; font-size: 9pt;")
+                return
+
             self.measure_status_label.setText(
                 self.tr("Calibration: {pixels:.1f} pixels - Click '{label}' to apply").format(
                     pixels=distance_pixels,
@@ -5893,7 +6120,10 @@ class MainWindow(QMainWindow):
 
         # Send distance to calibration dialog
         if self.calibration_dialog and hasattr(self, 'calibration_distance_pixels'):
-            self.calibration_dialog.set_calibration_distance(self.calibration_distance_pixels)
+            if hasattr(self.calibration_dialog, "apply_scale"):
+                self.calibration_dialog.apply_scale(self.calibration_distance_pixels)
+            else:
+                self.calibration_dialog.set_calibration_distance(self.calibration_distance_pixels)
 
         # Clean up
         self.calibration_points = []

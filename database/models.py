@@ -6,7 +6,9 @@ import json
 from pathlib import Path
 from typing import List, Optional, Tuple
 from datetime import datetime
-from .schema import get_connection, get_reference_connection, get_images_dir
+from .schema import get_connection, get_reference_connection, get_images_dir, get_calibrations_dir
+
+_UNSET = object()
 
 # Images directory
 def _images_dir() -> Path:
@@ -381,6 +383,10 @@ class ImageDB:
                   micro_category: str = None, objective_name: str = None,
                   measure_color: str = None, mount_medium: str = None,
                   sample_type: str = None, contrast: str = None,
+                  calibration_id: int = None,
+                  ai_crop_box: tuple[float, float, float, float] | None = None,
+                  ai_crop_source_size: tuple[int, int] | None = None,
+                  gps_source: bool | None = None,
                   copy_to_folder: bool = True) -> int:
         """Add an image and return its ID.
 
@@ -423,13 +429,24 @@ class ImageDB:
                     except Exception as e:
                         print(f"Warning: Could not copy image: {e}")
 
+        crop_x1 = crop_y1 = crop_x2 = crop_y2 = None
+        if ai_crop_box and len(ai_crop_box) == 4:
+            crop_x1, crop_y1, crop_x2, crop_y2 = ai_crop_box
+        crop_w = crop_h = None
+        if ai_crop_source_size and len(ai_crop_source_size) == 2:
+            crop_w, crop_h = ai_crop_source_size
+        gps_source_value = None if gps_source is None else (1 if gps_source else 0)
+
         cursor.execute('''
             INSERT INTO images (observation_id, filepath, image_type, micro_category,
                               objective_name, scale_microns_per_pixel, mount_medium,
-                              sample_type, contrast, measure_color, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                              sample_type, contrast, measure_color, notes, calibration_id,
+                              ai_crop_x1, ai_crop_y1, ai_crop_x2, ai_crop_y2,
+                              ai_crop_source_w, ai_crop_source_h, gps_source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (observation_id, final_filepath, image_type, micro_category,
-              objective_name, scale, mount_medium, sample_type, contrast, measure_color, notes))
+              objective_name, scale, mount_medium, sample_type, contrast, measure_color, notes,
+              calibration_id, crop_x1, crop_y1, crop_x2, crop_y2, crop_w, crop_h, gps_source_value))
 
         img_id = cursor.lastrowid
         conn.commit()
@@ -489,7 +506,10 @@ class ImageDB:
                      objective_name: str = None, filepath: str = None,
                      measure_color: str = None, image_type: str = None,
                      mount_medium: str = None, sample_type: str = None,
-                     contrast: str = None):
+                     contrast: str = None, calibration_id: int = None,
+                     ai_crop_box: tuple[float, float, float, float] | None | object = _UNSET,
+                     ai_crop_source_size: tuple[int, int] | None | object = _UNSET,
+                     gps_source: bool | None | object = _UNSET):
         """Update image metadata"""
         conn = get_connection()
         cursor = conn.cursor()
@@ -527,6 +547,30 @@ class ImageDB:
         if measure_color is not None:
             updates.append('measure_color = ?')
             values.append(measure_color)
+        if calibration_id is not None:
+            updates.append('calibration_id = ?')
+            values.append(calibration_id)
+        if ai_crop_box is not _UNSET:
+            crop_x1 = crop_y1 = crop_x2 = crop_y2 = None
+            if ai_crop_box and len(ai_crop_box) == 4:
+                crop_x1, crop_y1, crop_x2, crop_y2 = ai_crop_box
+            updates.extend([
+                'ai_crop_x1 = ?',
+                'ai_crop_y1 = ?',
+                'ai_crop_x2 = ?',
+                'ai_crop_y2 = ?',
+            ])
+            values.extend([crop_x1, crop_y1, crop_x2, crop_y2])
+        if ai_crop_source_size is not _UNSET:
+            crop_w = crop_h = None
+            if ai_crop_source_size and len(ai_crop_source_size) == 2:
+                crop_w, crop_h = ai_crop_source_size
+            updates.extend(['ai_crop_source_w = ?', 'ai_crop_source_h = ?'])
+            values.extend([crop_w, crop_h])
+        if gps_source is not _UNSET:
+            gps_value = None if gps_source is None else (1 if gps_source else 0)
+            updates.append('gps_source = ?')
+            values.append(gps_value)
 
         if updates:
             values.append(image_id)
@@ -987,3 +1031,353 @@ class SettingsDB:
     def set_profile(name: str, email: str) -> None:
         SettingsDB.set_setting("profile_name", name or "")
         SettingsDB.set_setting("profile_email", email or "")
+
+
+class CalibrationDB:
+    """Handle calibration database operations for microscope objectives."""
+
+    @staticmethod
+    def add_calibration(
+        objective_key: str,
+        microns_per_pixel: float,
+        calibration_date: str = None,
+        microns_per_pixel_std: float = None,
+        confidence_interval_low: float = None,
+        confidence_interval_high: float = None,
+        num_measurements: int = None,
+        measurements_json: str = None,
+        image_filepath: str = None,
+        notes: str = None,
+        set_active: bool = True,
+    ) -> int:
+        """Add a new calibration record and return its ID."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        if calibration_date is None:
+            calibration_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # If setting as active, deactivate other calibrations for this objective
+        if set_active:
+            cursor.execute(
+                "UPDATE calibrations SET is_active = 0 WHERE objective_key = ?",
+                (objective_key,)
+            )
+
+        cursor.execute('''
+            INSERT INTO calibrations (
+                objective_key, calibration_date, microns_per_pixel,
+                microns_per_pixel_std, confidence_interval_low, confidence_interval_high,
+                num_measurements, measurements_json, image_filepath, notes, is_active
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            objective_key, calibration_date, microns_per_pixel,
+            microns_per_pixel_std, confidence_interval_low, confidence_interval_high,
+            num_measurements, measurements_json, image_filepath, notes,
+            1 if set_active else 0
+        ))
+
+        calibration_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return calibration_id
+
+    @staticmethod
+    def get_calibration(calibration_id: int) -> Optional[dict]:
+        """Get a single calibration by ID."""
+        conn = get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT * FROM calibrations WHERE id = ?", (calibration_id,))
+        row = cursor.fetchone()
+        conn.close()
+
+        return dict(row) if row else None
+
+    @staticmethod
+    def get_calibrations_for_objective(objective_key: str) -> List[dict]:
+        """Get all calibrations for an objective, ordered by date descending."""
+        conn = get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT * FROM calibrations
+            WHERE objective_key = ?
+            ORDER BY calibration_date DESC
+        ''', (objective_key,))
+
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    def get_active_calibration(objective_key: str) -> Optional[dict]:
+        """Get the active calibration for an objective."""
+        conn = get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT * FROM calibrations
+            WHERE objective_key = ? AND is_active = 1
+            ORDER BY calibration_date DESC
+            LIMIT 1
+        ''', (objective_key,))
+
+        row = cursor.fetchone()
+        conn.close()
+
+        return dict(row) if row else None
+
+    @staticmethod
+    def get_active_calibration_id(objective_key: str) -> Optional[int]:
+        """Get the active calibration ID for an objective, or None if not set."""
+        cal = CalibrationDB.get_active_calibration(objective_key)
+        return cal.get("id") if cal else None
+
+    @staticmethod
+    def set_active_calibration(calibration_id: int) -> None:
+        """Set a calibration as active, deactivating others for the same objective."""
+        conn = get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        # Get the objective key for this calibration
+        cursor.execute("SELECT objective_key FROM calibrations WHERE id = ?", (calibration_id,))
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return
+
+        objective_key = row["objective_key"]
+
+        # Deactivate all calibrations for this objective
+        cursor.execute(
+            "UPDATE calibrations SET is_active = 0 WHERE objective_key = ?",
+            (objective_key,)
+        )
+
+        # Activate the specified calibration
+        cursor.execute(
+            "UPDATE calibrations SET is_active = 1 WHERE id = ?",
+            (calibration_id,)
+        )
+
+        conn.commit()
+        conn.close()
+
+    @staticmethod
+    def get_calibration_history(objective_key: str) -> List[dict]:
+        """Get calibration history with % difference from the first calibration."""
+        calibrations = CalibrationDB.get_calibrations_for_objective(objective_key)
+        if not calibrations:
+            return []
+
+        # Sort by date ascending to find the first calibration
+        sorted_by_date = sorted(calibrations, key=lambda c: c.get("calibration_date", ""))
+        first_calibration = sorted_by_date[0] if sorted_by_date else None
+        first_value = first_calibration.get("microns_per_pixel") if first_calibration else None
+
+        history = []
+        for cal in calibrations:
+            cal_copy = dict(cal)
+            if first_value and first_value > 0:
+                current_value = cal.get("microns_per_pixel", 0)
+                if current_value and cal["id"] != first_calibration["id"]:
+                    diff_percent = ((current_value - first_value) / first_value) * 100
+                    cal_copy["diff_from_first_percent"] = diff_percent
+                else:
+                    cal_copy["diff_from_first_percent"] = None  # First calibration has no diff
+            else:
+                cal_copy["diff_from_first_percent"] = None
+            history.append(cal_copy)
+
+        return history
+
+    @staticmethod
+    def delete_calibration(calibration_id: int) -> None:
+        """Delete a calibration by ID."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("DELETE FROM calibrations WHERE id = ?", (calibration_id,))
+
+        conn.commit()
+        conn.close()
+
+    @staticmethod
+    def get_images_using_objective(objective_key: str) -> List[dict]:
+        """Get all images that use a specific objective."""
+        conn = get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT i.*, o.id AS observation_id, o.genus, o.species, o.date
+            FROM images i
+            LEFT JOIN observations o ON i.observation_id = o.id
+            WHERE i.objective_name = ?
+        ''', (objective_key,))
+
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    def get_images_by_calibration(calibration_id: int) -> List[dict]:
+        """Get all images that used a specific calibration."""
+        conn = get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT i.*, o.id AS observation_id, o.genus, o.species, o.common_name, o.date,
+                   (SELECT COUNT(*) FROM spore_measurements WHERE image_id = i.id) AS measurement_count
+            FROM images i
+            LEFT JOIN observations o ON i.observation_id = o.id
+            WHERE i.calibration_id = ?
+            ORDER BY i.created_at DESC
+        ''', (calibration_id,))
+
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    def get_calibration_usage_summary(objective_key: str) -> List[dict]:
+        """Get summary of how many observations/images/measurements use each calibration for an objective."""
+        conn = get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT
+                c.id AS calibration_id,
+                c.calibration_date,
+                c.microns_per_pixel,
+                c.is_active,
+                COUNT(DISTINCT i.observation_id) AS observation_count,
+                COUNT(DISTINCT i.id) AS image_count,
+                COALESCE(SUM(
+                    (SELECT COUNT(*) FROM spore_measurements WHERE image_id = i.id)
+                ), 0) AS measurement_count
+            FROM calibrations c
+            LEFT JOIN images i ON i.calibration_id = c.id
+            WHERE c.objective_key = ?
+            GROUP BY c.id
+            ORDER BY c.calibration_date DESC
+        ''', (objective_key,))
+
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    def recalculate_measurements_for_objective(
+        objective_key: str,
+        old_scale: float,
+        new_scale: float
+    ) -> int:
+        """Recalculate all measurements for images using an objective.
+
+        Returns the number of measurements updated.
+        """
+        if old_scale <= 0 or new_scale <= 0:
+            return 0
+
+        scale_ratio = new_scale / old_scale
+
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        # Get all image IDs using this objective
+        cursor.execute(
+            "SELECT id FROM images WHERE objective_name = ?",
+            (objective_key,)
+        )
+        image_ids = [row[0] for row in cursor.fetchall()]
+
+        if not image_ids:
+            conn.close()
+            return 0
+
+        # Update scale on images
+        cursor.execute(
+            "UPDATE images SET scale_microns_per_pixel = ? WHERE objective_name = ?",
+            (new_scale, objective_key)
+        )
+
+        # Update measurements
+        placeholders = ",".join("?" * len(image_ids))
+        cursor.execute(f'''
+            UPDATE spore_measurements
+            SET length_um = length_um * ?,
+                width_um = CASE WHEN width_um IS NOT NULL THEN width_um * ? ELSE NULL END
+            WHERE image_id IN ({placeholders})
+        ''', [scale_ratio, scale_ratio] + image_ids)
+
+        updated_count = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        return updated_count
+
+    @staticmethod
+    def recalculate_measurements_for_calibration(
+        calibration_id: int,
+        new_calibration_id: int,
+        new_scale: float
+    ) -> int:
+        """Recalculate measurements for images that used a specific calibration.
+
+        Updates the images to use the new calibration and recalculates their measurements.
+        Returns the number of measurements updated.
+        """
+        conn = get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        # Get images using the old calibration
+        cursor.execute(
+            "SELECT id, scale_microns_per_pixel FROM images WHERE calibration_id = ?",
+            (calibration_id,)
+        )
+        images = cursor.fetchall()
+
+        if not images:
+            conn.close()
+            return 0
+
+        total_updated = 0
+
+        for img in images:
+            image_id = img["id"]
+            old_scale = img["scale_microns_per_pixel"] or 0
+
+            if old_scale <= 0 or new_scale <= 0:
+                continue
+
+            scale_ratio = new_scale / old_scale
+
+            # Update the image's calibration and scale
+            cursor.execute(
+                "UPDATE images SET calibration_id = ?, scale_microns_per_pixel = ? WHERE id = ?",
+                (new_calibration_id, new_scale, image_id)
+            )
+
+            # Update measurements for this image
+            cursor.execute('''
+                UPDATE spore_measurements
+                SET length_um = length_um * ?,
+                    width_um = CASE WHEN width_um IS NOT NULL THEN width_um * ? ELSE NULL END
+                WHERE image_id = ?
+            ''', (scale_ratio, scale_ratio, image_id))
+
+            total_updated += cursor.rowcount
+
+        conn.commit()
+        conn.close()
+
+        return total_updated

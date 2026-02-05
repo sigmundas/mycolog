@@ -4,8 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable
 
-from PySide6.QtCore import Qt, Signal, QEvent, QSize
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import Qt, Signal, QEvent, QSize, QRectF
+from PySide6.QtGui import QPixmap, QPainter, QPen, QColor
 from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
@@ -28,7 +28,7 @@ class ImageGalleryWidget(QGroupBox):
 
     imageClicked = Signal(object, str)
     imageSelected = Signal(object, str)
-    deleteRequested = Signal(int)
+    deleteRequested = Signal(object)  # Can be int (db ID) or str (custom ID like "cal_0")
     selectionChanged = Signal(list)
 
     def __init__(
@@ -210,7 +210,12 @@ class ImageGalleryWidget(QGroupBox):
         pixmap = self._load_pixmap(item)
         if pixmap and not pixmap.isNull():
             thumb_label._orig_pixmap = pixmap
-            thumb_label.setPixmap(self._scaled_thumb(pixmap, self._thumb_size))
+            scaled_thumb = self._scaled_thumb(pixmap, self._thumb_size)
+            crop_box = item.get("crop_box")
+            if crop_box and isinstance(crop_box, (list, tuple)) and len(crop_box) == 4:
+                crop_source_size = item.get("crop_source_size")
+                scaled_thumb = self._apply_crop_overlay(scaled_thumb, crop_box, crop_source_size)
+            thumb_label.setPixmap(scaled_thumb)
         else:
             thumb_label.setText("No preview")
             thumb_label.setStyleSheet("color: #7f8c8d;")
@@ -415,9 +420,11 @@ class ImageGalleryWidget(QGroupBox):
         if img_id:
             thumb_path = get_thumbnail_path(img_id, "224x224")
             if thumb_path and Path(thumb_path).exists():
-                return QPixmap(thumb_path)
+                pixmap = QPixmap(thumb_path)
+                return pixmap
         if filepath:
-            return QPixmap(filepath)
+            pixmap = QPixmap(filepath)
+            return pixmap
         return None
 
     @staticmethod
@@ -428,6 +435,49 @@ class ImageGalleryWidget(QGroupBox):
         x = max(0, (scaled.width() - size) // 2)
         y = max(0, (scaled.height() - size) // 2)
         return scaled.copy(x, y, size, size)
+
+    def _apply_crop_overlay(
+        self,
+        thumb: QPixmap,
+        crop_box: tuple[float, float, float, float],
+        crop_source_size: tuple[int, int] | None,
+    ) -> QPixmap:
+        size = thumb.width()
+        orig_w = orig_h = None
+        if crop_source_size and len(crop_source_size) == 2:
+            orig_w, orig_h = crop_source_size
+        if not orig_w or not orig_h:
+            orig_w = thumb.width()
+            orig_h = thumb.height()
+        if orig_w <= 0 or orig_h <= 0 or size <= 0:
+            return thumb
+
+        scale = max(size / orig_w, size / orig_h)
+        scaled_w = orig_w * scale
+        scaled_h = orig_h * scale
+        x_off = (scaled_w - size) / 2.0
+        y_off = (scaled_h - size) / 2.0
+
+        x1 = crop_box[0] * orig_w * scale - x_off
+        y1 = crop_box[1] * orig_h * scale - y_off
+        x2 = crop_box[2] * orig_w * scale - x_off
+        y2 = crop_box[3] * orig_h * scale - y_off
+
+        left = max(0.0, min(x1, x2))
+        top = max(0.0, min(y1, y2))
+        right = min(size, max(x1, x2))
+        bottom = min(size, max(y1, y2))
+        if right <= left or bottom <= top:
+            return thumb
+
+        annotated = QPixmap(thumb)
+        painter = QPainter(annotated)
+        pen = QPen(QColor(243, 156, 18), 2)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(QRectF(left, top, right - left, bottom - top))
+        painter.end()
+        return annotated
 
     def _has_spore_measurements(self, image_id: int) -> bool:
         measurements = MeasurementDB.get_measurements_for_image(image_id)

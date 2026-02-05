@@ -7,16 +7,18 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                                 QSplitter, QRadioButton, QButtonGroup,
                                 QComboBox,
                                 QListWidget, QListWidgetItem, QGroupBox, QCheckBox,
-                                QDoubleSpinBox, QTabWidget, QDialogButtonBox, QCompleter)
+                                QDoubleSpinBox, QTabWidget, QDialogButtonBox, QCompleter,
+                                QSizePolicy, QAbstractItemView, QFrame)
 from PySide6.QtCore import Signal, Qt, QDateTime, QStringListModel, QEvent
 from PySide6.QtGui import QPixmap, QImage
 from PySide6.QtCore import QUrl
 from pathlib import Path
 import sqlite3
-from database.models import ObservationDB, ImageDB, MeasurementDB, SettingsDB
+from database.models import ObservationDB, ImageDB, MeasurementDB, SettingsDB, CalibrationDB
 from database.schema import get_images_dir, load_objectives
 from utils.thumbnail_generator import get_thumbnail_path, generate_all_sizes
 from utils.image_utils import cleanup_import_temp_file
+from utils.exif_reader import get_image_metadata
 from utils.heic_converter import maybe_convert_heic
 from utils.ml_export import export_coco_format, get_export_summary
 from datetime import datetime
@@ -27,7 +29,18 @@ from utils.vernacular_utils import (
     resolve_vernacular_db_path,
 )
 from .image_gallery_widget import ImageGalleryWidget
-from .image_import_dialog import ImageImportDialog, ImageImportResult
+from .image_import_dialog import ImageImportDialog, ImageImportResult, AIGuessWorker
+
+
+def _parse_observation_datetime(value: str | None) -> QDateTime | None:
+    if not value:
+        return None
+    for fmt in ("yyyy-MM-dd HH:mm", "yyyy-MM-dd HH:mm:ss"):
+        dt_value = QDateTime.fromString(value, fmt)
+        if dt_value.isValid():
+            return dt_value
+    dt_value = QDateTime.fromString(value, Qt.ISODate)
+    return dt_value if dt_value.isValid() else None
 
 
 class SortableTableWidgetItem(QTableWidgetItem):
@@ -262,6 +275,7 @@ class ObservationsTab(QWidget):
         super().__init__(parent)
         self.selected_observation_id = None
         self.map_helper = MapServiceHelper(self)
+        self._ai_suggestions_cache: dict[int, dict] = {}
         self.init_ui()
         self.refresh_observations()
 
@@ -531,6 +545,61 @@ class ObservationsTab(QWidget):
         
         return name_map
 
+    def get_ai_suggestions_for_observation(self, obs_id: int) -> dict | None:
+        """Return cached AI suggestion state for the given observation id."""
+        return self._ai_suggestions_cache.get(obs_id)
+
+    def _remap_ai_state_to_images(
+        self,
+        ai_state: dict | None,
+        image_results: list[ImageImportResult],
+    ) -> dict | None:
+        if not ai_state:
+            return None
+        predictions = ai_state.get("predictions") or {}
+        selected = ai_state.get("selected") or {}
+        prev_paths = ai_state.get("paths") or []
+        if not isinstance(predictions, dict) or not isinstance(selected, dict):
+            return None
+        new_paths = [item.filepath for item in image_results]
+        new_index_by_path = {path: idx for idx, path in enumerate(new_paths) if path}
+        new_predictions: dict[int, list] = {}
+        new_selected: dict[int, dict] = {}
+        for old_idx, preds in predictions.items():
+            try:
+                old_index = int(old_idx)
+            except (TypeError, ValueError):
+                continue
+            old_path = prev_paths[old_index] if 0 <= old_index < len(prev_paths) else None
+            new_index = new_index_by_path.get(old_path)
+            if new_index is not None:
+                new_predictions[new_index] = preds
+        for old_idx, sel in selected.items():
+            try:
+                old_index = int(old_idx)
+            except (TypeError, ValueError):
+                continue
+            old_path = prev_paths[old_index] if 0 <= old_index < len(prev_paths) else None
+            new_index = new_index_by_path.get(old_path)
+            if new_index is not None:
+                new_selected[new_index] = sel
+        selected_index = ai_state.get("selected_index")
+        new_selected_index = None
+        if selected_index is not None:
+            try:
+                old_index = int(selected_index)
+            except (TypeError, ValueError):
+                old_index = None
+            if old_index is not None and 0 <= old_index < len(prev_paths):
+                old_path = prev_paths[old_index]
+                new_selected_index = new_index_by_path.get(old_path)
+        return {
+            "predictions": new_predictions,
+            "selected": new_selected,
+            "selected_index": new_selected_index,
+            "paths": new_paths,
+        }
+
     def _lookup_common_name(self, obs: dict, name_map: dict[tuple[str, str], str | None]) -> str | None:
         """Look up common name from the pre-built cache."""
         stored_name = self._normalize_taxon_text(obs.get("common_name"))
@@ -758,10 +827,18 @@ class ObservationsTab(QWidget):
         if not observation:
             return
 
+        obs_dt = _parse_observation_datetime(observation.get("date"))
+        obs_lat = observation.get("gps_latitude")
+        obs_lon = observation.get("gps_longitude")
+
         existing_images = ImageDB.get_images_for_observation(obs_id)
         image_results = self._build_import_results_from_images(existing_images)
 
         ai_taxon = None
+        ai_state = self._remap_ai_state_to_images(
+            self._ai_suggestions_cache.get(obs_id),
+            image_results,
+        )
         while True:
             dialog = ObservationDetailsDialog(
                 self,
@@ -769,8 +846,11 @@ class ObservationsTab(QWidget):
                 image_results=image_results,
                 allow_edit_images=True,
                 suggested_taxon=ai_taxon,
+                ai_state=ai_state,
             )
             if dialog.exec():
+                ai_state = dialog.get_ai_state()
+                self._ai_suggestions_cache[obs_id] = ai_state
                 data = dialog.get_data()
                 ObservationDB.update_observation(
                     obs_id,
@@ -804,11 +884,22 @@ class ObservationsTab(QWidget):
                 return
 
             if dialog.request_edit_images:
-                image_dialog = ImageImportDialog(self, import_results=image_results)
+                ai_state = dialog.get_ai_state()
+                self._ai_suggestions_cache[obs_id] = ai_state
+                image_dialog = ImageImportDialog(
+                    self,
+                    import_results=image_results,
+                    observation_datetime=obs_dt,
+                    observation_lat=obs_lat,
+                    observation_lon=obs_lon,
+                )
                 if image_dialog.exec():
                     image_results = image_dialog.import_results
                     ai_taxon = image_dialog.get_ai_selected_taxon()
+                    ai_state = self._remap_ai_state_to_images(ai_state, image_results)
                 continue
+            ai_state = dialog.get_ai_state()
+            self._ai_suggestions_cache[obs_id] = ai_state
             return
 
     def create_new_observation(self):
@@ -943,6 +1034,26 @@ class ObservationsTab(QWidget):
         for img in images:
             if not img:
                 continue
+            meta = {}
+            filepath = img.get("filepath")
+            if filepath:
+                meta = get_image_metadata(filepath)
+            dt = meta.get("datetime")
+            captured_at = QDateTime(dt) if dt else None
+            exif_has_gps = meta.get("latitude") is not None or meta.get("longitude") is not None
+            crop_x1 = img.get("ai_crop_x1")
+            crop_y1 = img.get("ai_crop_y1")
+            crop_x2 = img.get("ai_crop_x2")
+            crop_y2 = img.get("ai_crop_y2")
+            ai_crop_box = None
+            if all(v is not None for v in (crop_x1, crop_y1, crop_x2, crop_y2)):
+                ai_crop_box = (float(crop_x1), float(crop_y1), float(crop_x2), float(crop_y2))
+            crop_w = img.get("ai_crop_source_w")
+            crop_h = img.get("ai_crop_source_h")
+            ai_crop_source_size = None
+            if crop_w is not None and crop_h is not None:
+                ai_crop_source_size = (int(crop_w), int(crop_h))
+            gps_source = bool(img.get("gps_source")) if img.get("gps_source") is not None else False
             scale_value = img.get("scale_microns_per_pixel")
             objective_name = img.get("objective_name")
             custom_scale = None
@@ -953,7 +1064,7 @@ class ObservationsTab(QWidget):
                     custom_scale = None
             results.append(
                 ImageImportResult(
-                    filepath=img.get("filepath"),
+                    filepath=filepath,
                     image_id=img.get("id"),
                     image_type=img.get("image_type") or "field",
                     objective=objective_name if objective_name != "Custom" else None,
@@ -961,6 +1072,11 @@ class ObservationsTab(QWidget):
                     contrast=img.get("contrast"),
                     mount_medium=img.get("mount_medium"),
                     sample_type=img.get("sample_type"),
+                    captured_at=captured_at,
+                    exif_has_gps=exif_has_gps,
+                    ai_crop_box=ai_crop_box,
+                    ai_crop_source_size=ai_crop_source_size,
+                    gps_source=gps_source,
                 )
             )
         return results
@@ -1006,7 +1122,10 @@ class ObservationsTab(QWidget):
                     scale=scale,
                     contrast=contrast,
                     mount_medium=mount_medium,
-                    sample_type=sample_type
+                    sample_type=sample_type,
+                    ai_crop_box=result.ai_crop_box,
+                    ai_crop_source_size=result.ai_crop_source_size,
+                    gps_source=result.gps_source,
                 )
                 continue
 
@@ -1016,6 +1135,10 @@ class ObservationsTab(QWidget):
             final_path = maybe_convert_heic(filepath, output_dir)
             if final_path is None:
                 continue
+            # Get the active calibration_id for this objective
+            calibration_id = None
+            if objective_name:
+                calibration_id = CalibrationDB.get_active_calibration_id(objective_name)
             image_id = ImageDB.add_image(
                 observation_id=obs_id,
                 filepath=final_path,
@@ -1024,7 +1147,11 @@ class ObservationsTab(QWidget):
                 objective_name=objective_name,
                 contrast=contrast,
                 mount_medium=mount_medium,
-                sample_type=sample_type
+                sample_type=sample_type,
+                calibration_id=calibration_id,
+                ai_crop_box=result.ai_crop_box,
+                ai_crop_source_size=result.ai_crop_source_size,
+                gps_source=result.gps_source,
             )
 
             stored_path = final_path
@@ -1048,6 +1175,7 @@ class ObservationDetailsDialog(QDialog):
         primary_index: int | None = None,
         allow_edit_images: bool = False,
         suggested_taxon: dict | None = None,
+        ai_state: dict | None = None,
     ):
         super().__init__(parent)
         self.observation = observation
@@ -1061,6 +1189,9 @@ class ObservationDetailsDialog(QDialog):
         self.setWindowTitle("Edit Observation" if self.edit_mode else "New Observation")
         self.setModal(True)
         self.setMinimumSize(900, 720)
+        self._observation_datetime = _parse_observation_datetime(
+            observation.get("date") if observation else None
+        )
         self.image_files = []
         self.image_metadata = []
         self.image_settings = []
@@ -1101,6 +1232,12 @@ class ObservationDetailsDialog(QDialog):
         self._suppress_taxon_autofill = False
         self._last_genus = ""
         self._last_species = ""
+        self._ai_predictions_by_index: dict[int, list[dict]] = {}
+        self._ai_selected_by_index: dict[int, dict] = {}
+        self._ai_selected_taxon: dict | None = None
+        self._ai_thread = None
+        self._ai_selected_index: int | None = None
+        self._apply_ai_state(ai_state)
         self.init_ui()
         if self.edit_mode:
             self._load_existing_observation()
@@ -1112,28 +1249,6 @@ class ObservationDetailsDialog(QDialog):
     def init_ui(self):
         main_layout = QVBoxLayout(self)
         main_layout.setSpacing(10)
-
-        # ===== IMAGES SUMMARY (TOP) =====
-        self.image_gallery = ImageGalleryWidget(
-            self.tr("Images"),
-            self,
-            show_delete=False,
-            show_badges=False,
-            min_height=60,
-            default_height=160,
-            thumbnail_size=110,
-        )
-        items = []
-        for idx, item in enumerate(self.image_results):
-            items.append(
-                {
-                    "filepath": item.filepath,
-                    "preview_path": item.preview_path or item.filepath,
-                    "image_number": idx + 1,
-                }
-            )
-        self.image_gallery.set_items(items)
-        main_layout.addWidget(self.image_gallery)
 
         # ===== OBSERVATION DETAILS SECTION =====
         details_group = QGroupBox(self.tr("Observation Details"))
@@ -1148,75 +1263,20 @@ class ObservationDetailsDialog(QDialog):
         self.datetime_input.setDateTime(QDateTime.currentDateTime())
         self.datetime_input.setDisplayFormat("yyyy-MM-dd HH:mm")
         self.datetime_input.setCalendarPopup(True)
-        self.datetime_input.setStyleSheet(
-            "QDateTimeEdit { font-size: 14pt; font-weight: bold; padding: 8px; }"
-        )
-        self.datetime_input.setMinimumHeight(40)
         self.datetime_input.setMaximumWidth(250)
         datetime_layout.addWidget(self.datetime_input)
         datetime_layout.addStretch()
         details_layout.addRow(self.tr("Date & time:"), datetime_container)
 
-        # Taxonomy tab widget (Species vs Unknown)
-        self.taxonomy_tabs = QTabWidget()
-        self.taxonomy_tabs.setMinimumHeight(120)
-        self.taxonomy_tabs.currentChanged.connect(self.on_taxonomy_tab_changed)
-
-        # Tab 1: Identified (vernacular + genus/species)
-        identified_tab = QWidget()
-        identified_layout = QVBoxLayout(identified_tab)
-        identified_layout.setContentsMargins(8, 8, 8, 8)
-        identified_layout.setSpacing(6)
-
-        vern_row = QHBoxLayout()
-        self.vernacular_label = QLabel(self._vernacular_label())
-        vern_row.addWidget(self.vernacular_label)
-        self.vernacular_input = QLineEdit()
-        self.vernacular_input.setPlaceholderText(self._vernacular_placeholder())
-        vern_row.addWidget(self.vernacular_input, 1)
-        identified_layout.addLayout(vern_row)
-
-        taxon_row = QHBoxLayout()
-        taxon_row.setSpacing(8)
-        taxon_row.addWidget(QLabel("Genus:"))
-        self.genus_input = QLineEdit()
-        self.genus_input.setPlaceholderText("e.g., Flammulina")
-        taxon_row.addWidget(self.genus_input, 1)
-
-        taxon_row.addWidget(QLabel("Species:"))
-        self.species_input = QLineEdit()
-        self.species_input.setPlaceholderText("e.g., velutipes")
-        taxon_row.addWidget(self.species_input, 1)
-
-        self.uncertain_checkbox = QCheckBox(self.tr("Uncertain"))
-        self.uncertain_checkbox.setToolTip(
-            "Check this if you're not confident about the identification"
-        )
-        taxon_row.addWidget(self.uncertain_checkbox)
-        identified_layout.addLayout(taxon_row)
-
-        self.taxonomy_tabs.addTab(identified_tab, self.tr("Species"))
-
-        # Tab 2: Unknown (working title only)
-        unknown_tab = QWidget()
-        unknown_layout = QHBoxLayout(unknown_tab)
-        unknown_layout.setContentsMargins(8, 8, 8, 8)
-        unknown_layout.setSpacing(8)
-
-        unknown_layout.addWidget(QLabel("Working title:"))
-        self.title_input = QLineEdit()
-        self.title_input.setPlaceholderText("e.g., Brown gilled mushroom, Unknown 1")
-        unknown_layout.addWidget(self.title_input, 1)
-        unknown_layout.addStretch()
-
-        self.taxonomy_tabs.addTab(unknown_tab, self.tr("Unknown"))
-
-        details_layout.addRow("Taxonomy:", self.taxonomy_tabs)
-
         # Location (text)
         self.location_input = QLineEdit()
         self.location_input.setPlaceholderText("e.g., Bymarka, Trondheim")
         details_layout.addRow(self.tr("Location:"), self.location_input)
+
+        gps_container = QWidget()
+        gps_container_layout = QVBoxLayout(gps_container)
+        gps_container_layout.setContentsMargins(0, 0, 0, 0)
+        gps_container_layout.setSpacing(2)
 
         # GPS Coordinates
         gps_layout = QHBoxLayout()
@@ -1249,12 +1309,14 @@ class ObservationDetailsDialog(QDialog):
         self.lon_input.valueChanged.connect(self._update_map_button)
 
         gps_layout.addStretch()
-        details_layout.addRow("GPS:", gps_layout)
+        gps_container_layout.addLayout(gps_layout)
 
         # GPS info label (shows source of coordinates)
         self.gps_info_label = QLabel("")
         self.gps_info_label.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
-        details_layout.addRow("", self.gps_info_label)
+        gps_container_layout.addWidget(self.gps_info_label)
+
+        details_layout.addRow("GPS:", gps_container)
 
         # Habitat
         self.habitat_input = QLineEdit()
@@ -1263,21 +1325,135 @@ class ObservationDetailsDialog(QDialog):
 
         # Notes
         self.notes_input = QTextEdit()
-        self.notes_input.setMaximumHeight(80)
+        self.notes_input.setMaximumHeight(60)
+        self.notes_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.notes_input.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
+        self.notes_input.setStyleSheet("QTextEdit { border: 1px solid #bdc3c7; border-radius: 3px; }")
         self.notes_input.setPlaceholderText(self.tr("Any additional notes..."))
         details_layout.addRow(self.tr("Notes:"), self.notes_input)
 
-        # Info about folder structure
-        images_root = get_images_dir()
-        info_path = f"{images_root}\\[genus]\\[species] - [date time]"
-        info_label = QLabel(
-            f"<small><i>{self.tr('Images will be stored in: {path}').format(path=info_path)}</i></small>"
-        )
-        info_label.setStyleSheet("color: #7f8c8d;")
-        details_layout.addRow("", info_label)
-
         details_group.setLayout(details_layout)
         main_layout.addWidget(details_group)
+
+        # ===== TAXONOMY SECTION =====
+        taxonomy_group = QGroupBox(self.tr("Taxonomy"))
+        taxonomy_layout = QHBoxLayout(taxonomy_group)
+        taxonomy_layout.setContentsMargins(8, 8, 8, 8)
+        taxonomy_layout.setSpacing(8)
+
+        taxonomy_split = QSplitter(Qt.Horizontal)
+        taxonomy_split.setChildrenCollapsible(False)
+
+        left_container = QWidget()
+        left_layout = QVBoxLayout(left_container)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(6)
+
+        # Taxonomy tab widget (Species vs Unknown)
+        self.taxonomy_tabs = QTabWidget()
+        self.taxonomy_tabs.setMinimumHeight(120)
+        self.taxonomy_tabs.currentChanged.connect(self.on_taxonomy_tab_changed)
+
+        # Tab 1: Identified (vernacular + genus/species)
+        identified_tab = QWidget()
+        identified_layout = QVBoxLayout(identified_tab)
+        identified_layout.setContentsMargins(8, 8, 8, 8)
+        identified_layout.setSpacing(6)
+
+        vern_row = QHBoxLayout()
+        self.vernacular_label = QLabel(self._vernacular_label())
+        vern_row.addWidget(self.vernacular_label)
+        self.vernacular_input = QLineEdit()
+        self.vernacular_input.setPlaceholderText(self._vernacular_placeholder())
+        vern_row.addWidget(self.vernacular_input, 1)
+        identified_layout.addLayout(vern_row)
+
+        genus_row = QHBoxLayout()
+        genus_row.addWidget(QLabel("Genus:"))
+        self.genus_input = QLineEdit()
+        self.genus_input.setPlaceholderText("e.g., Flammulina")
+        genus_row.addWidget(self.genus_input, 1)
+        identified_layout.addLayout(genus_row)
+
+        species_row = QHBoxLayout()
+        species_row.addWidget(QLabel("Species:"))
+        self.species_input = QLineEdit()
+        self.species_input.setPlaceholderText("e.g., velutipes")
+        species_row.addWidget(self.species_input, 1)
+        identified_layout.addLayout(species_row)
+
+        uncertain_row = QHBoxLayout()
+        self.uncertain_checkbox = QCheckBox(self.tr("Uncertain"))
+        self.uncertain_checkbox.setToolTip(
+            "Check this if you're not confident about the identification"
+        )
+        uncertain_row.addWidget(self.uncertain_checkbox)
+        uncertain_row.addStretch()
+        identified_layout.addLayout(uncertain_row)
+
+        self.taxonomy_tabs.addTab(identified_tab, self.tr("Species"))
+
+        # Tab 2: Unknown (working title only)
+        unknown_tab = QWidget()
+        unknown_layout = QHBoxLayout(unknown_tab)
+        unknown_layout.setContentsMargins(8, 8, 8, 8)
+        unknown_layout.setSpacing(8)
+
+        unknown_layout.addWidget(QLabel("Working title:"))
+        self.title_input = QLineEdit()
+        self.title_input.setPlaceholderText("e.g., Brown gilled mushroom, Unknown 1")
+        unknown_layout.addWidget(self.title_input, 1)
+        unknown_layout.addStretch()
+
+        self.taxonomy_tabs.addTab(unknown_tab, self.tr("Unknown"))
+
+        left_layout.addWidget(self.taxonomy_tabs)
+        taxonomy_split.addWidget(left_container)
+
+        self.ai_group = self._build_ai_suggestions_group()
+        taxonomy_split.addWidget(self.ai_group)
+        taxonomy_split.setStretchFactor(0, 7)
+        taxonomy_split.setStretchFactor(1, 3)
+        taxonomy_split.setSizes([700, 300])
+
+        taxonomy_layout.addWidget(taxonomy_split)
+        main_layout.addWidget(taxonomy_group)
+
+        # ===== IMAGES SUMMARY (BOTTOM) =====
+        self.image_gallery = ImageGalleryWidget(
+            self.tr("Images"),
+            self,
+            show_delete=False,
+            show_badges=False,
+            min_height=60,
+            default_height=160,
+            thumbnail_size=110,
+        )
+        self._gps_source_index = self._resolve_gps_source_index()
+        items = []
+        for idx, item in enumerate(self.image_results):
+            thumb_preview = None
+            if item.image_id:
+                thumb_preview = get_thumbnail_path(item.image_id, "224x224")
+                if thumb_preview and not Path(thumb_preview).exists():
+                    thumb_preview = None
+            gps_match = idx == self._gps_source_index and item.exif_has_gps
+            items.append(
+                {
+                    "id": item.image_id,
+                    "filepath": item.filepath,
+                    "preview_path": thumb_preview or item.preview_path or item.filepath,
+                    "image_number": idx + 1,
+                    "crop_box": item.ai_crop_box,
+                    "crop_source_size": item.ai_crop_source_size,
+                    "gps_tag_text": self.tr("GPS") if gps_match else None,
+                    "gps_tag_highlight": gps_match,
+                }
+            )
+        self.image_gallery.set_items(items)
+        self.image_gallery.imageClicked.connect(self._on_gallery_image_clicked)
+        self.image_gallery.imageSelected.connect(self._on_gallery_image_clicked)
+        main_layout.addWidget(self.image_gallery)
 
         # ===== BOTTOM BUTTONS =====
         bottom_buttons = QHBoxLayout()
@@ -1304,7 +1480,371 @@ class ObservationDetailsDialog(QDialog):
         self._setup_vernacular_autocomplete()
 
         self.on_taxonomy_tab_changed(self.taxonomy_tabs.currentIndex())
+        self._select_initial_ai_image()
+        self._update_ai_controls_state()
+        self._update_ai_table()
         self._update_datetime_width()
+
+    def _build_ai_suggestions_group(self) -> QGroupBox:
+        ai_group = QGroupBox(self.tr("AI suggestions"))
+        ai_layout = QVBoxLayout(ai_group)
+        ai_layout.setContentsMargins(6, 6, 6, 6)
+
+        ai_controls = QHBoxLayout()
+        self.ai_guess_btn = QPushButton(self.tr("Guess"))
+        self.ai_guess_btn.setToolTip(self.tr("Send image to Artsorakelet"))
+        self.ai_guess_btn.clicked.connect(self._on_ai_guess_clicked)
+        self.ai_crop_btn = QPushButton(self.tr("Crop"))
+        self.ai_crop_btn.setToolTip(self.tr("Crop not available yet"))
+        self.ai_crop_btn.clicked.connect(self._on_ai_crop_clicked)
+        self.ai_guess_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.ai_crop_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        ai_controls.addWidget(self.ai_guess_btn)
+        ai_controls.addWidget(self.ai_crop_btn)
+        ai_controls.setStretch(0, 1)
+        ai_controls.setStretch(1, 1)
+        ai_layout.addLayout(ai_controls)
+
+        self.ai_table = QTableWidget(0, 3)
+        self.ai_table.setHorizontalHeaderLabels([self.tr("Suggested species"), "Match", "Link"])
+        self.ai_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.ai_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.ai_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.ai_table.verticalHeader().setVisible(False)
+        self.ai_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.ai_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.ai_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.ai_table.setMinimumHeight(140)
+        self.ai_table.setStyleSheet(
+            "QTableWidget::item:selected { background-color: #1f5aa6; color: white; font-weight: bold; }"
+            "QTableWidget::item:selected:!active { background-color: #2f74c0; color: white; font-weight: bold; }"
+        )
+        self.ai_table.itemSelectionChanged.connect(self._on_ai_selection_changed)
+        ai_layout.addWidget(self.ai_table)
+
+        self.ai_status_label = QLabel("")
+        self.ai_status_label.setWordWrap(True)
+        self.ai_status_label.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
+        ai_layout.addWidget(self.ai_status_label)
+
+        self.ai_copy_btn = QPushButton(self.tr("Copy to taxonomy"))
+        self.ai_copy_btn.clicked.connect(self._on_ai_copy_to_taxonomy)
+        self.ai_copy_btn.setVisible(False)
+        ai_layout.addWidget(self.ai_copy_btn)
+
+        return ai_group
+
+    def _apply_ai_state(self, ai_state: dict | None) -> None:
+        if not ai_state:
+            return
+        predictions = ai_state.get("predictions")
+        selected = ai_state.get("selected")
+        selected_index = ai_state.get("selected_index")
+        if isinstance(predictions, dict):
+            remapped: dict[int, list] = {}
+            for key, value in predictions.items():
+                try:
+                    remapped[int(key)] = value
+                except (TypeError, ValueError):
+                    continue
+            self._ai_predictions_by_index = remapped
+        if isinstance(selected, dict):
+            remapped_selected: dict[int, dict] = {}
+            for key, value in selected.items():
+                try:
+                    remapped_selected[int(key)] = value
+                except (TypeError, ValueError):
+                    continue
+            self._ai_selected_by_index = remapped_selected
+        if isinstance(selected_index, int):
+            self._ai_selected_index = selected_index
+
+    def get_ai_state(self) -> dict:
+        return {
+            "predictions": dict(self._ai_predictions_by_index),
+            "selected": dict(self._ai_selected_by_index),
+            "selected_index": self._ai_selected_index,
+            "paths": [item.filepath for item in self.image_results],
+        }
+
+    def _select_initial_ai_image(self) -> None:
+        index = self._current_ai_index()
+        if index is None:
+            return
+        self._ai_selected_index = index
+        if 0 <= index < len(self.image_results):
+            path = self.image_results[index].filepath
+            if path:
+                self.image_gallery.select_paths([path])
+        self._update_ai_controls_state()
+        self._update_ai_table()
+
+    def _current_ai_index(self) -> int | None:
+        if self._ai_selected_index is not None:
+            if 0 <= self._ai_selected_index < len(self.image_results):
+                return self._ai_selected_index
+            self._ai_selected_index = None
+        if self.primary_index is not None and 0 <= self.primary_index < len(self.image_results):
+            return self.primary_index
+        if self.image_results:
+            return 0
+        return None
+
+    def _on_gallery_image_clicked(self, _image_id, path: str) -> None:
+        if not path:
+            return
+        for idx, item in enumerate(self.image_results):
+            if item.filepath == path:
+                self._ai_selected_index = idx
+                self.image_gallery.select_paths([path])
+                self._update_ai_controls_state()
+                self._update_ai_table()
+                return
+
+    def _update_ai_controls_state(self) -> None:
+        if not hasattr(self, "ai_guess_btn"):
+            return
+        index = self._current_ai_index()
+        enable = False
+        if index is not None and 0 <= index < len(self.image_results):
+            image_type = (self.image_results[index].image_type or "field").strip().lower()
+            enable = image_type == "field"
+        if self._ai_thread is not None:
+            enable = False
+        self.ai_guess_btn.setEnabled(enable)
+        self.ai_crop_btn.setEnabled(enable)
+
+    def _update_ai_table(self) -> None:
+        if not hasattr(self, "ai_table"):
+            return
+        index = self._current_ai_index()
+        self.ai_table.setRowCount(0)
+        if index is None:
+            self._set_ai_copy_visible(False)
+            return
+        predictions = self._ai_predictions_by_index.get(index, [])
+        for row, pred in enumerate(predictions):
+            taxon = pred.get("taxon", {})
+            display_name = self._format_ai_taxon_name(taxon)
+            confidence = pred.get("probability", 0.0)
+            name_item = QTableWidgetItem(display_name)
+            name_item.setData(Qt.UserRole, pred)
+            conf_item = QTableWidgetItem(f"{confidence:.1%}")
+            link_widget = self._build_adb_link_widget(self._ai_prediction_link(pred, taxon))
+            self.ai_table.insertRow(row)
+            self.ai_table.setItem(row, 0, name_item)
+            self.ai_table.setItem(row, 1, conf_item)
+            if link_widget:
+                self.ai_table.setCellWidget(row, 2, link_widget)
+        if predictions:
+            selected = self._ai_selected_by_index.get(index)
+            if selected:
+                for row in range(self.ai_table.rowCount()):
+                    item = self.ai_table.item(row, 0)
+                    if item and item.data(Qt.UserRole) == selected:
+                        self.ai_table.selectRow(row)
+                        break
+            else:
+                self.ai_table.selectRow(0)
+        else:
+            self._ai_selected_taxon = None
+            self._set_ai_copy_visible(False)
+
+    def _format_ai_taxon_name(self, taxon: dict) -> str:
+        scientific = taxon.get("scientificName") or taxon.get("scientific_name") or taxon.get("name") or ""
+        vernacular = ""
+        vernacular_names = taxon.get("vernacularNames") or {}
+        lang = normalize_vernacular_language(SettingsDB.get_setting("vernacular_language", "no"))
+        if isinstance(vernacular_names, dict) and lang:
+            vernacular = vernacular_names.get(lang, "")
+        if not vernacular:
+            vernacular = taxon.get("vernacularName") or ""
+        return vernacular or scientific or self.tr("Unknown")
+
+    def _ai_prediction_link(self, pred: dict, taxon: dict) -> str | None:
+        if isinstance(pred, dict):
+            for key in ("infoURL", "infoUrl", "info_url"):
+                value = pred.get(key)
+                if isinstance(value, str) and value.startswith("http"):
+                    return value
+        if not isinstance(taxon, dict):
+            return None
+        for key in ("url", "link", "href", "uri"):
+            value = taxon.get(key)
+            if isinstance(value, str) and value.startswith("http"):
+                return value
+        taxon_id = (
+            taxon.get("taxonId")
+            or taxon.get("taxon_id")
+            or taxon.get("TaxonId")
+            or taxon.get("id")
+        )
+        if taxon_id:
+            return f"https://artsdatabanken.no/Taxon/{taxon_id}"
+        return "https://artsdatabanken.no"
+
+    def _build_adb_link_widget(self, url: str | None) -> QLabel | None:
+        if not url:
+            return None
+        label = QLabel(f'<a href="{url}">AdB</a>')
+        label.setTextFormat(Qt.RichText)
+        label.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        label.setOpenExternalLinks(True)
+        label.setAlignment(Qt.AlignCenter)
+        label.setStyleSheet("QLabel { padding: 2px 6px; }")
+        return label
+
+    def _on_ai_selection_changed(self) -> None:
+        index = self._current_ai_index()
+        if index is None:
+            return
+        selected_items = self.ai_table.selectedItems()
+        if not selected_items:
+            self._ai_selected_taxon = None
+            self._set_ai_status(None)
+            self._set_ai_copy_visible(False)
+            return
+        row_item = self.ai_table.item(self.ai_table.currentRow(), 0)
+        if not row_item:
+            return
+        pred = row_item.data(Qt.UserRole) or {}
+        self._ai_selected_by_index[index] = pred
+        self._ai_selected_taxon = pred.get("taxon") or {}
+        self._set_ai_status(None)
+        self._set_ai_copy_visible(True)
+
+    def _set_ai_status(self, text: str | None, color: str = "#7f8c8d") -> None:
+        if not hasattr(self, "ai_status_label"):
+            return
+        if not text:
+            self.ai_status_label.setText("")
+            return
+        self.ai_status_label.setText(text)
+        self.ai_status_label.setStyleSheet(f"color: {color}; font-size: 9pt;")
+        self._set_ai_copy_visible(False)
+
+    def _set_ai_copy_visible(self, visible: bool) -> None:
+        if hasattr(self, "ai_copy_btn"):
+            self.ai_copy_btn.setVisible(bool(visible))
+
+    def _extract_genus_species_from_taxon(self, taxon: dict) -> tuple[str | None, str | None]:
+        if not isinstance(taxon, dict):
+            return None, None
+        genus = taxon.get("genus") or taxon.get("genusName") or taxon.get("genus_name")
+        species = (
+            taxon.get("species")
+            or taxon.get("specificEpithet")
+            or taxon.get("specific_epithet")
+        )
+        if genus and species:
+            return str(genus).strip(), str(species).strip()
+        sci = taxon.get("scientificName") or taxon.get("scientific_name") or taxon.get("name")
+        if sci and isinstance(sci, str):
+            parts = sci.strip().split()
+            if len(parts) >= 2:
+                return parts[0], parts[1]
+        return None, None
+
+    def _on_ai_copy_to_taxonomy(self) -> None:
+        taxon = self._ai_selected_taxon or {}
+        genus, species = self._extract_genus_species_from_taxon(taxon)
+        if not genus or not species:
+            self._set_ai_status(self.tr("Could not parse genus/species from AI suggestion."), "#e67e22")
+            return
+        if hasattr(self, "taxonomy_tabs"):
+            self.taxonomy_tabs.setCurrentIndex(0)
+        if hasattr(self, "unknown_checkbox") and self.unknown_checkbox.isChecked():
+            self.unknown_checkbox.setChecked(False)
+        self._suppress_taxon_autofill = True
+        if hasattr(self, "genus_input"):
+            self.genus_input.setText(genus)
+        if hasattr(self, "species_input"):
+            self.species_input.setText(species)
+        if hasattr(self, "vernacular_input"):
+            self.vernacular_input.clear()
+        self._suppress_taxon_autofill = False
+        if self.vernacular_db:
+            self._update_vernacular_suggestions_for_taxon()
+            self._maybe_set_vernacular_from_taxon()
+        else:
+            vernacular = self._preferred_vernacular_from_taxon(taxon)
+            if vernacular and hasattr(self, "vernacular_input") and not self.vernacular_input.text().strip():
+                self.vernacular_input.setText(vernacular)
+        self._set_ai_status(self.tr("Copied to taxonomy."), "#27ae60")
+
+    def _on_ai_crop_clicked(self) -> None:
+        return
+
+    def _on_ai_guess_clicked(self) -> None:
+        try:
+            index = self._current_ai_index()
+            if index is None or index < 0 or index >= len(self.image_results):
+                return
+            result = self.image_results[index]
+            image_type = (result.image_type or "field").strip().lower()
+            if image_type != "field":
+                self._set_ai_status(self.tr("AI guess only works for field photos"), "#e74c3c")
+                return
+            image_path = result.filepath
+            if not image_path:
+                return
+            if self._ai_thread is not None:
+                return
+            self.ai_guess_btn.setEnabled(False)
+            self.ai_guess_btn.setText(self.tr("AI guessing..."))
+            self._set_ai_status(self.tr("Sending image to Artsdatabanken AI..."), "#3498db")
+            temp_dir = get_images_dir() / "imports"
+            crop_box = getattr(result, "ai_crop_box", None)
+            self._ai_thread = AIGuessWorker(index, image_path, crop_box, temp_dir, max_dim=1600, parent=self)
+            self._ai_thread.resultReady.connect(self._on_ai_guess_finished)
+            self._ai_thread.error.connect(self._on_ai_guess_error)
+            self._ai_thread.finished.connect(self._ai_thread.deleteLater)
+            self._ai_thread.finished.connect(self._on_ai_thread_finished)
+            self._ai_thread.start()
+        except Exception as exc:
+            self._set_ai_status(self.tr("AI guess failed: {message}").format(message=str(exc)), "#e74c3c")
+            if hasattr(self, "ai_guess_btn"):
+                self.ai_guess_btn.setEnabled(True)
+                self.ai_guess_btn.setText(self.tr("Guess"))
+
+    def _on_ai_thread_finished(self) -> None:
+        self._ai_thread = None
+        if hasattr(self, "ai_guess_btn"):
+            self.ai_guess_btn.setText(self.tr("Guess"))
+        self._update_ai_controls_state()
+
+    def closeEvent(self, event):
+        if self._ai_thread is not None:
+            try:
+                self._ai_thread.quit()
+                self._ai_thread.wait(1000)
+            except Exception:
+                pass
+        super().closeEvent(event)
+
+    def _on_ai_guess_finished(
+        self,
+        index: int,
+        predictions: list,
+        _box: object,
+        _warnings: object,
+        _temp_path: str,
+    ) -> None:
+        self._ai_predictions_by_index[index] = predictions or []
+        self._update_ai_table()
+        if predictions:
+            self._set_ai_status(self.tr("AI suggestion updated"), "#27ae60")
+        else:
+            self._set_ai_status(self.tr("No AI suggestions found"), "#7f8c8d")
+        self._update_ai_controls_state()
+
+    def _on_ai_guess_error(self, _index: int, message: str) -> None:
+        if "500" in message:
+            hint = self.tr("AI guess failed: server error (500). Try again later.")
+        else:
+            hint = self.tr("AI guess failed: {message}").format(message=message)
+        self._set_ai_status(hint, "#e74c3c")
+        self._update_ai_controls_state()
 
     def _on_edit_images_clicked(self):
         self.request_edit_images = True
@@ -1322,11 +1862,19 @@ class ObservationDetailsDialog(QDialog):
             self.lat_input.setValue(result.gps_latitude)
         if result.gps_longitude is not None:
             self.lon_input.setValue(result.gps_longitude)
-        if result.gps_source:
-            self.gps_info_label.setText(self.tr("From: {source}").format(source=result.gps_source))
+        source_name = ""
+        if getattr(self, "_gps_source_index", None) is not None:
+            idx = self._gps_source_index
+            if idx is not None and 0 <= idx < len(self.image_results):
+                source_name = Path(self.image_results[idx].filepath).name if self.image_results[idx].filepath else ""
+        if not source_name:
+            source_name = Path(result.filepath).name if result.filepath else ""
+        if result.gps_latitude is not None or result.gps_longitude is not None:
+            self.gps_info_label.setText(
+                self.tr("From: {source}").format(source=source_name) if source_name else ""
+            )
         else:
-            source = Path(result.filepath).name if result.filepath else ""
-            self.gps_info_label.setText(self.tr("From: {source}").format(source=source) if source else "")
+            self.gps_info_label.setText("")
         self._update_map_button()
 
     def _apply_suggested_taxon(self):
@@ -1773,6 +2321,32 @@ class ObservationDetailsDialog(QDialog):
             target = max(220, int(self.width() * 0.5))
             self.datetime_input.setFixedWidth(target)
 
+    def _resolve_gps_source_index(self) -> int | None:
+        source_idx = None
+        for idx, item in enumerate(self.image_results):
+            if getattr(item, "gps_source", False):
+                source_idx = idx
+                break
+        if source_idx is not None:
+            for i, item in enumerate(self.image_results):
+                item.gps_source = i == source_idx
+            return source_idx
+        if not self._observation_datetime:
+            return None
+        for idx, item in enumerate(self.image_results):
+            if item.exif_has_gps and self._matches_observation_datetime(item.captured_at):
+                return idx
+        return None
+
+    def _matches_observation_datetime(self, dt: QDateTime | None) -> bool:
+        if not dt or not self._observation_datetime:
+            return False
+        if not dt.isValid() or not self._observation_datetime.isValid():
+            return False
+        obs_minutes = int(self._observation_datetime.toSecsSinceEpoch() / 60)
+        img_minutes = int(dt.toSecsSinceEpoch() / 60)
+        return obs_minutes == img_minutes
+
     def _vernacular_label(self) -> str:
         lang = normalize_vernacular_language(SettingsDB.get_setting("vernacular_language", "no"))
         base = self.tr("Common name")
@@ -2180,8 +2754,8 @@ class ObservationDetailsDialog(QDialog):
 
         date_str = obs.get("date")
         if date_str:
-            dt = QDateTime.fromString(date_str, "yyyy-MM-dd HH:mm")
-            if dt.isValid():
+            dt = _parse_observation_datetime(date_str)
+            if dt and dt.isValid():
                 self.datetime_input.setDateTime(dt)
 
         genus = obs.get("genus") or ""

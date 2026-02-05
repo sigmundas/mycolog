@@ -8,7 +8,7 @@ from database.schema import init_database, get_app_settings, update_app_settings
 from database.models import SettingsDB
 from ui.main_window import MainWindow
 
-APP_VERSION = "0.3.1"
+APP_VERSION = "0.4.0"
 
 
 def _create_splash(app: QApplication, version: str) -> QSplashScreen | None:

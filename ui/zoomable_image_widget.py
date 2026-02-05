@@ -29,6 +29,7 @@ class ZoomableImageLabel(QLabel):
         self.objective_text = ""
         self.objective_color = QColor(52, 152, 219)
         self.measure_color = QColor(52, 152, 219)
+        self.show_line_endcaps = True
         self.show_measure_labels = False
         self.measurement_labels = []
         self.show_scale_bar = False
@@ -214,6 +215,11 @@ class ZoomableImageLabel(QLabel):
     def set_measurement_color(self, color):
         """Set the color for measurement overlays."""
         self.measure_color = QColor(color)
+        self.update()
+
+    def set_show_line_endcaps(self, show_endcaps: bool):
+        """Toggle perpendicular end marks for measurement lines."""
+        self.show_line_endcaps = bool(show_endcaps)
         self.update()
 
     def set_microns_per_pixel(self, mpp):
@@ -886,11 +892,29 @@ class ZoomableImageLabel(QLabel):
             top = display_rect.y() + min(y1, y2) * self.zoom_level
             right = display_rect.x() + max(x1, x2) * self.zoom_level
             bottom = display_rect.y() + max(y1, y2) * self.zoom_level
-            crop_pen = QPen(QColor(243, 156, 18), 2)
+            crop_color = QColor(243, 156, 18)
+            crop_pen = QPen(crop_color, 2)
             crop_pen.setStyle(Qt.DashLine)
             painter.setPen(crop_pen)
             painter.setBrush(Qt.NoBrush)
             painter.drawRect(QRectF(left, top, right - left, bottom - top))
+
+            tag_text = "Crop"
+            metrics = painter.fontMetrics()
+            text_w = metrics.horizontalAdvance(tag_text)
+            text_h = metrics.height()
+            tag_padding = 4
+            tag_w = text_w + tag_padding * 2
+            tag_h = text_h + tag_padding
+            tag_x = max(display_rect.x(), min(left, display_rect.x() + display_rect.width() - tag_w))
+            tag_y = max(0, top - tag_h - 4)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(crop_color)
+            painter.drawRect(QRectF(tag_x, tag_y, tag_w, tag_h))
+            painter.setPen(QColor(255, 255, 255))
+            text_x = tag_x + tag_padding
+            text_y = tag_y + tag_padding + metrics.ascent()
+            painter.drawText(int(text_x), int(text_y), tag_text)
 
         # Draw measurement rectangles
         if self.show_measure_overlays and self.measurement_rectangles:
@@ -934,27 +958,28 @@ class ZoomableImageLabel(QLabel):
                 painter.setPen(thin_pen)
                 painter.drawLine(int(p1_x), int(p1_y), int(p2_x), int(p2_y))
 
-                # Calculate perpendicular direction
-                dx = p2_x - p1_x
-                dy = p2_y - p1_y
-                length = math.sqrt(dx**2 + dy**2)
-                if length > 0:
-                    # Normalized perpendicular vector
-                    perp_x = -dy / length
-                    perp_y = dx / length
+                if self.show_line_endcaps:
+                    # Calculate perpendicular direction
+                    dx = p2_x - p1_x
+                    dy = p2_y - p1_y
+                    length = math.sqrt(dx**2 + dy**2)
+                    if length > 0:
+                        # Normalized perpendicular vector
+                        perp_x = -dy / length
+                        perp_y = dx / length
 
-                    # End mark length (5 pixels on each side)
-                    mark_len = 5
+                        # End mark length (5 pixels on each side)
+                        mark_len = 5
 
-                    # Draw perpendicular marks at both ends
-                    painter.drawLine(
-                        int(p1_x - perp_x * mark_len), int(p1_y - perp_y * mark_len),
-                        int(p1_x + perp_x * mark_len), int(p1_y + perp_y * mark_len)
-                    )
-                painter.drawLine(
-                    int(p2_x - perp_x * mark_len), int(p2_y - perp_y * mark_len),
-                    int(p2_x + perp_x * mark_len), int(p2_y + perp_y * mark_len)
-                )
+                        # Draw perpendicular marks at both ends
+                        painter.drawLine(
+                            int(p1_x - perp_x * mark_len), int(p1_y - perp_y * mark_len),
+                            int(p1_x + perp_x * mark_len), int(p1_y + perp_y * mark_len)
+                        )
+                        painter.drawLine(
+                            int(p2_x - perp_x * mark_len), int(p2_y - perp_y * mark_len),
+                            int(p2_x + perp_x * mark_len), int(p2_y + perp_y * mark_len)
+                        )
                 if idx == self.hover_line_index or (
                     not self.measurement_active and idx in self.selected_line_indices
                 ):
