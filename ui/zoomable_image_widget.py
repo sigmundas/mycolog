@@ -23,6 +23,7 @@ class ZoomableImageLabel(QLabel):
         self._preview_tag_text = ""
         self._full_loaded = False
         self.measurement_lines = []
+        self.debug_line_layers = []
         self.measurement_rectangles = []
         self.preview_line = None  # Temporary line being drawn
         self.preview_rect = None  # Temporary rectangle preview
@@ -62,6 +63,7 @@ class ZoomableImageLabel(QLabel):
         self.crop_start = None
         self.crop_box = None
         self.crop_preview = None
+        self.crop_aspect_ratio = None
 
     def set_image_sources(self, pixmap, full_path=None, preview_scaled=False):
         """Set image with optional full-resolution source."""
@@ -164,6 +166,30 @@ class ZoomableImageLabel(QLabel):
         painter.drawText(int(-text_w / 2), int(text_h / 2), text)
         painter.restore()
 
+    def _draw_rotated_label_on_line(self, painter, a, b, text, padding_px=4.0):
+        """Draw centered, rotated text along a line with a small offset."""
+        dx = b.x() - a.x()
+        dy = b.y() - a.y()
+        length = math.sqrt(dx * dx + dy * dy)
+        if length <= 0:
+            return
+        angle_deg = math.degrees(math.atan2(dy, dx))
+        if angle_deg > 90 or angle_deg < -90:
+            angle_deg += 180
+        mid = QPointF((a.x() + b.x()) / 2, (a.y() + b.y()) / 2)
+        perp_x = -dy / length
+        perp_y = dx / length
+        metrics = painter.fontMetrics()
+        text_w = metrics.horizontalAdvance(text)
+        text_h = metrics.height()
+        offset = (text_h / 2) + padding_px
+        label_pos = QPointF(mid.x() + perp_x * offset, mid.y() + perp_y * offset)
+        painter.save()
+        painter.translate(label_pos.x(), label_pos.y())
+        painter.rotate(angle_deg)
+        painter.drawText(int(-text_w / 2), int(text_h / 2), text)
+        painter.restore()
+
     def _label_positions_from_lines(self, line1, line2, center, offset):
         """Return label positions using the same logic as the preview widget."""
         corners = self._compute_corners_from_lines(line1, line2)
@@ -195,21 +221,35 @@ class ZoomableImageLabel(QLabel):
         top_mid = _offset_from_edge(corners[0], corners[1], center)
         return left_mid, top_mid
 
-    def set_image(self, pixmap):
-        """Set the image to display, fitting it to the widget."""
+    def set_image(self, pixmap, preserve_view: bool = False):
+        """Set the image to display, optionally preserving zoom/pan."""
         self.original_pixmap = pixmap
         self._full_image_path = None
         self._preview_is_scaled = False
         self._preview_tag_text = ""
         self._full_loaded = True if pixmap else False
-        self.pan_offset = QPointF(0, 0)
-        # Fit image to screen by default
-        self.reset_view()
+        if not pixmap:
+            self.zoom_level = 1.0
+            self.pan_offset = QPointF(0, 0)
+            self.update()
+            return
+        if not preserve_view:
+            self.pan_offset = QPointF(0, 0)
+            # Fit image to screen by default
+            self.reset_view()
+        else:
+            self.zoom_level = max(self.min_zoom, min(self.max_zoom, self.zoom_level))
+            self.update()
 
     def set_measurement_lines(self, lines):
         """Set the measurement lines to draw."""
         self.measurement_lines = lines
         self.hover_line_index = -1
+        self.update()
+
+    def set_debug_lines(self, layers):
+        """Set debug line layers to draw (list of {lines, color, width, show_endcaps})."""
+        self.debug_line_layers = layers or []
         self.update()
 
     def set_measurement_color(self, color):
@@ -297,6 +337,10 @@ class ZoomableImageLabel(QLabel):
         self.crop_box = box
         self.update()
 
+    def set_crop_aspect_ratio(self, ratio):
+        """Set a fixed crop aspect ratio (width/height). Use None to disable."""
+        self.crop_aspect_ratio = ratio if ratio and ratio > 0 else None
+
     def clear_crop_box(self):
         """Clear current crop box."""
         self.crop_box = None
@@ -361,6 +405,16 @@ class ZoomableImageLabel(QLabel):
         self.zoom_level = min(scale_x, scale_y, 1.0)  # Don't zoom in beyond 1.0
 
         # Reset pan to center
+        self.pan_offset = QPointF(0, 0)
+        self.update()
+
+    def set_zoom_1_to_1(self):
+        """Set zoom so that 1 image pixel equals 1 screen pixel."""
+        if not self.original_pixmap:
+            return
+        if self._preview_is_scaled and not self._full_loaded:
+            self._load_full_resolution()
+        self.zoom_level = 1.0
         self.pan_offset = QPointF(0, 0)
         self.update()
 
@@ -508,6 +562,8 @@ class ZoomableImageLabel(QLabel):
         if self.crop_mode and self.crop_start and self.original_pixmap:
             current = self.screen_to_image(event.position())
             if current:
+                if self.crop_aspect_ratio:
+                    current = self._constrain_crop_point(self.crop_start, current, self.crop_aspect_ratio)
                 self.crop_preview = (self.crop_start, current)
                 self.update()
             return
@@ -550,6 +606,8 @@ class ZoomableImageLabel(QLabel):
             self.crop_start = None
             self.crop_preview = None
             return
+        if self.crop_aspect_ratio:
+            end_point = self._constrain_crop_point(self.crop_start, end_point, self.crop_aspect_ratio)
         width = self.original_pixmap.width()
         height = self.original_pixmap.height()
         x1 = max(0.0, min(self.crop_start.x(), end_point.x()))
@@ -564,6 +622,32 @@ class ZoomableImageLabel(QLabel):
         self.crop_start = None
         self.crop_preview = None
         self.update()
+
+    def _constrain_crop_point(self, start, current, ratio):
+        dx = current.x() - start.x()
+        dy = current.y() - start.y()
+        if dx == 0 and dy == 0:
+            return current
+        abs_dx = abs(dx)
+        abs_dy = abs(dy)
+        if abs_dy == 0:
+            abs_dy = 1e-6
+        if abs_dx / abs_dy > ratio:
+            target_w = abs_dx
+            target_h = target_w / ratio
+        else:
+            target_h = abs_dy
+            target_w = target_h * ratio
+        sx = 1 if dx >= 0 else -1
+        sy = 1 if dy >= 0 else -1
+        new_x = start.x() + sx * target_w
+        new_y = start.y() + sy * target_h
+        if self.original_pixmap:
+            w = float(self.original_pixmap.width())
+            h = float(self.original_pixmap.height())
+            new_x = max(0.0, min(w, new_x))
+            new_y = max(0.0, min(h, new_y))
+        return QPointF(new_x, new_y)
 
     def _update_hover_rect(self, screen_pos):
         """Update which measurement rectangle is under the cursor."""
@@ -749,6 +833,19 @@ class ZoomableImageLabel(QLabel):
             for label in self.measurement_labels:
                 length_um = label.get("length_um")
                 width_um = label.get("width_um")
+                if label.get("kind") == "line":
+                    line = label.get("line")
+                    unit = label.get("unit") or "\u03bcm"
+                    value = label.get("length_value")
+                    if value is None:
+                        value = length_um
+                    if line and length_um is not None:
+                        p1 = QPointF(line[0], line[1])
+                        p2 = QPointF(line[2], line[3])
+                        self._draw_rotated_label_on_line(
+                            painter, p1, p2, f"{value:.1f} {unit}", padding_px=3 * scale_factor
+                        )
+                    continue
                 line1 = label.get("line1")
                 line2 = label.get("line2")
                 center = label.get("center")
@@ -789,10 +886,10 @@ class ZoomableImageLabel(QLabel):
                     length_edge = edges[best_index]
                     width_edge = edges[(best_index + 1) % 4]
                     self._draw_rotated_label_outside(
-                        painter, f"{length_um:.2f}", length_edge, center, 3
+                        painter, f"{length_um:.1f}", length_edge, center, 3
                     )
                     self._draw_rotated_label_outside(
-                        painter, f"{width_um:.2f}", width_edge, center, 3
+                        painter, f"{width_um:.1f}", width_edge, center, 3
                     )
 
         # Draw scale bar
@@ -980,6 +1077,7 @@ class ZoomableImageLabel(QLabel):
                             int(p2_x - perp_x * mark_len), int(p2_y - perp_y * mark_len),
                             int(p2_x + perp_x * mark_len), int(p2_y + perp_y * mark_len)
                         )
+
                 if idx == self.hover_line_index or (
                     not self.measurement_active and idx in self.selected_line_indices
                 ):
@@ -988,6 +1086,65 @@ class ZoomableImageLabel(QLabel):
                     painter.setPen(hover_thin)
                     painter.drawLine(int(p1_x), int(p1_y), int(p2_x), int(p2_y))
 
+        # Draw debug line layers (no hover/selection)
+        if self.show_measure_overlays and self.debug_line_layers:
+            for layer in self.debug_line_layers:
+                painter.save()
+                lines = layer.get("lines") if isinstance(layer, dict) else None
+                if not lines:
+                    painter.restore()
+                    continue
+                color = layer.get("color", QColor(52, 152, 219)) if isinstance(layer, dict) else QColor(52, 152, 219)
+                width = layer.get("width", 2) if isinstance(layer, dict) else 2
+                dashed = bool(layer.get("dashed", False)) if isinstance(layer, dict) else False
+                show_endcaps = bool(layer.get("show_endcaps", False)) if isinstance(layer, dict) else False
+                composition = layer.get("composition") if isinstance(layer, dict) else None
+
+                if isinstance(color, tuple):
+                    if len(color) == 4:
+                        color = QColor(*color)
+                    elif len(color) == 3:
+                        color = QColor(*color)
+                elif isinstance(color, str):
+                    color = QColor(color)
+
+                if composition == "overlay":
+                    painter.setCompositionMode(QPainter.CompositionMode_Overlay)
+                elif composition == "screen":
+                    painter.setCompositionMode(QPainter.CompositionMode_Screen)
+                elif composition == "plus":
+                    painter.setCompositionMode(QPainter.CompositionMode_Plus)
+                elif composition == "lighten":
+                    painter.setCompositionMode(QPainter.CompositionMode_Lighten)
+
+                pen = QPen(color, width)
+                if dashed:
+                    pen.setStyle(Qt.DashLine)
+                painter.setPen(pen)
+                for line in lines:
+                    p1_x = display_rect.x() + line[0] * self.zoom_level
+                    p1_y = display_rect.y() + line[1] * self.zoom_level
+                    p2_x = display_rect.x() + line[2] * self.zoom_level
+                    p2_y = display_rect.y() + line[3] * self.zoom_level
+                    painter.drawLine(int(p1_x), int(p1_y), int(p2_x), int(p2_y))
+
+                    if show_endcaps:
+                        dx = p2_x - p1_x
+                        dy = p2_y - p1_y
+                        length = math.sqrt(dx**2 + dy**2)
+                        if length > 0:
+                            perp_x = -dy / length
+                            perp_y = dx / length
+                            mark_len = 5
+                            painter.drawLine(
+                                int(p1_x - perp_x * mark_len), int(p1_y - perp_y * mark_len),
+                                int(p1_x + perp_x * mark_len), int(p1_y + perp_y * mark_len)
+                            )
+                            painter.drawLine(
+                                int(p2_x - perp_x * mark_len), int(p2_y - perp_y * mark_len),
+                                int(p2_x + perp_x * mark_len), int(p2_y + perp_y * mark_len)
+                            )
+                painter.restore()
         # Draw preview line (from last point to mouse cursor)
         if self.preview_line is not None and self.current_mouse_pos is not None:
             light_pen = QPen(self._light_stroke_color(), 3)
@@ -1060,6 +1217,19 @@ class ZoomableImageLabel(QLabel):
             for label in self.measurement_labels:
                 length_um = label.get("length_um")
                 width_um = label.get("width_um")
+                if label.get("kind") == "line":
+                    line = label.get("line")
+                    unit = label.get("unit") or "\u03bcm"
+                    value = label.get("length_value")
+                    if value is None:
+                        value = length_um
+                    if line and length_um is not None:
+                        p1 = QPointF(display_rect.x() + line[0] * self.zoom_level,
+                                     display_rect.y() + line[1] * self.zoom_level)
+                        p2 = QPointF(display_rect.x() + line[2] * self.zoom_level,
+                                     display_rect.y() + line[3] * self.zoom_level)
+                        self._draw_rotated_label_on_line(painter, p1, p2, f"{value:.1f} {unit}", padding_px=4.0)
+                    continue
                 line1 = label.get("line1")
                 line2 = label.get("line2")
                 center = label.get("center")
@@ -1107,10 +1277,10 @@ class ZoomableImageLabel(QLabel):
                     length_edge = edges[best_index]
                     width_edge = edges[(best_index + 1) % 4]
                     self._draw_rotated_label_outside(
-                        painter, f"{length_um:.2f}", length_edge, center_screen, 3
+                        painter, f"{length_um:.1f}", length_edge, center_screen, 3
                     )
                     self._draw_rotated_label_outside(
-                        painter, f"{width_um:.2f}", width_edge, center_screen, 3
+                        painter, f"{width_um:.1f}", width_edge, center_screen, 3
                     )
 
         def _draw_tag(text, y_offset, bg_color, font_size=10):
@@ -1152,9 +1322,22 @@ class ZoomableImageLabel(QLabel):
         zoom_metrics = painter.fontMetrics()
         zoom_height = zoom_metrics.height()
 
-        painter.setPen(QColor(127, 140, 141))
+        zoom_margin = 10
+        zoom_pad_x = 6
+        zoom_pad_y = 3
+        zoom_width = zoom_metrics.horizontalAdvance(zoom_text)
+        zoom_rect = QRect(
+            zoom_margin,
+            self.height() - zoom_height - zoom_pad_y * 2 - zoom_margin,
+            zoom_width + zoom_pad_x * 2,
+            zoom_height + zoom_pad_y * 2,
+        )
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(255, 255, 255, 180))
+        painter.drawRoundedRect(zoom_rect, 4, 4)
+        painter.setPen(QColor(0, 0, 0))
         painter.setFont(font)
-        painter.drawText(10, self.height() - 10, zoom_text)
+        painter.drawText(zoom_rect, Qt.AlignCenter, zoom_text)
 
         if self.measurement_active:
             painter.setPen(QPen(QColor("#e74c3c"), 3))

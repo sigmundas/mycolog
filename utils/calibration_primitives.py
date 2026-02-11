@@ -124,19 +124,38 @@ def half_max_edges(profile: np.ndarray, peak_y: float,
     Returns (top_edge, bottom_edge) with sub-pixel linear interpolation,
     or (None, None) if a crossing is not found within *search* pixels.
     """
-    p    = int(round(peak_y))
-    lo   = max(0, p - search)
-    hi   = min(len(profile), p + search)
-    bg   = (profile[lo] + profile[hi - 1]) / 2.0
-    half = (bg + profile[p]) / 2.0
+    p = int(round(peak_y))
+    lo = max(0, p - search)
+    hi = min(len(profile), p + search)
+    center = float(profile[p])
+
+    left = profile[lo:p]
+    right = profile[p + 1:hi]
+
+    def _bg(seg: np.ndarray) -> float | None:
+        if seg is None or len(seg) == 0:
+            return None
+        # Use a high percentile to approximate local background on each side.
+        return float(np.percentile(seg, 95))
+
+    bg_left = _bg(left)
+    bg_right = _bg(right)
+
+    if bg_left is None:
+        bg_left = float(profile[lo])
+    if bg_right is None:
+        bg_right = float(profile[hi - 1])
+
+    half_left = (bg_left + center) / 2.0
+    half_right = (bg_right + center) / 2.0
 
     top = bot = None
     for i in range(lo, p):
-        if profile[i] >= half and profile[i + 1] < half:
-            top = i + (half - profile[i]) / (profile[i + 1] - profile[i])
+        if profile[i] >= half_left and profile[i + 1] < half_left:
+            top = i + (half_left - profile[i]) / (profile[i + 1] - profile[i])
     for i in range(p, hi - 1):
-        if profile[i] < half and profile[i + 1] >= half:
-            bot = i + (half - profile[i]) / (profile[i + 1] - profile[i])
+        if profile[i] < half_right and profile[i + 1] >= half_right:
+            bot = i + (half_right - profile[i]) / (profile[i + 1] - profile[i])
             break
     return top, bot
 

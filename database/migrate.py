@@ -1,7 +1,7 @@
 """Database migration script to update schema."""
 import sqlite3
 import shutil
-from database.schema import get_database_path
+from database.schema import get_database_path, load_objectives, resolve_objective_key
 
 
 def backup_database():
@@ -113,6 +113,64 @@ def migrate_database():
             print("Database already has new schema - no migration needed")
     else:
         print("No spore_measurements table found - will create new schema")
+
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='observations'")
+    if cursor.fetchone():
+        cursor.execute("PRAGMA table_info(observations)")
+        columns = {col[1] for col in cursor.fetchall()}
+        if "source_type" not in columns:
+            cursor.execute("ALTER TABLE observations ADD COLUMN source_type TEXT DEFAULT 'personal'")
+        if "citation" not in columns:
+            cursor.execute("ALTER TABLE observations ADD COLUMN citation TEXT")
+        if "data_provider" not in columns:
+            cursor.execute("ALTER TABLE observations ADD COLUMN data_provider TEXT")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_observations_species ON observations(genus, species)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_observations_source ON observations(source_type)")
+
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='calibrations'")
+    if cursor.fetchone():
+        cursor.execute("PRAGMA table_info(calibrations)")
+        columns = {col[1] for col in cursor.fetchall()}
+        if "camera" not in columns:
+            cursor.execute("ALTER TABLE calibrations ADD COLUMN camera TEXT")
+        if "megapixels" not in columns:
+            cursor.execute("ALTER TABLE calibrations ADD COLUMN megapixels REAL")
+        # Normalize objective_name values to current objective keys when possible
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='images'")
+        if cursor.fetchone():
+            objectives = load_objectives()
+            cursor.execute("SELECT id, objective_name FROM images WHERE objective_name IS NOT NULL")
+            for image_id, objective_name in cursor.fetchall():
+                resolved = resolve_objective_key(objective_name, objectives)
+                if resolved and resolved != objective_name:
+                    cursor.execute(
+                        "UPDATE images SET objective_name = ? WHERE id = ?",
+                        (resolved, image_id),
+                    )
+        # Backfill calibration_id for images missing or pointing to non-existent calibrations
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='images'")
+        if cursor.fetchone():
+            cursor.execute("SELECT COUNT(*) FROM images")
+            total_images = cursor.fetchone()[0]
+            if total_images:
+                cursor.execute("""
+                    UPDATE images
+                    SET calibration_id = (
+                        SELECT c.id
+                        FROM calibrations c
+                        WHERE c.objective_key = images.objective_name
+                          AND c.is_active = 1
+                        ORDER BY c.calibration_date DESC
+                        LIMIT 1
+                    )
+                    WHERE objective_name IS NOT NULL
+                      AND TRIM(objective_name) != ''
+                      AND LOWER(objective_name) != 'custom'
+                      AND (
+                        calibration_id IS NULL
+                        OR calibration_id NOT IN (SELECT id FROM calibrations)
+                      )
+                """)
 
     conn.commit()
     conn.close()

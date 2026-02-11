@@ -1,3 +1,4 @@
+
 """Modern stylesheet for the application."""
 
 MODERN_STYLE = """

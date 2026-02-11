@@ -5,9 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 import math
+import json
 
 from PySide6.QtCore import Qt, QDateTime, QDate, QTime, Signal, QPointF, QCoreApplication, QThread, QTimer
-from PySide6.QtGui import QPixmap, QKeySequence, QShortcut
+from PySide6.QtGui import QPixmap, QKeySequence, QShortcut, QImageReader
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -35,16 +36,25 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QHeaderView,
     QAbstractItemView,
+    QCheckBox,
 )
 
-from database.schema import load_objectives, get_images_dir, get_connection
-from database.models import SettingsDB, ImageDB, MeasurementDB
+from database.schema import (
+    load_objectives,
+    save_objectives,
+    get_images_dir,
+    get_connection,
+    objective_display_name,
+    objective_sort_value,
+)
+from database.models import SettingsDB, ImageDB, MeasurementDB, CalibrationDB
 from utils.vernacular_utils import normalize_vernacular_language
 from utils.exif_reader import get_image_metadata, get_exif_data, get_gps_coordinates
 from utils.heic_converter import maybe_convert_heic
 from .image_gallery_widget import ImageGalleryWidget
 from .zoomable_image_widget import ZoomableImageLabel
 from .spore_preview_widget import SporePreviewWidget
+from .calibration_dialog import get_resolution_status, format_resolution_summary
 
 
 @dataclass
@@ -67,91 +77,145 @@ class ImageImportResult:
     ai_crop_box: Optional[tuple[float, float, float, float]] = None
     ai_crop_source_size: Optional[tuple[int, int]] = None
     gps_source: bool = False
+    resample_scale_factor: Optional[float] = None
+    resize_to_optimal: bool = True
+    store_original: bool = False
+    original_filepath: Optional[str] = None
 
 
 class AIGuessWorker(QThread):
-    resultReady = Signal(int, list, object, object, str)
-    error = Signal(int, str)
+    resultReady = Signal(list, list, object, object, list)
+    error = Signal(list, str)
 
     def __init__(
         self,
-        index: int,
-        image_path: str,
-        crop_box: tuple[float, float, float, float] | None,
+        requests: list[dict],
         temp_dir: Path,
         max_dim: int = 1600,
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self.index = index
-        self.image_path = image_path
-        self.crop_box = crop_box
+        self.requests: list[dict] = []
+        for request in requests or []:
+            if not request:
+                continue
+            index = request.get("index")
+            image_path = request.get("image_path")
+            if index is None or not image_path:
+                continue
+            self.requests.append(
+                {
+                    "index": int(index),
+                    "image_path": str(image_path),
+                    "crop_box": request.get("crop_box"),
+                }
+            )
+        self.indices = [req["index"] for req in self.requests]
         self.temp_dir = temp_dir
         self.max_dim = max_dim
 
-    def run(self) -> None:
-        try:
-            from uuid import uuid4
-            from PIL import Image
-            import requests
+    def _prepare_image(
+        self,
+        image_path: str,
+        crop_box: tuple[float, float, float, float] | None,
+    ) -> Path:
+        from uuid import uuid4
+        from PIL import Image
 
-            img = Image.open(self.image_path)
+        with Image.open(image_path) as img:
             orig_w, orig_h = img.size
             crop_x1 = 0.0
             crop_y1 = 0.0
             crop_w = float(orig_w)
             crop_h = float(orig_h)
-            requires_resize = self.max_dim and max(img.size) > self.max_dim
-            extension = Path(self.image_path).suffix.lower()
-            requires_convert = extension not in {".jpg", ".jpeg"} or img.mode not in {"RGB", "L"}
-            if self.crop_box:
-                x1, y1, x2, y2 = self.crop_box
+            if crop_box:
+                x1, y1, x2, y2 = crop_box
                 crop_x1 = max(0.0, min(float(orig_w), x1 * float(orig_w)))
                 crop_y1 = max(0.0, min(float(orig_h), y1 * float(orig_h)))
                 crop_x2 = max(0.0, min(float(orig_w), x2 * float(orig_w)))
                 crop_y2 = max(0.0, min(float(orig_h), y2 * float(orig_h)))
                 crop_w = max(1.0, crop_x2 - crop_x1)
                 crop_h = max(1.0, crop_y2 - crop_y1)
-                img = img.crop((crop_x1, crop_y1, crop_x2, crop_y2))
-                requires_convert = True
+            else:
+                crop_x2 = crop_x1 + crop_w
+                crop_y2 = crop_y1 + crop_h
 
-            if requires_resize:
-                scale = self.max_dim / max(img.size)
-                new_size = (max(1, int(img.size[0] * scale)), max(1, int(img.size[1] * scale)))
-                img = img.resize(new_size, Image.LANCZOS)
-                requires_convert = True
+            # Enforce square crop (side = smallest dimension)
+            side = max(1.0, min(crop_w, crop_h))
+            center_x = crop_x1 + (crop_w / 2.0)
+            center_y = crop_y1 + (crop_h / 2.0)
+            square_x1 = max(0.0, min(float(orig_w) - side, center_x - side / 2.0))
+            square_y1 = max(0.0, min(float(orig_h) - side, center_y - side / 2.0))
+            square_x2 = square_x1 + side
+            square_y2 = square_y1 + side
+            img = img.crop((square_x1, square_y1, square_x2, square_y2))
 
-            send_path = Path(self.image_path)
-            temp_path = None
-            if requires_convert:
-                if img.mode not in {"RGB", "L"}:
-                    img = img.convert("RGB")
-                self.temp_dir.mkdir(parents=True, exist_ok=True)
-                temp_path = self.temp_dir / f"ai_guess_{uuid4().hex}.jpg"
-                img.save(temp_path, "JPEG", quality=90)
-                send_path = temp_path
+            # Resize to 500x500 before sending to Artsorakelet
+            if img.size != (500, 500):
+                img = img.resize((500, 500), Image.LANCZOS)
+
+            if img.mode not in {"RGB", "L"}:
+                img = img.convert("RGB")
+
+            self.temp_dir.mkdir(parents=True, exist_ok=True)
+            temp_path = self.temp_dir / f"ai_guess_{uuid4().hex}.jpg"
+            img.save(temp_path, "JPEG", quality=90)
+            return temp_path
+
+    def run(self) -> None:
+        if not self.requests:
+            return
+        try:
+            import requests
+
+            send_paths: list[Path] = []
+            temp_paths: list[str] = []
+            for request in self.requests:
+                temp_path = self._prepare_image(request["image_path"], request.get("crop_box"))
+                send_paths.append(temp_path)
+                temp_paths.append(str(temp_path))
 
             url = "https://ai.artsdatabanken.no"
+            handles: list[object] = []
+            response = None
+            try:
+                files = []
+                for path in send_paths:
+                    handle = open(path, "rb")
+                    handles.append(handle)
+                    files.append(("image", (path.name, handle, "image/jpeg")))
+                response = requests.post(
+                    url,
+                    files=files,
+                    headers={"User-Agent": "MycoLog/AI"},
+                    timeout=30,
+                )
+                if response.status_code != 200 and len(send_paths) == 1:
+                    for handle in handles:
+                        handle.close()
+                    handles = []
+                    with open(send_paths[0], "rb") as handle:
+                        response = requests.post(
+                            url,
+                            files={"file": (send_paths[0].name, handle, "image/jpeg")},
+                            headers={"User-Agent": "MycoLog/AI"},
+                            timeout=30,
+                        )
+            finally:
+                for handle in handles:
+                    try:
+                        handle.close()
+                    except Exception:
+                        pass
 
-            def _post_with_field(field_name: str):
-                with open(send_path, "rb") as handle:
-                    return requests.post(
-                        url,
-                        files={field_name: (send_path.name, handle, "image/jpeg")},
-                        headers={"User-Agent": "MycoLog/AI"},
-                        timeout=30,
-                    )
-
-            response = _post_with_field("image")
-            if response.status_code != 200:
-                response = _post_with_field("file")
-            if response.status_code != 200:
-                detail = (response.text or "").strip()
+            if response is None or response.status_code != 200:
+                detail = (response.text or "").strip() if response is not None else ""
                 if detail:
                     detail = detail.replace("\n", " ").strip()
                     detail = detail[:200]
                 suffix = f" - {detail}" if detail else ""
-                raise Exception(f"API request failed: {response.status_code}{suffix}")
+                status = response.status_code if response is not None else "no response"
+                raise Exception(f"API request failed: {status}{suffix}")
 
             data = response.json()
             predictions = [
@@ -160,9 +224,9 @@ class AIGuessWorker(QThread):
             ]
 
             warnings = data.get("warnings")
-            self.resultReady.emit(self.index, predictions, None, warnings, str(temp_path or ""))
+            self.resultReady.emit(self.indices, predictions, None, warnings, temp_paths)
         except Exception as exc:
-            self.error.emit(self.index, str(exc))
+            self.error.emit(self.indices, str(exc))
 
 
 class ScaleBarImportDialog(QDialog):
@@ -314,6 +378,15 @@ class ImageImportDialog(QDialog):
             "sample_default",
             self.sample_options[0] if self.sample_options else "Not set"
         )
+        self.resize_to_optimal_default = bool(
+            SettingsDB.get_setting("resize_to_optimal_sampling", True)
+        )
+        self.store_original_default = bool(
+            SettingsDB.get_setting("store_original_images", False)
+        )
+        self.target_sampling_pct = float(
+            SettingsDB.get_setting("target_sampling_pct", 120.0)
+        )
 
         self.image_paths: list[str] = []
         self.import_results: list[ImageImportResult] = []
@@ -381,8 +454,8 @@ class ImageImportDialog(QDialog):
         self.gallery = ImageGalleryWidget(
             self.tr("Images"),
             self,
-            show_delete=False,
-            show_badges=False,
+            show_delete=True,
+            show_badges=True,
             min_height=60,
             default_height=180,
             thumbnail_size=140,
@@ -390,6 +463,7 @@ class ImageImportDialog(QDialog):
         self.gallery.set_multi_select(True)
         self.gallery.imageClicked.connect(self._on_gallery_clicked)
         self.gallery.selectionChanged.connect(self._on_gallery_selection_changed)
+        self.gallery.deleteRequested.connect(self._on_gallery_delete_requested)
         self.delete_shortcut = QShortcut(QKeySequence.Delete, self)
         self.delete_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
         self.delete_shortcut.activated.connect(self._on_remove_selected)
@@ -466,6 +540,11 @@ class ImageImportDialog(QDialog):
         calibrate_btn = QPushButton(self.tr("Set scale..."))
         calibrate_btn.clicked.connect(self._open_calibration_dialog)
         scale_layout.addWidget(calibrate_btn)
+        self.scale_warning_label = QLabel("")
+        self.scale_warning_label.setWordWrap(True)
+        self.scale_warning_label.setStyleSheet("color: #e74c3c; font-weight: bold; font-size: 9pt;")
+        self.scale_warning_label.setVisible(False)
+        scale_layout.addWidget(self.scale_warning_label)
         layout.addWidget(self.scale_group)
 
         self.contrast_group = QGroupBox(self.tr("Contrast"))
@@ -555,6 +634,8 @@ class ImageImportDialog(QDialog):
         self.exif_aperture_label = QLabel("--")
         self.exif_lat_label = QLabel("Lat: --")
         self.exif_lon_label = QLabel("Lon: --")
+        self.exif_sampling_label = QLabel("--")
+        self.exif_sampling_label.setWordWrap(True)
         self.exif_map_btn = QPushButton(self.tr("Map"))
         self.exif_map_btn.clicked.connect(self._open_current_image_map)
         self.exif_map_btn.setEnabled(False)
@@ -572,6 +653,7 @@ class ImageImportDialog(QDialog):
         gps_row.addLayout(gps_values, 1)
         gps_row.addWidget(self.exif_map_btn)
         current_layout.addRow(self.tr("GPS:"), gps_row)
+        current_layout.addRow(self.tr("Sampling:"), self.exif_sampling_label)
         layout.addWidget(current_group)
 
         obs_group = QGroupBox(self.tr("Time and GPS"))
@@ -628,6 +710,39 @@ class ImageImportDialog(QDialog):
 
         layout.addWidget(obs_group)
 
+        resize_group = QGroupBox(self.tr("Image resize"))
+        self.resize_group = resize_group
+        resize_layout = QVBoxLayout(resize_group)
+        resize_layout.setContentsMargins(6, 6, 6, 6)
+        self.resize_optimal_checkbox = QCheckBox(self.tr("Resize to optimal sampling"))
+        self.resize_optimal_checkbox.setChecked(self.resize_to_optimal_default)
+        self.resize_optimal_checkbox.toggled.connect(self._on_resize_settings_changed)
+        resize_layout.addWidget(self.resize_optimal_checkbox)
+        self.store_original_checkbox = QCheckBox(self.tr("Store original"))
+        self.store_original_checkbox.setChecked(self.store_original_default)
+        self.store_original_checkbox.toggled.connect(self._on_resize_settings_changed)
+        resize_layout.addWidget(self.store_original_checkbox)
+
+        resize_info = QFormLayout()
+        self.target_sampling_input = QDoubleSpinBox()
+        self.target_sampling_input.setRange(50.0, 300.0)
+        self.target_sampling_input.setDecimals(0)
+        self.target_sampling_input.setSuffix("%")
+        self.target_sampling_input.setValue(float(self.target_sampling_pct))
+        self.target_sampling_input.valueChanged.connect(self._on_target_sampling_changed)
+        self.current_resolution_label = QLabel("--")
+        self.target_resolution_label = QLabel("--")
+        resize_info.addRow(
+            self.tr("Ideal sampling (% Nyquist):"),
+            self.target_sampling_input,
+        )
+        resize_info.addRow(self.tr("Current resolution:"), self.current_resolution_label)
+        resize_info.addRow(self.tr("Ideal resolution:"), self.target_resolution_label)
+        resize_layout.addLayout(resize_info)
+        self._sync_resize_controls()
+
+        layout.addWidget(resize_group)
+
         ai_crop_group = QGroupBox(self.tr("AI crop"))
         ai_crop_layout = QVBoxLayout(ai_crop_group)
         ai_crop_layout.setContentsMargins(6, 6, 6, 6)
@@ -657,8 +772,9 @@ class ImageImportDialog(QDialog):
         self.objective_combo.clear()
         self.objective_combo.addItem(self.tr("Not set"), None)
         self.objective_combo.addItem(self.tr("Scale bar"), self.CUSTOM_OBJECTIVE_KEY)
-        for key in sorted(self.objectives.keys()):
-            self.objective_combo.addItem(key, key)
+        for key, obj in sorted(self.objectives.items(), key=lambda item: objective_sort_value(item[1], item[0])):
+            label = objective_display_name(obj, key) or key
+            self.objective_combo.addItem(label, key)
         if selected_key is None:
             selected_key = self.default_objective
         if selected_key:
@@ -699,7 +815,8 @@ class ImageImportDialog(QDialog):
         if not isinstance(objective, dict):
             return
         custom_scale = objective.get("microns_per_pixel")
-        is_custom = str(objective.get("magnification") or "").lower() == "custom"
+        key = objective.get("key") or objective.get("objective_key") or objective.get("magnification") or ""
+        is_custom = str(key).lower() == "custom" or key == self.CUSTOM_OBJECTIVE_KEY
         if is_custom and isinstance(custom_scale, (int, float)):
             self._custom_scale = float(custom_scale)
             self._populate_objectives(selected_key=self.CUSTOM_OBJECTIVE_KEY)
@@ -725,6 +842,18 @@ class ImageImportDialog(QDialog):
             return [self.selected_index]
         return []
 
+    def _is_resized_image(self, result: ImageImportResult | None) -> bool:
+        if not result:
+            return False
+        factor = getattr(result, "resample_scale_factor", None)
+        if not isinstance(factor, (int, float)) or factor <= 0 or factor >= 0.999:
+            return False
+        if result.image_id:
+            return True
+        orig = getattr(result, "original_filepath", None)
+        path = getattr(result, "filepath", None)
+        return bool(orig and path and orig != path)
+
     def _update_scale_group_state(self) -> None:
         if not hasattr(self, "scale_group"):
             return
@@ -732,6 +861,7 @@ class ImageImportDialog(QDialog):
         if not indices:
             self.scale_group.setEnabled(False)
             self._update_micro_settings_state(False)
+            self._update_scale_mismatch_warning()
             return
         enable = all(
             self.import_results[idx].image_type == "microscope"
@@ -740,6 +870,41 @@ class ImageImportDialog(QDialog):
         )
         self.scale_group.setEnabled(enable)
         self._update_micro_settings_state(enable)
+        self._update_resize_group_state()
+        self._update_scale_mismatch_warning()
+
+    def _update_resize_group_state(self) -> None:
+        if not hasattr(self, "resize_group"):
+            return
+        indices = self._current_selection_indices()
+        if not indices:
+            self.resize_group.setEnabled(False)
+            return
+        all_micro = all(
+            self.import_results[idx].image_type == "microscope"
+            for idx in indices
+            if 0 <= idx < len(self.import_results)
+        )
+        if not all_micro:
+            self.resize_group.setEnabled(False)
+            return
+        any_resized = any(
+            self._is_resized_image(self.import_results[idx])
+            for idx in indices
+            if 0 <= idx < len(self.import_results)
+        )
+        self.resize_group.setEnabled(not any_resized)
+        self._sync_resize_controls()
+
+    def _sync_resize_controls(self) -> None:
+        if not hasattr(self, "resize_optimal_checkbox") or not hasattr(self, "store_original_checkbox"):
+            return
+        resize_enabled = bool(self.resize_optimal_checkbox.isChecked())
+        if not resize_enabled and self.store_original_checkbox.isChecked():
+            self.store_original_checkbox.blockSignals(True)
+            self.store_original_checkbox.setChecked(False)
+            self.store_original_checkbox.blockSignals(False)
+        self.store_original_checkbox.setEnabled(resize_enabled)
 
     def _update_micro_settings_state(self, enable: bool | None = None) -> None:
         if not hasattr(self, "contrast_combo"):
@@ -823,18 +988,29 @@ class ImageImportDialog(QDialog):
                 return
 
     def _update_ai_controls_state(self) -> None:
-        if not hasattr(self, "ai_crop_btn"):
-            return
-        index = self._current_single_index()
-        enable = False
-        if index is not None and 0 <= index < len(self.import_results):
-            image_type = (self.import_results[index].image_type or "field").strip().lower()
-            enable = image_type == "field"
-        if self._ai_thread is not None:
+        if hasattr(self, "ai_crop_btn"):
+            index = self._current_single_index()
             enable = False
-        self.ai_crop_btn.setEnabled(enable)
-        if not enable and self._ai_crop_active:
-            self._set_ai_crop_active(False)
+            if index is not None and 0 <= index < len(self.import_results):
+                image_type = (self.import_results[index].image_type or "field").strip().lower()
+                enable = image_type == "field"
+            if self._ai_thread is not None:
+                enable = False
+            self.ai_crop_btn.setEnabled(enable)
+            if not enable and self._ai_crop_active:
+                self._set_ai_crop_active(False)
+        if hasattr(self, "ai_guess_btn"):
+            indices = self._current_selection_indices()
+            enable_guess = False
+            if indices:
+                indices = [idx for idx in indices if 0 <= idx < len(self.import_results)]
+                enable_guess = bool(indices) and all(
+                    (self.import_results[idx].image_type or "field").strip().lower() == "field"
+                    for idx in indices
+                )
+            if self._ai_thread is not None:
+                enable_guess = False
+            self.ai_guess_btn.setEnabled(enable_guess)
 
     def _update_ai_table(self) -> None:
         if not hasattr(self, "ai_table"):
@@ -973,6 +1149,7 @@ class ImageImportDialog(QDialog):
         self._ai_crop_active = bool(active)
         if hasattr(self, "preview"):
             self.preview.set_crop_mode(self._ai_crop_active)
+            self.preview.set_crop_aspect_ratio(1.0 if self._ai_crop_active else None)
         if hasattr(self, "ai_crop_btn"):
             if self._ai_crop_active:
                 self.ai_crop_btn.setStyleSheet(
@@ -994,6 +1171,12 @@ class ImageImportDialog(QDialog):
             if 0 <= index < len(self.import_results):
                 self.import_results[index].ai_crop_box = None
                 self.import_results[index].ai_crop_source_size = None
+                if self.import_results[index].image_id:
+                    ImageDB.update_image(
+                        self.import_results[index].image_id,
+                        ai_crop_box=None,
+                        ai_crop_source_size=None,
+                    )
             self._set_ai_crop_active(True)
             self._update_ai_controls_state()
             return
@@ -1021,16 +1204,34 @@ class ImageImportDialog(QDialog):
                 if 0 <= index < len(self.import_results):
                     self.import_results[index].ai_crop_box = norm_box
                     self.import_results[index].ai_crop_source_size = (width, height)
+                    if self.import_results[index].image_id:
+                        ImageDB.update_image(
+                            self.import_results[index].image_id,
+                            ai_crop_box=norm_box,
+                            ai_crop_source_size=(width, height),
+                        )
             else:
                 self._ai_crop_boxes.pop(index, None)
                 if 0 <= index < len(self.import_results):
                     self.import_results[index].ai_crop_box = None
                     self.import_results[index].ai_crop_source_size = None
+                    if self.import_results[index].image_id:
+                        ImageDB.update_image(
+                            self.import_results[index].image_id,
+                            ai_crop_box=None,
+                            ai_crop_source_size=None,
+                        )
         else:
             self._ai_crop_boxes.pop(index, None)
             if 0 <= index < len(self.import_results):
                 self.import_results[index].ai_crop_box = None
                 self.import_results[index].ai_crop_source_size = None
+                if self.import_results[index].image_id:
+                    ImageDB.update_image(
+                        self.import_results[index].image_id,
+                        ai_crop_box=None,
+                        ai_crop_source_size=None,
+                    )
         if self._ai_crop_active:
             self._set_ai_crop_active(False)
         self._update_ai_controls_state()
@@ -1038,26 +1239,42 @@ class ImageImportDialog(QDialog):
     def _on_ai_guess_clicked(self) -> None:
         if not hasattr(self, "ai_guess_btn"):
             return
-        index = self._current_single_index()
-        if index is None:
+        indices = self._current_selection_indices()
+        if not indices:
             return
-        if index < 0 or index >= len(self.import_results):
+        indices = [idx for idx in indices if 0 <= idx < len(self.import_results)]
+        if not indices:
             return
-        result = self.import_results[index]
-        if result.image_type != "field":
+        if any(self.import_results[idx].image_type != "field" for idx in indices):
             self._set_ai_status(self.tr("AI guess only works for field photos"), "#e74c3c")
             return
-        image_path = result.filepath
-        if not image_path:
+        requests = []
+        for idx in indices:
+            result = self.import_results[idx]
+            image_path = result.filepath
+            if not image_path:
+                continue
+            crop_box = self._ai_crop_boxes.get(idx) or getattr(result, "ai_crop_box", None)
+            requests.append(
+                {
+                    "index": idx,
+                    "image_path": image_path,
+                    "crop_box": crop_box,
+                }
+            )
+        if not requests:
             return
         if self._ai_thread is not None:
             return
         self.ai_guess_btn.setEnabled(False)
         self.ai_guess_btn.setText(self.tr("AI guessing..."))
-        self._set_ai_status(self.tr("Sending image to Artsdatabanken AI..."), "#3498db")
+        count = len(requests)
+        self._set_ai_status(
+            self.tr("Sending {count} image(s) to Artsdatabanken AI...").format(count=count),
+            "#3498db",
+        )
         temp_dir = get_images_dir() / "imports"
-        crop_box = self._ai_crop_boxes.get(index)
-        self._ai_thread = AIGuessWorker(index, image_path, crop_box, temp_dir, max_dim=1600, parent=self)
+        self._ai_thread = AIGuessWorker(requests, temp_dir, max_dim=1600, parent=self)
         self._ai_thread.resultReady.connect(self._on_ai_guess_finished)
         self._ai_thread.error.connect(self._on_ai_guess_error)
         self._ai_thread.finished.connect(self._ai_thread.deleteLater)
@@ -1072,15 +1289,17 @@ class ImageImportDialog(QDialog):
 
     def _on_ai_guess_finished(
         self,
-        index: int,
+        indices: list,
         predictions: list,
         _box: object,
         _warnings: object,
-        temp_path: str,
+        temp_paths: list,
     ) -> None:
-        if temp_path:
-            self._temp_preview_paths.add(temp_path)
-        self._ai_predictions_by_index[index] = predictions or []
+        for temp_path in temp_paths or []:
+            if temp_path:
+                self._temp_preview_paths.add(temp_path)
+        for index in indices or []:
+            self._ai_predictions_by_index[index] = predictions or []
         self._update_ai_table()
         self._update_ai_overlay()
         if predictions:
@@ -1089,7 +1308,7 @@ class ImageImportDialog(QDialog):
             self._set_ai_status(self.tr("No AI suggestions found"), "#7f8c8d")
         self._update_ai_controls_state()
 
-    def _on_ai_guess_error(self, _index: int, message: str) -> None:
+    def _on_ai_guess_error(self, _indices: list, message: str) -> None:
         if "500" in message:
             hint = self.tr("AI guess failed: server error (500). Try again later.")
         else:
@@ -1216,6 +1435,9 @@ class ImageImportDialog(QDialog):
                 gps_longitude=None,
                 gps_source=False,
                 exif_has_gps=has_exif_gps,
+                resize_to_optimal=self.resize_to_optimal_default,
+                store_original=self.store_original_default,
+                original_filepath=path,
             )
             self.import_results.append(result)
             if getattr(self, "import_progress", None) and self.import_progress.isVisible():
@@ -1244,6 +1466,12 @@ class ImageImportDialog(QDialog):
             if not result.preview_path:
                 result.preview_path = result.filepath
             result.gps_source = bool(getattr(result, "gps_source", False))
+            if result.original_filepath is None:
+                result.original_filepath = result.filepath
+            if not hasattr(result, "resize_to_optimal"):
+                result.resize_to_optimal = self.resize_to_optimal_default
+            if not hasattr(result, "store_original"):
+                result.store_original = self.store_original_default
             if result.filepath and (not getattr(result, "exif_has_gps", False) or not result.captured_at):
                 meta = get_image_metadata(result.filepath)
                 result.exif_has_gps = meta.get("latitude") is not None or meta.get("longitude") is not None
@@ -1416,7 +1644,12 @@ class ImageImportDialog(QDialog):
         indices = self.selected_indices or [self.selected_index]
         self._apply_metadata_to_indices(indices)
 
-    def _apply_settings_to_index(self, index: int, action: str | None = None) -> bool:
+    def _apply_settings_to_index(
+        self,
+        index: int,
+        action: str | None = None,
+        rescale_targets: dict[int, tuple[float, float, list[dict]]] | None = None,
+    ) -> bool:
         if index < 0 or index >= len(self.import_results):
             return True
         result = self.import_results[index]
@@ -1427,20 +1660,24 @@ class ImageImportDialog(QDialog):
             img = ImageDB.get_image(result.image_id)
             if img:
                 old_scale = img.get("scale_microns_per_pixel")
-            new_scale = None
-            if selected_objective == self.CUSTOM_OBJECTIVE_KEY and self._custom_scale:
-                new_scale = float(self._custom_scale)
-            elif selected_objective and selected_objective in self.objectives:
-                new_scale = self.objectives[selected_objective].get("microns_per_pixel")
+            new_scale = self._resolve_selected_scale_value(selected_objective)
             if (
                 old_scale is not None
                 and new_scale is not None
                 and abs(float(new_scale) - float(old_scale)) > 1e-6
             ):
-                if not self._maybe_rescale_measurements_for_image(
-                    result.image_id, float(old_scale), float(new_scale)
-                ):
-                    return False
+                if rescale_targets is not None:
+                    payload = rescale_targets.pop(result.image_id, None)
+                    if payload:
+                        rescale_old, rescale_new, measurements = payload
+                        self._rescale_measurements_for_image(
+                            result.image_id, rescale_old, rescale_new, measurements
+                        )
+                else:
+                    if not self._maybe_rescale_measurements_for_image(
+                        result.image_id, float(old_scale), float(new_scale)
+                    ):
+                        return False
         if selected_objective == self.CUSTOM_OBJECTIVE_KEY and self._custom_scale:
             result.custom_scale = self._custom_scale
             result.objective = None
@@ -1455,8 +1692,15 @@ class ImageImportDialog(QDialog):
             and not result.objective
             and not result.custom_scale
         )
+        if hasattr(self, "resize_optimal_checkbox"):
+            result.resize_to_optimal = bool(self.resize_optimal_checkbox.isChecked())
+        if hasattr(self, "store_original_checkbox"):
+            result.store_original = bool(self.store_original_checkbox.isChecked())
+        result.resample_scale_factor = self._compute_resample_scale_factor(result)
         self._refresh_gallery()
         self._update_summary()
+        if index == self.selected_index and len(self.selected_indices) <= 1:
+            self._update_current_image_sampling(result)
         return True
 
     def _apply_settings_to_indices(
@@ -1466,10 +1710,33 @@ class ImageImportDialog(QDialog):
         previous_key: str | None = None,
     ) -> None:
         applied = []
+        rescale_targets: dict[int, tuple[float, float, list[dict]]] | None = None
+        if action == "scale":
+            rescale_targets = {}
+            targets = self._collect_rescale_targets(indices)
+            if targets:
+                decision = self._confirm_rescale_for_targets(len(targets))
+                if decision == "cancel":
+                    if action == "scale":
+                        self.objective_combo.blockSignals(True)
+                        if previous_key is None:
+                            self.objective_combo.setCurrentIndex(0)
+                        else:
+                            combo_idx = self.objective_combo.findData(previous_key)
+                            if combo_idx >= 0:
+                                self.objective_combo.setCurrentIndex(combo_idx)
+                        self.objective_combo.blockSignals(False)
+                    return
+                if decision == "all":
+                    rescale_targets = {t[0]: t[1:] for t in targets}
+                else:
+                    image_id, old_scale, new_scale, measurements = targets[0]
+                    rescale_targets = {image_id: (old_scale, new_scale, measurements)}
+
         for idx in indices:
             if idx is None:
                 continue
-            if not self._apply_settings_to_index(idx, action):
+            if not self._apply_settings_to_index(idx, action, rescale_targets):
                 if action == "scale":
                     self.objective_combo.blockSignals(True)
                     if previous_key is None:
@@ -1490,6 +1757,80 @@ class ImageImportDialog(QDialog):
         self._update_scale_group_state()
         self._update_set_from_image_button_state()
         self._update_ai_controls_state()
+
+    def _resolve_selected_scale_value(self, selected_objective) -> float | None:
+        if selected_objective == self.CUSTOM_OBJECTIVE_KEY and self._custom_scale:
+            return float(self._custom_scale)
+        if selected_objective and selected_objective in self.objectives:
+            return self.objectives[selected_objective].get("microns_per_pixel")
+        return None
+
+    def _collect_rescale_targets(
+        self,
+        indices: list[int | None],
+    ) -> list[tuple[int, float, float, list[dict]]]:
+        targets: list[tuple[int, float, float, list[dict]]] = []
+        selected_objective = self.objective_combo.currentData()
+        new_scale = self._resolve_selected_scale_value(selected_objective)
+        if new_scale is None or not self.micro_radio.isChecked():
+            return targets
+
+        for idx in indices:
+            if idx is None or idx < 0 or idx >= len(self.import_results):
+                continue
+            result = self.import_results[idx]
+            if not result.image_id:
+                continue
+            img = ImageDB.get_image(result.image_id)
+            if not img:
+                continue
+            old_scale = img.get("scale_microns_per_pixel")
+            if old_scale is None:
+                continue
+            if abs(float(new_scale) - float(old_scale)) <= 1e-6:
+                continue
+            measurements = MeasurementDB.get_measurements_for_image(result.image_id)
+            if not measurements:
+                continue
+            has_points = any(
+                all(m.get(f"p{i}_{axis}") is not None for i in range(1, 5) for axis in ("x", "y"))
+                for m in measurements
+            )
+            if not has_points:
+                continue
+            targets.append((result.image_id, float(old_scale), float(new_scale), measurements))
+        return targets
+
+    def _confirm_rescale_for_targets(self, target_count: int) -> str:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle(self.tr("Changing image scale"))
+        if target_count > 1:
+            box.setText(
+                self.tr(
+                    "Changing image scale: This will update previous measurements to match the new scale.\n"
+                    "Apply to all selected images?"
+                )
+            )
+            apply_all_btn = box.addButton(self.tr("Apply to all"), QMessageBox.AcceptRole)
+            ok_btn = box.addButton(self.tr("OK"), QMessageBox.AcceptRole)
+            cancel_btn = box.addButton(self.tr("Cancel"), QMessageBox.RejectRole)
+        else:
+            box.setText(
+                self.tr("Changing image scale: This will update previous measurements to match the new scale.")
+            )
+            apply_all_btn = None
+            ok_btn = box.addButton(self.tr("OK"), QMessageBox.AcceptRole)
+            cancel_btn = box.addButton(self.tr("Cancel"), QMessageBox.RejectRole)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked == cancel_btn:
+            return "cancel"
+        if apply_all_btn and clicked == apply_all_btn:
+            return "all"
+        if target_count > 1 and clicked == ok_btn:
+            return "one"
+        return "one"
 
     def _maybe_rescale_measurements_for_image(
         self,
@@ -1519,7 +1860,28 @@ class ImageImportDialog(QDialog):
         box.exec()
         if box.clickedButton() != ok_btn:
             return False
+        return self._rescale_measurements_for_image(image_id, old_scale, new_scale, measurements)
 
+    def _rescale_measurements_for_image(
+        self,
+        image_id: int,
+        old_scale: float,
+        new_scale: float,
+        measurements: list[dict] | None = None,
+    ) -> bool:
+        if not image_id or not old_scale or not new_scale:
+            return True
+        if abs(new_scale - old_scale) < 1e-6:
+            return True
+        measurements = measurements or MeasurementDB.get_measurements_for_image(image_id)
+        if not measurements:
+            return True
+        has_points = any(
+            all(m.get(f"p{i}_{axis}") is not None for i in range(1, 5) for axis in ("x", "y"))
+            for m in measurements
+        )
+        if not has_points:
+            return True
         conn = get_connection()
         cursor = conn.cursor()
         for m in measurements:
@@ -1536,7 +1898,7 @@ class ImageImportDialog(QDialog):
             q_value = length_um / width_um if width_um > 0 else 0
             cursor.execute(
                 "UPDATE spore_measurements SET length_um = ?, width_um = ?, notes = ? WHERE id = ?",
-                (length_um, width_um, f\"Q={q_value:.1f}\", m["id"]),
+                (length_um, width_um, f"Q={q_value:.1f}", m["id"]),
             )
         conn.commit()
         conn.close()
@@ -1705,6 +2067,310 @@ class ImageImportDialog(QDialog):
         self.exif_lon_label.setText(lon_text)
         self.exif_map_btn.setEnabled(lat is not None and lon is not None)
         self._update_set_from_image_button_state()
+        self._update_current_image_sampling(result)
+
+    def _update_current_image_sampling(self, result: ImageImportResult | None) -> None:
+        if not hasattr(self, "exif_sampling_label"):
+            return
+        if not result or result.image_type != "microscope":
+            self.exif_sampling_label.setText("--")
+            self.exif_sampling_label.setToolTip("")
+            self._update_resize_info(result)
+            return
+
+        objective = None
+        if result.objective and result.objective in self.objectives:
+            objective = self.objectives[result.objective]
+        scale_mpp = result.custom_scale
+        if scale_mpp is None and objective:
+            scale_mpp = objective.get("microns_per_pixel")
+        if not scale_mpp or scale_mpp <= 0:
+            self.exif_sampling_label.setText("--")
+            self.exif_sampling_label.setToolTip("")
+            return
+        na_value = objective.get("na") if objective else None
+        if not na_value:
+            self.exif_sampling_label.setText(self.tr("NA not set"))
+            self.exif_sampling_label.setToolTip("")
+            return
+
+        pixels_per_micron = 1.0 / float(scale_mpp)
+        result_info = get_resolution_status(pixels_per_micron, float(na_value))
+        status = result_info["status"]
+        sampling_pct = float(result_info.get("sampling_pct", 0.0))
+        if "oversampled" in status.lower() and sampling_pct > 0:
+            oversample = sampling_pct / 100.0
+            ratio = f"{oversample:.1f}".rstrip("0").rstrip(".")
+            label = f"Oversampled {ratio}x"
+        elif status == "Undersampled" and sampling_pct > 0:
+            undersample = 100.0 / sampling_pct
+            ratio = f"{undersample:.1f}".rstrip("0").rstrip(".")
+            label = f"Undersampled {ratio}x"
+        else:
+            label = status
+        self.exif_sampling_label.setText(label)
+        self.exif_sampling_label.setToolTip(format_resolution_summary(pixels_per_micron, float(na_value)))
+        self._update_resize_info(result)
+
+    def _get_image_size(self, path: str | None) -> tuple[int, int] | None:
+        if not path:
+            return None
+        reader = QImageReader(path)
+        size = reader.size()
+        if not size.isValid():
+            return None
+        width = size.width()
+        height = size.height()
+        if width <= 0 or height <= 0:
+            return None
+        return width, height
+
+    def _get_objective_scale_mpp(self, objective_key: str | None) -> float | None:
+        if not objective_key:
+            return None
+        active_cal = CalibrationDB.get_active_calibration(objective_key)
+        if active_cal:
+            scale = active_cal.get("microns_per_pixel")
+            if scale and scale > 0:
+                return float(scale)
+        history = CalibrationDB.get_calibrations_for_objective(objective_key)
+        if history:
+            scale = history[0].get("microns_per_pixel")
+            if scale and scale > 0:
+                return float(scale)
+        return None
+
+    def _compute_resample_scale_factor(self, result: ImageImportResult | None) -> float:
+        if not result or result.image_type != "microscope":
+            return 1.0
+        if not hasattr(self, "resize_optimal_checkbox") or not self.resize_optimal_checkbox.isChecked():
+            return 1.0
+        objective = None
+        if result.objective and result.objective in self.objectives:
+            objective = self.objectives[result.objective]
+        scale_mpp = result.custom_scale
+        if scale_mpp is None:
+            scale_mpp = self._get_objective_scale_mpp(result.objective)
+        if not scale_mpp or scale_mpp <= 0:
+            return 1.0
+        na_value = objective.get("na") if objective else None
+        if not na_value:
+            return 1.0
+
+        target_pct = float(
+            objective.get("target_sampling_pct", self.target_sampling_pct or 120.0)
+            if objective
+            else (self.target_sampling_pct or 120.0)
+        )
+        pixels_per_micron = 1.0 / float(scale_mpp)
+        result_info = get_resolution_status(pixels_per_micron, float(na_value))
+        ideal_pixels_per_micron = float(result_info.get("ideal_pixels_per_micron", 0.0))
+        if not ideal_pixels_per_micron or ideal_pixels_per_micron <= 0:
+            return 1.0
+        target_pixels_per_micron = ideal_pixels_per_micron * (target_pct / 100.0)
+        factor = target_pixels_per_micron / pixels_per_micron
+        if factor > 1.0:
+            factor = 1.0
+        return max(0.01, float(factor))
+
+    def _update_resize_info(self, result: ImageImportResult | None) -> None:
+        if not hasattr(self, "current_resolution_label") or not hasattr(self, "target_resolution_label"):
+            return
+        if not result or result.image_type != "microscope":
+            self.current_resolution_label.setText("--")
+            self.target_resolution_label.setText("--")
+            return
+        size = self._get_image_size(result.original_filepath or result.filepath or result.preview_path)
+        if not size:
+            self.current_resolution_label.setText("--")
+            self.target_resolution_label.setText("--")
+            return
+        width, height = size
+        current_mp = (width * height) / 1_000_000.0
+        self.current_resolution_label.setText(
+            f"{self._format_megapixels(current_mp)} MP ({width} × {height})"
+        )
+        objective = None
+        if result.objective and result.objective in self.objectives:
+            objective = self.objectives[result.objective]
+        scale_mpp = result.custom_scale
+        if scale_mpp is None:
+            scale_mpp = self._get_objective_scale_mpp(result.objective)
+        na_value = objective.get("na") if objective else None
+        if hasattr(self, "target_sampling_input"):
+            target_pct = float(
+                objective.get("target_sampling_pct", self.target_sampling_pct)
+                if objective
+                else self.target_sampling_pct
+            )
+            self.target_sampling_input.blockSignals(True)
+            self.target_sampling_input.setValue(float(target_pct))
+            self.target_sampling_input.blockSignals(False)
+        if self._is_resized_image(result):
+            self.target_resolution_label.setText(self.tr("Already resized"))
+            return
+        if not scale_mpp or not na_value:
+            self.target_resolution_label.setText("--")
+            return
+        factor = self._compute_resample_scale_factor(result)
+        if result.image_id is None and not self._is_resized_image(result):
+            result.resample_scale_factor = factor
+        if not hasattr(self, "resize_optimal_checkbox") or not self.resize_optimal_checkbox.isChecked():
+            self.target_resolution_label.setText("--")
+            return
+        if factor >= 0.999:
+            self.target_resolution_label.setText(self.tr("Same as current"))
+            return
+        target_w = max(1, int(round(width * factor)))
+        target_h = max(1, int(round(height * factor)))
+        target_mp = (target_w * target_h) / 1_000_000.0
+        self.target_resolution_label.setText(
+            f"{self._format_megapixels(target_mp)} MP ({target_w} × {target_h})"
+        )
+
+    def _on_resize_settings_changed(self) -> None:
+        if not hasattr(self, "resize_optimal_checkbox") or not hasattr(self, "store_original_checkbox"):
+            return
+        resize_enabled = bool(self.resize_optimal_checkbox.isChecked())
+        self._sync_resize_controls()
+        store_original = bool(self.store_original_checkbox.isChecked()) if resize_enabled else False
+        SettingsDB.set_setting("resize_to_optimal_sampling", resize_enabled)
+        SettingsDB.set_setting("store_original_images", store_original)
+        for result in self.import_results:
+            result.resize_to_optimal = resize_enabled
+            result.store_original = store_original
+            result.resample_scale_factor = self._compute_resample_scale_factor(result)
+        if self.selected_index is not None and 0 <= self.selected_index < len(self.import_results):
+            self._update_current_image_sampling(self.import_results[self.selected_index])
+
+    def _on_target_sampling_changed(self, value: float) -> None:
+        self.target_sampling_pct = float(value)
+        SettingsDB.set_setting("target_sampling_pct", float(value))
+        selected_objective = self.objective_combo.currentData() if hasattr(self, "objective_combo") else None
+        if selected_objective and selected_objective in self.objectives:
+            self.objectives[selected_objective]["target_sampling_pct"] = float(value)
+            save_objectives(self.objectives)
+        for result in self.import_results:
+            result.resample_scale_factor = self._compute_resample_scale_factor(result)
+        if self.selected_index is not None and 0 <= self.selected_index < len(self.import_results):
+            self._update_current_image_sampling(self.import_results[self.selected_index])
+
+    def _format_megapixels(self, mp_value: float) -> str:
+        text = f"{mp_value:.1f}"
+        return text.rstrip("0").rstrip(".")
+
+    def _get_image_megapixels(self, path: str | None) -> float | None:
+        if not path:
+            return None
+        reader = QImageReader(path)
+        size = reader.size()
+        if not size.isValid():
+            return None
+        width = size.width()
+        height = size.height()
+        if width <= 0 or height <= 0:
+            return None
+        return (width * height) / 1_000_000.0
+
+    def _estimate_calibration_megapixels(self, cal: dict | None) -> float | None:
+        if not cal:
+            return None
+        values: list[float] = []
+        measurements_json = cal.get("measurements_json")
+        if measurements_json:
+            try:
+                loaded = json.loads(measurements_json)
+            except Exception:
+                loaded = None
+            if isinstance(loaded, dict):
+                for info in loaded.get("images") or []:
+                    mp = self._get_image_megapixels(info.get("path"))
+                    if mp:
+                        values.append(mp)
+        if not values:
+            mp = self._get_image_megapixels(cal.get("image_filepath"))
+            if mp:
+                values.append(mp)
+        if values:
+            return float(sum(values) / len(values))
+        return None
+
+    def _update_scale_mismatch_warning(self) -> None:
+        if not hasattr(self, "scale_warning_label"):
+            return
+        if not hasattr(self, "scale_group") or not self.scale_group.isEnabled():
+            self.scale_warning_label.setText("")
+            self.scale_warning_label.setToolTip("")
+            self.scale_warning_label.setVisible(False)
+            return
+        idx = self._current_single_index()
+        if idx is None or idx < 0 or idx >= len(self.import_results):
+            self.scale_warning_label.setText("")
+            self.scale_warning_label.setToolTip("")
+            self.scale_warning_label.setVisible(False)
+            return
+        result = self.import_results[idx]
+        if result.image_type != "microscope":
+            self.scale_warning_label.setText("")
+            self.scale_warning_label.setToolTip("")
+            self.scale_warning_label.setVisible(False)
+            return
+        selected_objective = self.objective_combo.currentData()
+        if not selected_objective or selected_objective == self.CUSTOM_OBJECTIVE_KEY:
+            self.scale_warning_label.setText("")
+            self.scale_warning_label.setToolTip("")
+            self.scale_warning_label.setVisible(False)
+            return
+        calibration = CalibrationDB.get_active_calibration(selected_objective)
+        calibration_mp = calibration.get("megapixels") if calibration else None
+        estimate = self._estimate_calibration_megapixels(calibration)
+        if isinstance(calibration_mp, (int, float)) and calibration_mp > 0:
+            if estimate:
+                diff_ratio = abs(float(calibration_mp) - float(estimate)) / max(1e-6, float(estimate))
+                if diff_ratio > 0.01:
+                    calibration_mp = estimate
+        elif estimate:
+            calibration_mp = estimate
+        if not isinstance(calibration_mp, (int, float)) or calibration_mp <= 0:
+            self.scale_warning_label.setText("")
+            self.scale_warning_label.setToolTip("")
+            self.scale_warning_label.setVisible(False)
+            return
+        image_mp = self._get_image_megapixels(
+            result.original_filepath or result.filepath or result.preview_path
+        )
+        if not image_mp:
+            self.scale_warning_label.setText("")
+            self.scale_warning_label.setToolTip("")
+            self.scale_warning_label.setVisible(False)
+            return
+        effective_mp = float(image_mp)
+        factor = getattr(result, "resample_scale_factor", None)
+        if self._is_resized_image(result) and isinstance(factor, (int, float)) and factor > 0:
+            effective_mp = float(image_mp) / (float(factor) * float(factor))
+        diff_ratio = abs(float(effective_mp) - float(calibration_mp)) / max(1e-6, float(calibration_mp))
+        if diff_ratio <= 0.01:
+            self.scale_warning_label.setText("")
+            self.scale_warning_label.setToolTip("")
+            self.scale_warning_label.setVisible(False)
+            return
+        ratio = max(effective_mp, calibration_mp) / max(1e-6, min(effective_mp, calibration_mp))
+        if ratio < 1.5:
+            self.scale_warning_label.setText("")
+            self.scale_warning_label.setToolTip("")
+            self.scale_warning_label.setVisible(False)
+            return
+        self.scale_warning_label.setText(self.tr("Warning: Image resolution mismatch!"))
+        self.scale_warning_label.setToolTip(
+            self.tr(
+                "Calibration image: {cal}MP. This image: {img}MP. "
+                "This is ok if you are working on a cropped image."
+            ).format(
+                cal=self._format_megapixels(float(calibration_mp)),
+                img=self._format_megapixels(float(effective_mp)),
+            )
+        )
+        self.scale_warning_label.setVisible(True)
 
     def _utm_from_latlon(self, lat, lon):
         """Convert WGS84 lat/lon to EUREF89 / UTM 33N."""
@@ -1749,6 +2415,13 @@ class ImageImportDialog(QDialog):
         self.exif_lat_label.setText("Lat: --")
         self.exif_lon_label.setText("Lon: --")
         self.exif_map_btn.setEnabled(False)
+        if hasattr(self, "exif_sampling_label"):
+            self.exif_sampling_label.setText("--")
+            self.exif_sampling_label.setToolTip("")
+        if hasattr(self, "current_resolution_label"):
+            self.current_resolution_label.setText("--")
+        if hasattr(self, "target_resolution_label"):
+            self.target_resolution_label.setText("--")
 
     def _show_multi_selection_state(self) -> None:
         self.preview.set_image(None)
@@ -1861,16 +2534,23 @@ class ImageImportDialog(QDialog):
         selected = self.gallery.selected_paths() if hasattr(self, "gallery") else []
         items = []
         for idx, result in enumerate(self.import_results):
-            badges = []
-            if result.image_type == "microscope":
-                detail = result.objective or (self.tr("Scale bar") if result.custom_scale else self.tr("Micro"))
-                if result.contrast:
-                    detail = f"{detail} {result.contrast}"
-                badges.append(detail)
-                if result.needs_scale:
-                    badges.append(self.tr("(!) needs scale"))
-            else:
-                badges.append(self.tr("Field"))
+            objective_label = result.objective
+            if result.objective and result.objective in self.objectives:
+                objective_label = objective_display_name(
+                    self.objectives[result.objective],
+                    result.objective,
+                ) or result.objective
+            badges = ImageGalleryWidget.build_image_type_badges(
+                image_type=result.image_type,
+                objective_name=objective_label,
+                contrast=result.contrast,
+                custom_scale=bool(result.custom_scale),
+                needs_scale=bool(result.needs_scale),
+                translate=self.tr,
+            )
+            has_measurements = False
+            if result.image_id:
+                has_measurements = bool(MeasurementDB.get_measurements_for_image(result.image_id))
             is_source = self._observation_source_index == idx
             gps_highlight = is_source and result.exif_has_gps
             gps_tag = self.tr("GPS") if gps_highlight else None
@@ -1883,6 +2563,7 @@ class ImageImportDialog(QDialog):
                     "badges": badges,
                     "gps_tag_text": gps_tag,
                     "gps_tag_highlight": gps_highlight,
+                    "has_measurements": has_measurements,
                 }
             )
         self.gallery.set_items(items)
@@ -1913,6 +2594,20 @@ class ImageImportDialog(QDialog):
             self._set_settings_hint(message, "#e74c3c")
         if self.image_paths:
             self._select_image(0)
+
+    def _on_gallery_delete_requested(self, image_key) -> None:
+        if image_key is None:
+            return
+        index = None
+        for idx, result in enumerate(self.import_results):
+            if image_key == result.image_id or image_key == result.filepath:
+                index = idx
+                break
+        if index is None:
+            return
+        self.selected_indices = [index]
+        self.selected_index = index
+        self._on_remove_selected()
 
     def _remap_ai_indices(self, removed_indices: list[int]) -> None:
         def new_index(old_index: int) -> int:

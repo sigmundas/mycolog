@@ -11,11 +11,18 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                                 QSizePolicy, QAbstractItemView, QFrame)
 from PySide6.QtCore import Signal, Qt, QDateTime, QStringListModel, QEvent
 from PySide6.QtGui import QPixmap, QImage
+from PIL import Image
 from PySide6.QtCore import QUrl
 from pathlib import Path
 import sqlite3
 from database.models import ObservationDB, ImageDB, MeasurementDB, SettingsDB, CalibrationDB
-from database.schema import get_images_dir, load_objectives
+from database.schema import (
+    get_images_dir,
+    load_objectives,
+    objective_display_name,
+    objective_sort_value,
+    resolve_objective_key,
+)
 from utils.thumbnail_generator import get_thumbnail_path, generate_all_sizes
 from utils.image_utils import cleanup_import_temp_file
 from utils.exif_reader import get_image_metadata
@@ -30,6 +37,7 @@ from utils.vernacular_utils import (
 )
 from .image_gallery_widget import ImageGalleryWidget
 from .image_import_dialog import ImageImportDialog, ImageImportResult, AIGuessWorker
+from .calibration_dialog import get_resolution_status
 
 
 def _parse_observation_datetime(value: str | None) -> QDateTime | None:
@@ -1030,6 +1038,7 @@ class ObservationsTab(QWidget):
             self.refresh_observations()
 
     def _build_import_results_from_images(self, images: list[dict]) -> list[ImageImportResult]:
+        objectives = load_objectives()
         results: list[ImageImportResult] = []
         for img in images:
             if not img:
@@ -1056,18 +1065,20 @@ class ObservationsTab(QWidget):
             gps_source = bool(img.get("gps_source")) if img.get("gps_source") is not None else False
             scale_value = img.get("scale_microns_per_pixel")
             objective_name = img.get("objective_name")
+            resolved_key = resolve_objective_key(objective_name, objectives)
             custom_scale = None
-            if scale_value is not None and (objective_name == "Custom" or not objective_name):
+            if scale_value is not None and (objective_name == "Custom" or not resolved_key):
                 try:
                     custom_scale = float(scale_value)
                 except (TypeError, ValueError):
                     custom_scale = None
+            objective_value = resolved_key if resolved_key else (None if objective_name == "Custom" else objective_name)
             results.append(
                 ImageImportResult(
                     filepath=filepath,
                     image_id=img.get("id"),
                     image_type=img.get("image_type") or "field",
-                    objective=objective_name if objective_name != "Custom" else None,
+                    objective=objective_value,
                     custom_scale=custom_scale,
                     contrast=img.get("contrast"),
                     mount_medium=img.get("mount_medium"),
@@ -1077,9 +1088,73 @@ class ObservationsTab(QWidget):
                     ai_crop_box=ai_crop_box,
                     ai_crop_source_size=ai_crop_source_size,
                     gps_source=gps_source,
+                    resample_scale_factor=img.get("resample_scale_factor"),
+                    original_filepath=img.get("original_filepath") or filepath,
                 )
             )
         return results
+
+    def _compute_resample_scale_factor(
+        self,
+        result: ImageImportResult,
+        scale_mpp: float | None,
+        objective_entry: dict | None,
+    ) -> float:
+        if not result or result.image_type != "microscope":
+            return 1.0
+        if not getattr(result, "resize_to_optimal", True):
+            return 1.0
+        if not scale_mpp or scale_mpp <= 0:
+            return 1.0
+        na_value = objective_entry.get("na") if objective_entry else None
+        if not na_value:
+            return 1.0
+        if objective_entry and objective_entry.get("target_sampling_pct") is not None:
+            target_pct = float(objective_entry.get("target_sampling_pct"))
+        else:
+            target_pct = float(SettingsDB.get_setting("target_sampling_pct", 120.0))
+        pixels_per_micron = 1.0 / float(scale_mpp)
+        info = get_resolution_status(pixels_per_micron, float(na_value))
+        ideal_pixels_per_micron = float(info.get("ideal_pixels_per_micron", 0.0))
+        if not ideal_pixels_per_micron or ideal_pixels_per_micron <= 0:
+            return 1.0
+        target_pixels_per_micron = ideal_pixels_per_micron * (target_pct / 100.0)
+        factor = target_pixels_per_micron / pixels_per_micron
+        if factor > 1.0:
+            factor = 1.0
+        return max(0.01, float(factor))
+
+    def _resample_import_image(
+        self,
+        source_path: str,
+        scale_factor: float,
+        output_dir: Path,
+    ) -> str | None:
+        if not source_path or scale_factor >= 0.999:
+            return source_path
+        try:
+            with Image.open(source_path) as img:
+                new_w = max(1, int(round(img.width * scale_factor)))
+                new_h = max(1, int(round(img.height * scale_factor)))
+                resized = img.resize((new_w, new_h), Image.LANCZOS)
+                src_path = Path(source_path)
+                suffix = src_path.suffix or ".jpg"
+                temp_path = output_dir / f"{src_path.stem}_resized{suffix}"
+                counter = 1
+                while temp_path.exists():
+                    temp_path = output_dir / f"{src_path.stem}_resized_{counter}{suffix}"
+                    counter += 1
+                save_kwargs = {}
+                fmt = img.format or None
+                if suffix.lower() in {".jpg", ".jpeg"}:
+                    resized = resized.convert("RGB")
+                    save_kwargs["quality"] = 95
+                    fmt = "JPEG"
+                resized.save(temp_path, format=fmt, **save_kwargs)
+                return str(temp_path)
+        except Exception as exc:
+            print(f"Warning: Could not resize image {source_path}: {exc}")
+            return source_path
 
     def _apply_import_results_to_observation(
         self,
@@ -1100,6 +1175,11 @@ class ObservationsTab(QWidget):
         for result in results:
             image_type = result.image_type or "field"
             objective_key = result.objective
+            if objective_key and objective_key not in objectives:
+                resolved_key = resolve_objective_key(objective_key, objectives)
+                if resolved_key:
+                    objective_key = resolved_key
+            objective_entry = objectives.get(objective_key) if objective_key in objectives else None
             contrast = result.contrast
             mount_medium = result.mount_medium
             sample_type = result.sample_type
@@ -1114,6 +1194,10 @@ class ObservationsTab(QWidget):
                     scale = float(objectives[objective_key]["microns_per_pixel"])
                     objective_name = objective_key
 
+            calibration_id = None
+            if objective_name and objective_name != "Custom":
+                calibration_id = CalibrationDB.get_active_calibration_id(objective_name)
+
             if result.image_id:
                 ImageDB.update_image(
                     result.image_id,
@@ -1126,6 +1210,7 @@ class ObservationsTab(QWidget):
                     ai_crop_box=result.ai_crop_box,
                     ai_crop_source_size=result.ai_crop_source_size,
                     gps_source=result.gps_source,
+                    calibration_id=calibration_id,
                 )
                 continue
 
@@ -1135,13 +1220,30 @@ class ObservationsTab(QWidget):
             final_path = maybe_convert_heic(filepath, output_dir)
             if final_path is None:
                 continue
-            # Get the active calibration_id for this objective
-            calibration_id = None
             if objective_name:
                 calibration_id = CalibrationDB.get_active_calibration_id(objective_name)
+            resample_factor = self._compute_resample_scale_factor(result, scale, objective_entry)
+            result.resample_scale_factor = resample_factor
+            resampled_path = final_path
+            if (
+                image_type == "microscope"
+                and getattr(result, "resize_to_optimal", True)
+                and resample_factor < 0.999
+            ):
+                resampled_path = self._resample_import_image(final_path, resample_factor, output_dir) or final_path
+                if scale is not None and resample_factor > 0:
+                    scale = float(scale) / float(resample_factor)
+
+            original_to_store = None
+            if (
+                image_type == "microscope"
+                and getattr(result, "store_original", False)
+                and resample_factor < 0.999
+            ):
+                original_to_store = result.original_filepath or final_path
             image_id = ImageDB.add_image(
                 observation_id=obs_id,
-                filepath=final_path,
+                filepath=resampled_path,
                 image_type=image_type,
                 scale=scale,
                 objective_name=objective_name,
@@ -1152,16 +1254,20 @@ class ObservationsTab(QWidget):
                 ai_crop_box=result.ai_crop_box,
                 ai_crop_source_size=result.ai_crop_source_size,
                 gps_source=result.gps_source,
+                resample_scale_factor=resample_factor,
+                original_filepath=original_to_store,
             )
 
-            stored_path = final_path
+            stored_path = resampled_path
             try:
                 image_data = ImageDB.get_image(image_id)
-                stored_path = image_data.get("filepath") if image_data else final_path
+                stored_path = image_data.get("filepath") if image_data else resampled_path
                 generate_all_sizes(stored_path, image_id)
             except Exception as e:
-                print(f"Warning: Could not generate thumbnails for {final_path}: {e}")
+                print(f"Warning: Could not generate thumbnails for {resampled_path}: {e}")
             cleanup_import_temp_file(filepath, final_path, stored_path, output_dir)
+            if resampled_path and resampled_path != final_path:
+                cleanup_import_temp_file(filepath, resampled_path, stored_path, output_dir)
 
 
 class ObservationDetailsDialog(QDialog):
@@ -1188,7 +1294,7 @@ class ObservationDetailsDialog(QDialog):
         self.map_helper = MapServiceHelper(self)
         self.setWindowTitle("Edit Observation" if self.edit_mode else "New Observation")
         self.setModal(True)
-        self.setMinimumSize(900, 720)
+        self.setMinimumSize(900, 820)
         self._observation_datetime = _parse_observation_datetime(
             observation.get("date") if observation else None
         )
@@ -1255,7 +1361,7 @@ class ObservationDetailsDialog(QDialog):
         details_layout = QFormLayout()
         details_layout.setSpacing(8)
 
-        # Date and time - make prominent but half width
+        # Date and time + GPS in same row
         datetime_container = QWidget()
         datetime_layout = QHBoxLayout(datetime_container)
         datetime_layout.setContentsMargins(0, 0, 0, 0)
@@ -1263,8 +1369,39 @@ class ObservationDetailsDialog(QDialog):
         self.datetime_input.setDateTime(QDateTime.currentDateTime())
         self.datetime_input.setDisplayFormat("yyyy-MM-dd HH:mm")
         self.datetime_input.setCalendarPopup(True)
-        self.datetime_input.setMaximumWidth(250)
+        self.datetime_input.setMaximumWidth(200)
         datetime_layout.addWidget(self.datetime_input)
+
+        datetime_layout.addSpacing(12)
+        datetime_layout.addWidget(QLabel("Lat:"))
+        self.lat_input = QDoubleSpinBox()
+        self.lat_input.setRange(-90.0, 90.0)
+        self.lat_input.setDecimals(6)
+        self.lat_input.setSpecialValueText("--")
+        self.lat_input.setValue(self.lat_input.minimum())
+        datetime_layout.addWidget(self.lat_input)
+
+        datetime_layout.addSpacing(8)
+        datetime_layout.addWidget(QLabel("Lon:"))
+        self.lon_input = QDoubleSpinBox()
+        self.lon_input.setRange(-180.0, 180.0)
+        self.lon_input.setDecimals(6)
+        self.lon_input.setSpecialValueText("--")
+        self.lon_input.setValue(self.lon_input.minimum())
+        datetime_layout.addWidget(self.lon_input)
+
+        # Map button - opens location in browser
+        self.map_btn = QPushButton(self.tr("  Map  "))
+        self.map_btn.setToolTip("Open location in Google Maps")
+        self.map_btn.setMinimumWidth(70)
+        self.map_btn.clicked.connect(self.open_map)
+        self.map_btn.setEnabled(False)
+        datetime_layout.addWidget(self.map_btn)
+
+        # Enable map button when coordinates are manually changed
+        self.lat_input.valueChanged.connect(self._update_map_button)
+        self.lon_input.valueChanged.connect(self._update_map_button)
+
         datetime_layout.addStretch()
         details_layout.addRow(self.tr("Date & time:"), datetime_container)
 
@@ -1273,50 +1410,10 @@ class ObservationDetailsDialog(QDialog):
         self.location_input.setPlaceholderText("e.g., Bymarka, Trondheim")
         details_layout.addRow(self.tr("Location:"), self.location_input)
 
-        gps_container = QWidget()
-        gps_container_layout = QVBoxLayout(gps_container)
-        gps_container_layout.setContentsMargins(0, 0, 0, 0)
-        gps_container_layout.setSpacing(2)
-
-        # GPS Coordinates
-        gps_layout = QHBoxLayout()
-        gps_layout.addWidget(QLabel("Lat:"))
-        self.lat_input = QDoubleSpinBox()
-        self.lat_input.setRange(-90.0, 90.0)
-        self.lat_input.setDecimals(6)
-        self.lat_input.setSpecialValueText("--")
-        self.lat_input.setValue(self.lat_input.minimum())
-        gps_layout.addWidget(self.lat_input)
-
-        gps_layout.addWidget(QLabel("Lon:"))
-        self.lon_input = QDoubleSpinBox()
-        self.lon_input.setRange(-180.0, 180.0)
-        self.lon_input.setDecimals(6)
-        self.lon_input.setSpecialValueText("--")
-        self.lon_input.setValue(self.lon_input.minimum())
-        gps_layout.addWidget(self.lon_input)
-
-        # Map button - opens location in browser
-        self.map_btn = QPushButton(self.tr("  Map  "))
-        self.map_btn.setToolTip("Open location in Google Maps")
-        self.map_btn.setMinimumWidth(70)
-        self.map_btn.clicked.connect(self.open_map)
-        self.map_btn.setEnabled(False)  # Disabled until GPS coordinates are set
-        gps_layout.addWidget(self.map_btn)
-
-        # Enable map button when coordinates are manually changed
-        self.lat_input.valueChanged.connect(self._update_map_button)
-        self.lon_input.valueChanged.connect(self._update_map_button)
-
-        gps_layout.addStretch()
-        gps_container_layout.addLayout(gps_layout)
-
         # GPS info label (shows source of coordinates)
         self.gps_info_label = QLabel("")
         self.gps_info_label.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
-        gps_container_layout.addWidget(self.gps_info_label)
-
-        details_layout.addRow("GPS:", gps_container)
+        details_layout.addRow("", self.gps_info_label)
 
         # Habitat
         self.habitat_input = QLineEdit()
@@ -1423,36 +1520,18 @@ class ObservationDetailsDialog(QDialog):
         self.image_gallery = ImageGalleryWidget(
             self.tr("Images"),
             self,
-            show_delete=False,
-            show_badges=False,
+            show_delete=True,
+            show_badges=True,
             min_height=60,
             default_height=160,
             thumbnail_size=110,
         )
+        self.image_gallery.set_multi_select(True)
         self._gps_source_index = self._resolve_gps_source_index()
-        items = []
-        for idx, item in enumerate(self.image_results):
-            thumb_preview = None
-            if item.image_id:
-                thumb_preview = get_thumbnail_path(item.image_id, "224x224")
-                if thumb_preview and not Path(thumb_preview).exists():
-                    thumb_preview = None
-            gps_match = idx == self._gps_source_index and item.exif_has_gps
-            items.append(
-                {
-                    "id": item.image_id,
-                    "filepath": item.filepath,
-                    "preview_path": thumb_preview or item.preview_path or item.filepath,
-                    "image_number": idx + 1,
-                    "crop_box": item.ai_crop_box,
-                    "crop_source_size": item.ai_crop_source_size,
-                    "gps_tag_text": self.tr("GPS") if gps_match else None,
-                    "gps_tag_highlight": gps_match,
-                }
-            )
-        self.image_gallery.set_items(items)
+        self._refresh_image_gallery_summary()
         self.image_gallery.imageClicked.connect(self._on_gallery_image_clicked)
         self.image_gallery.imageSelected.connect(self._on_gallery_image_clicked)
+        self.image_gallery.deleteRequested.connect(self._on_gallery_delete_requested)
         main_layout.addWidget(self.image_gallery)
 
         # ===== BOTTOM BUTTONS =====
@@ -1489,18 +1568,19 @@ class ObservationDetailsDialog(QDialog):
         ai_group = QGroupBox(self.tr("AI suggestions"))
         ai_layout = QVBoxLayout(ai_group)
         ai_layout.setContentsMargins(6, 6, 6, 6)
+        ai_group.setFixedWidth(300)
 
         ai_controls = QHBoxLayout()
         self.ai_guess_btn = QPushButton(self.tr("Guess"))
         self.ai_guess_btn.setToolTip(self.tr("Send image to Artsorakelet"))
         self.ai_guess_btn.clicked.connect(self._on_ai_guess_clicked)
-        self.ai_crop_btn = QPushButton(self.tr("Crop"))
-        self.ai_crop_btn.setToolTip(self.tr("Crop not available yet"))
-        self.ai_crop_btn.clicked.connect(self._on_ai_crop_clicked)
+        self.ai_copy_btn = QPushButton(self.tr("Copy"))
+        self.ai_copy_btn.clicked.connect(self._on_ai_copy_to_taxonomy)
+        self.ai_copy_btn.setEnabled(False)
         self.ai_guess_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self.ai_crop_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.ai_copy_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         ai_controls.addWidget(self.ai_guess_btn)
-        ai_controls.addWidget(self.ai_crop_btn)
+        ai_controls.addWidget(self.ai_copy_btn)
         ai_controls.setStretch(0, 1)
         ai_controls.setStretch(1, 1)
         ai_layout.addLayout(ai_controls)
@@ -1526,11 +1606,6 @@ class ObservationDetailsDialog(QDialog):
         self.ai_status_label.setWordWrap(True)
         self.ai_status_label.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
         ai_layout.addWidget(self.ai_status_label)
-
-        self.ai_copy_btn = QPushButton(self.tr("Copy to taxonomy"))
-        self.ai_copy_btn.clicked.connect(self._on_ai_copy_to_taxonomy)
-        self.ai_copy_btn.setVisible(False)
-        ai_layout.addWidget(self.ai_copy_btn)
 
         return ai_group
 
@@ -1590,13 +1665,26 @@ class ObservationDetailsDialog(QDialog):
             return 0
         return None
 
+    def _selected_gallery_indices(self) -> list[int]:
+        if not hasattr(self, "image_gallery"):
+            return []
+        paths = self.image_gallery.selected_paths()
+        if not paths:
+            return []
+        indices = []
+        for path in paths:
+            for idx, item in enumerate(self.image_results):
+                if item.filepath == path:
+                    indices.append(idx)
+                    break
+        return sorted(set(indices))
+
     def _on_gallery_image_clicked(self, _image_id, path: str) -> None:
         if not path:
             return
         for idx, item in enumerate(self.image_results):
             if item.filepath == path:
                 self._ai_selected_index = idx
-                self.image_gallery.select_paths([path])
                 self._update_ai_controls_state()
                 self._update_ai_table()
                 return
@@ -1604,15 +1692,26 @@ class ObservationDetailsDialog(QDialog):
     def _update_ai_controls_state(self) -> None:
         if not hasattr(self, "ai_guess_btn"):
             return
-        index = self._current_ai_index()
+        indices = self._selected_gallery_indices()
+        if not indices:
+            index = self._current_ai_index()
+            if index is not None:
+                indices = [index]
         enable = False
-        if index is not None and 0 <= index < len(self.image_results):
-            image_type = (self.image_results[index].image_type or "field").strip().lower()
-            enable = image_type == "field"
+        if indices:
+            indices = [idx for idx in indices if 0 <= idx < len(self.image_results)]
+            if indices:
+                enable = all(
+                    (self.image_results[idx].image_type or "field").strip().lower() == "field"
+                    for idx in indices
+                )
         if self._ai_thread is not None:
             enable = False
         self.ai_guess_btn.setEnabled(enable)
-        self.ai_crop_btn.setEnabled(enable)
+        if hasattr(self, "ai_table"):
+            self._set_ai_copy_enabled(self.ai_table.currentRow() >= 0)
+        else:
+            self._set_ai_copy_enabled(False)
 
     def _update_ai_table(self) -> None:
         if not hasattr(self, "ai_table"):
@@ -1620,7 +1719,7 @@ class ObservationDetailsDialog(QDialog):
         index = self._current_ai_index()
         self.ai_table.setRowCount(0)
         if index is None:
-            self._set_ai_copy_visible(False)
+            self._set_ai_copy_enabled(False)
             return
         predictions = self._ai_predictions_by_index.get(index, [])
         for row, pred in enumerate(predictions):
@@ -1646,9 +1745,10 @@ class ObservationDetailsDialog(QDialog):
                         break
             else:
                 self.ai_table.selectRow(0)
+            self._set_ai_copy_enabled(self.ai_table.currentRow() >= 0)
         else:
             self._ai_selected_taxon = None
-            self._set_ai_copy_visible(False)
+            self._set_ai_copy_enabled(False)
 
     def _format_ai_taxon_name(self, taxon: dict) -> str:
         scientific = taxon.get("scientificName") or taxon.get("scientific_name") or taxon.get("name") or ""
@@ -1702,7 +1802,7 @@ class ObservationDetailsDialog(QDialog):
         if not selected_items:
             self._ai_selected_taxon = None
             self._set_ai_status(None)
-            self._set_ai_copy_visible(False)
+            self._set_ai_copy_enabled(False)
             return
         row_item = self.ai_table.item(self.ai_table.currentRow(), 0)
         if not row_item:
@@ -1711,7 +1811,7 @@ class ObservationDetailsDialog(QDialog):
         self._ai_selected_by_index[index] = pred
         self._ai_selected_taxon = pred.get("taxon") or {}
         self._set_ai_status(None)
-        self._set_ai_copy_visible(True)
+        self._set_ai_copy_enabled(True)
 
     def _set_ai_status(self, text: str | None, color: str = "#7f8c8d") -> None:
         if not hasattr(self, "ai_status_label"):
@@ -1721,11 +1821,10 @@ class ObservationDetailsDialog(QDialog):
             return
         self.ai_status_label.setText(text)
         self.ai_status_label.setStyleSheet(f"color: {color}; font-size: 9pt;")
-        self._set_ai_copy_visible(False)
 
-    def _set_ai_copy_visible(self, visible: bool) -> None:
+    def _set_ai_copy_enabled(self, enabled: bool) -> None:
         if hasattr(self, "ai_copy_btn"):
-            self.ai_copy_btn.setVisible(bool(visible))
+            self.ai_copy_btn.setEnabled(bool(enabled))
 
     def _extract_genus_species_from_taxon(self, taxon: dict) -> tuple[str | None, str | None]:
         if not isinstance(taxon, dict):
@@ -1760,16 +1859,14 @@ class ObservationDetailsDialog(QDialog):
             self.genus_input.setText(genus)
         if hasattr(self, "species_input"):
             self.species_input.setText(species)
+        vernacular = self._preferred_vernacular_from_taxon(taxon)
         if hasattr(self, "vernacular_input"):
-            self.vernacular_input.clear()
+            self.vernacular_input.setText(vernacular or "")
         self._suppress_taxon_autofill = False
         if self.vernacular_db:
             self._update_vernacular_suggestions_for_taxon()
-            self._maybe_set_vernacular_from_taxon()
-        else:
-            vernacular = self._preferred_vernacular_from_taxon(taxon)
-            if vernacular and hasattr(self, "vernacular_input") and not self.vernacular_input.text().strip():
-                self.vernacular_input.setText(vernacular)
+            if not vernacular:
+                self._maybe_set_vernacular_from_taxon()
         self._set_ai_status(self.tr("Copied to taxonomy."), "#27ae60")
 
     def _on_ai_crop_clicked(self) -> None:
@@ -1777,25 +1874,47 @@ class ObservationDetailsDialog(QDialog):
 
     def _on_ai_guess_clicked(self) -> None:
         try:
-            index = self._current_ai_index()
-            if index is None or index < 0 or index >= len(self.image_results):
+            indices = self._selected_gallery_indices()
+            if not indices:
+                index = self._current_ai_index()
+                if index is None or index < 0 or index >= len(self.image_results):
+                    return
+                indices = [index]
+            indices = [idx for idx in indices if 0 <= idx < len(self.image_results)]
+            if not indices:
                 return
-            result = self.image_results[index]
-            image_type = (result.image_type or "field").strip().lower()
-            if image_type != "field":
+            if any(
+                (self.image_results[idx].image_type or "field").strip().lower() != "field"
+                for idx in indices
+            ):
                 self._set_ai_status(self.tr("AI guess only works for field photos"), "#e74c3c")
                 return
-            image_path = result.filepath
-            if not image_path:
+            requests = []
+            for idx in indices:
+                result = self.image_results[idx]
+                image_path = result.filepath
+                if not image_path:
+                    continue
+                requests.append(
+                    {
+                        "index": idx,
+                        "image_path": image_path,
+                        "crop_box": getattr(result, "ai_crop_box", None),
+                    }
+                )
+            if not requests:
                 return
             if self._ai_thread is not None:
                 return
             self.ai_guess_btn.setEnabled(False)
             self.ai_guess_btn.setText(self.tr("AI guessing..."))
-            self._set_ai_status(self.tr("Sending image to Artsdatabanken AI..."), "#3498db")
+            count = len(requests)
+            self._set_ai_status(
+                self.tr("Sending {count} image(s) to Artsdatabanken AI...").format(count=count),
+                "#3498db",
+            )
             temp_dir = get_images_dir() / "imports"
-            crop_box = getattr(result, "ai_crop_box", None)
-            self._ai_thread = AIGuessWorker(index, image_path, crop_box, temp_dir, max_dim=1600, parent=self)
+            self._ai_thread = AIGuessWorker(requests, temp_dir, max_dim=1600, parent=self)
             self._ai_thread.resultReady.connect(self._on_ai_guess_finished)
             self._ai_thread.error.connect(self._on_ai_guess_error)
             self._ai_thread.finished.connect(self._ai_thread.deleteLater)
@@ -1824,13 +1943,14 @@ class ObservationDetailsDialog(QDialog):
 
     def _on_ai_guess_finished(
         self,
-        index: int,
+        indices: list,
         predictions: list,
         _box: object,
         _warnings: object,
-        _temp_path: str,
+        _temp_paths: list,
     ) -> None:
-        self._ai_predictions_by_index[index] = predictions or []
+        for index in indices or []:
+            self._ai_predictions_by_index[index] = predictions or []
         self._update_ai_table()
         if predictions:
             self._set_ai_status(self.tr("AI suggestion updated"), "#27ae60")
@@ -1838,7 +1958,7 @@ class ObservationDetailsDialog(QDialog):
             self._set_ai_status(self.tr("No AI suggestions found"), "#7f8c8d")
         self._update_ai_controls_state()
 
-    def _on_ai_guess_error(self, _index: int, message: str) -> None:
+    def _on_ai_guess_error(self, _indices: list, message: str) -> None:
         if "500" in message:
             hint = self.tr("AI guess failed: server error (500). Try again later.")
         else:
@@ -2010,9 +2130,9 @@ class ObservationDetailsDialog(QDialog):
                 QComboBox { padding: 2px 4px; min-height: 24px; }
                 QComboBox QAbstractItemView { min-height: 24px; }
             """)
-            for mag in sorted(self.objectives.keys()):
-                obj = self.objectives[mag]
-                obj_combo.addItem(obj.get("name", mag), mag)
+            for key, obj in sorted(self.objectives.items(), key=lambda item: objective_sort_value(item[1], item[0])):
+                label = objective_display_name(obj, key) or key
+                obj_combo.addItem(label, key)
             # Set current objective
             current_obj = self.image_settings[row].get('objective', self.default_objective)
             idx = obj_combo.findData(current_obj)
@@ -2318,8 +2438,7 @@ class ObservationDetailsDialog(QDialog):
     def _update_datetime_width(self):
         """Keep Date & Time at half the dialog width."""
         if hasattr(self, "datetime_input"):
-            target = max(220, int(self.width() * 0.5))
-            self.datetime_input.setFixedWidth(target)
+            self.datetime_input.setFixedWidth(200)
 
     def _resolve_gps_source_index(self) -> int | None:
         source_idx = None
@@ -2337,6 +2456,129 @@ class ObservationDetailsDialog(QDialog):
             if item.exif_has_gps and self._matches_observation_datetime(item.captured_at):
                 return idx
         return None
+
+    def _refresh_image_gallery_summary(self) -> None:
+        if not hasattr(self, "image_gallery"):
+            return
+        items = []
+        for idx, item in enumerate(self.image_results):
+            thumb_preview = None
+            if item.image_id:
+                thumb_preview = get_thumbnail_path(item.image_id, "224x224")
+                if thumb_preview and not Path(thumb_preview).exists():
+                    thumb_preview = None
+            gps_match = idx == self._gps_source_index and item.exif_has_gps
+            needs_scale = bool(item.needs_scale)
+            if not needs_scale:
+                needs_scale = (
+                    (item.image_type or "field").strip().lower() == "microscope"
+                    and not item.objective
+                    and not item.custom_scale
+                )
+            objective_label = item.objective
+            if item.objective and item.objective in self.objectives:
+                objective_label = objective_display_name(
+                    self.objectives[item.objective],
+                    item.objective,
+                ) or item.objective
+            objective_short = ImageGalleryWidget._short_objective_label(objective_label, self.tr) or objective_label
+            badges = ImageGalleryWidget.build_image_type_badges(
+                image_type=item.image_type,
+                objective_name=objective_short,
+                contrast=item.contrast,
+                custom_scale=bool(item.custom_scale),
+                needs_scale=needs_scale,
+                translate=self.tr,
+            )
+            has_measurements = False
+            if item.image_id:
+                has_measurements = bool(MeasurementDB.get_measurements_for_image(item.image_id))
+            items.append(
+                {
+                    "id": item.image_id,
+                    "filepath": item.filepath,
+                    "preview_path": thumb_preview or item.preview_path or item.filepath,
+                    "image_number": idx + 1,
+                    "crop_box": item.ai_crop_box,
+                    "crop_source_size": item.ai_crop_source_size,
+                    "gps_tag_text": self.tr("GPS") if gps_match else None,
+                    "gps_tag_highlight": gps_match,
+                    "badges": badges,
+                    "has_measurements": has_measurements,
+                }
+            )
+        self.image_gallery.set_items(items)
+
+    def _remap_ai_indices(self, removed_indices: list[int]) -> None:
+        def new_index(old_index: int) -> int:
+            shift = 0
+            for removed in removed_indices:
+                if removed < old_index:
+                    shift += 1
+            return old_index - shift
+
+        def remap_dict(source: dict[int, object]) -> dict[int, object]:
+            remapped = {}
+            for old_index, value in source.items():
+                if old_index in removed_indices:
+                    continue
+                remapped[new_index(old_index)] = value
+            return remapped
+
+        self._ai_predictions_by_index = remap_dict(self._ai_predictions_by_index)
+        self._ai_selected_by_index = remap_dict(self._ai_selected_by_index)
+        self._ai_selected_taxon = None
+
+    def _on_gallery_delete_requested(self, image_key) -> None:
+        if image_key is None:
+            return
+        index = None
+        for idx, item in enumerate(self.image_results):
+            if image_key == item.image_id or image_key == item.filepath:
+                index = idx
+                break
+        if index is None:
+            return
+
+        result = self.image_results[index]
+        if result.image_id:
+            measurements = MeasurementDB.get_measurements_for_image(result.image_id)
+            prompt = (
+                self.tr("Delete image and associated measurements?")
+                if measurements
+                else self.tr("Delete image?")
+            )
+        else:
+            prompt = self.tr("Remove image from this observation?")
+
+        confirmed = self._question_yes_no(
+            self.tr("Confirm Delete"),
+            prompt,
+            default_yes=False
+        )
+        if not confirmed:
+            return
+
+        self.image_results.pop(index)
+        self._remap_ai_indices([index])
+
+        if self.primary_index is not None:
+            if self.primary_index == index:
+                self.primary_index = None
+            elif self.primary_index > index:
+                self.primary_index -= 1
+
+        if self._ai_selected_index is not None:
+            if self._ai_selected_index == index:
+                self._ai_selected_index = None
+            elif self._ai_selected_index > index:
+                self._ai_selected_index -= 1
+
+        self._gps_source_index = self._resolve_gps_source_index()
+        self._refresh_image_gallery_summary()
+        self._select_initial_ai_image()
+        self._update_ai_controls_state()
+        self._update_ai_table()
 
     def _matches_observation_datetime(self, dt: QDateTime | None) -> bool:
         if not dt or not self._observation_datetime:
@@ -2545,6 +2787,8 @@ class ObservationDetailsDialog(QDialog):
         if not text:
             self._suppress_taxon_autofill = True
             self.species_input.clear()
+            if hasattr(self, "vernacular_input"):
+                self.vernacular_input.clear()
             self._suppress_taxon_autofill = False
             self._species_model.setStringList([])
             # Reset species completer filtering

@@ -57,3 +57,8 @@ Thumbs.db
 # Temp
 *.tmp
 *.temp
+
+# Alt calibration backups
+utils/alt_calibration/
+utils/slide_calibration_feb7.py
+utils/slide_calibration_feb9.py

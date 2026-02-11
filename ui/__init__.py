@@ -1,4 +1,4 @@
-"""UI module for the mushroom spore analyzer."""
+"""UI module for MycoLog."""
 from .main_window import MainWindow
 
 __all__ = ['MainWindow']

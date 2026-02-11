@@ -83,7 +83,8 @@ class ObservationDB:
                           species_guess: str = None, notes: str = None,
                           uncertain: bool = False, inaturalist_id: int = None,
                           gps_latitude: float = None, gps_longitude: float = None,
-                          author: str = None) -> int:
+                          author: str = None, source_type: str = "personal",
+                          citation: str = None, data_provider: str = None) -> int:
         """Create a new observation and return its ID"""
         conn = get_connection()
         cursor = conn.cursor()
@@ -108,11 +109,12 @@ class ObservationDB:
         cursor.execute('''
             INSERT INTO observations (date, genus, species, common_name, location, habitat,
                                      species_guess, notes, uncertain, folder_path, inaturalist_id,
-                                     gps_latitude, gps_longitude, author)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                     gps_latitude, gps_longitude, author, source_type, citation,
+                                     data_provider)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (date, genus, species, common_name, location, habitat, species_guess, notes,
               1 if uncertain else 0, folder_path, inaturalist_id, gps_latitude,
-              gps_longitude, author))
+              gps_longitude, author, source_type, citation, data_provider))
 
         obs_id = cursor.lastrowid
         conn.commit()
@@ -387,6 +389,8 @@ class ImageDB:
                   ai_crop_box: tuple[float, float, float, float] | None = None,
                   ai_crop_source_size: tuple[int, int] | None = None,
                   gps_source: bool | None = None,
+                  resample_scale_factor: float | None = None,
+                  original_filepath: str | None = None,
                   copy_to_folder: bool = True) -> int:
         """Add an image and return its ID.
 
@@ -405,6 +409,7 @@ class ImageDB:
         cursor = conn.cursor()
 
         final_filepath = filepath
+        final_original_filepath = original_filepath
 
         # Copy image to observation folder if requested
         if copy_to_folder and observation_id:
@@ -429,6 +434,38 @@ class ImageDB:
                     except Exception as e:
                         print(f"Warning: Could not copy image: {e}")
 
+        storage_mode = SettingsDB.get_setting("original_storage_mode", "observation")
+        if not storage_mode:
+            storage_mode = "observation"
+        if storage_mode == "none":
+            original_filepath = None
+
+        if original_filepath:
+            original_path = Path(original_filepath)
+            if original_path.exists():
+                target_dir = None
+                if storage_mode == "global":
+                    global_dir = SettingsDB.get_setting("originals_dir") or str(_images_dir() / "originals")
+                    target_dir = Path(global_dir)
+                else:
+                    if copy_to_folder and observation_id:
+                        cursor.execute('SELECT folder_path FROM observations WHERE id = ?', (observation_id,))
+                        row = cursor.fetchone()
+                        if row and row['folder_path']:
+                            target_dir = Path(row['folder_path']) / "originals"
+                if target_dir:
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    dest_original = target_dir / original_path.name
+                    counter = 1
+                    while dest_original.exists():
+                        dest_original = target_dir / f"{original_path.stem}_{counter}{original_path.suffix}"
+                        counter += 1
+                    try:
+                        shutil.copy2(original_filepath, dest_original)
+                        final_original_filepath = str(dest_original)
+                    except Exception as e:
+                        print(f"Warning: Could not copy original image: {e}")
+
         crop_x1 = crop_y1 = crop_x2 = crop_y2 = None
         if ai_crop_box and len(ai_crop_box) == 4:
             crop_x1, crop_y1, crop_x2, crop_y2 = ai_crop_box
@@ -439,14 +476,15 @@ class ImageDB:
 
         cursor.execute('''
             INSERT INTO images (observation_id, filepath, image_type, micro_category,
-                              objective_name, scale_microns_per_pixel, mount_medium,
-                              sample_type, contrast, measure_color, notes, calibration_id,
+                              objective_name, scale_microns_per_pixel, resample_scale_factor,
+                              mount_medium, sample_type, contrast, measure_color, notes, calibration_id,
                               ai_crop_x1, ai_crop_y1, ai_crop_x2, ai_crop_y2,
-                              ai_crop_source_w, ai_crop_source_h, gps_source)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                              ai_crop_source_w, ai_crop_source_h, gps_source, original_filepath)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (observation_id, final_filepath, image_type, micro_category,
-              objective_name, scale, mount_medium, sample_type, contrast, measure_color, notes,
-              calibration_id, crop_x1, crop_y1, crop_x2, crop_y2, crop_w, crop_h, gps_source_value))
+              objective_name, scale, resample_scale_factor, mount_medium, sample_type, contrast, measure_color, notes,
+              calibration_id, crop_x1, crop_y1, crop_x2, crop_y2, crop_w, crop_h, gps_source_value,
+              final_original_filepath))
 
         img_id = cursor.lastrowid
         conn.commit()
@@ -506,10 +544,12 @@ class ImageDB:
                      objective_name: str = None, filepath: str = None,
                      measure_color: str = None, image_type: str = None,
                      mount_medium: str = None, sample_type: str = None,
-                     contrast: str = None, calibration_id: int = None,
+                     contrast: str = None, calibration_id: int | None | object = _UNSET,
                      ai_crop_box: tuple[float, float, float, float] | None | object = _UNSET,
                      ai_crop_source_size: tuple[int, int] | None | object = _UNSET,
-                     gps_source: bool | None | object = _UNSET):
+                     gps_source: bool | None | object = _UNSET,
+                     resample_scale_factor: float | None | object = _UNSET,
+                     original_filepath: str | None | object = _UNSET):
         """Update image metadata"""
         conn = get_connection()
         cursor = conn.cursor()
@@ -541,13 +581,19 @@ class ImageDB:
         if filepath is not None:
             updates.append('filepath = ?')
             values.append(filepath)
+        if resample_scale_factor is not _UNSET:
+            updates.append('resample_scale_factor = ?')
+            values.append(resample_scale_factor)
+        if original_filepath is not _UNSET:
+            updates.append('original_filepath = ?')
+            values.append(original_filepath)
         if notes is not None:
             updates.append('notes = ?')
             values.append(notes)
         if measure_color is not None:
             updates.append('measure_color = ?')
             values.append(measure_color)
-        if calibration_id is not None:
+        if calibration_id is not _UNSET:
             updates.append('calibration_id = ?')
             values.append(calibration_id)
         if ai_crop_box is not _UNSET:
@@ -630,6 +676,15 @@ class MeasurementDB:
                   points[1].x(), points[1].y(),
                   points[2].x(), points[2].y(),
                   points[3].x(), points[3].y()))
+        elif points and len(points) == 2:
+            cursor.execute('''
+                INSERT INTO spore_measurements
+                (image_id, length_um, width_um, measurement_type, notes,
+                 p1_x, p1_y, p2_x, p2_y)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (image_id, length, width, measurement_type, notes,
+                  points[0].x(), points[0].y(),
+                  points[1].x(), points[1].y()))
         else:
             cursor.execute('''
                 INSERT INTO spore_measurements (image_id, length_um, width_um, measurement_type, notes)
@@ -678,16 +733,66 @@ class MeasurementDB:
         return [dict(row) for row in rows]
 
     @staticmethod
-    def get_statistics_for_observation(observation_id: int, measurement_category: str = 'spore') -> dict:
+    def get_measurements_for_species(
+        genus: str,
+        species: str,
+        source_type: str | None = None,
+        measurement_category: str | None = None,
+        exclude_observation_id: int | None = None,
+    ) -> List[dict]:
+        conn = get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        where = [
+            "o.genus = ?",
+            "o.species = ?",
+            "m.length_um IS NOT NULL",
+            "m.width_um IS NOT NULL",
+        ]
+        params = [genus, species]
+        if source_type:
+            where.append("o.source_type = ?")
+            params.append(source_type)
+        if measurement_category:
+            category = str(measurement_category).lower()
+            if category in ("spore", "spores"):
+                where.append(
+                    "(m.measurement_type IS NULL OR m.measurement_type = '' "
+                    "OR LOWER(m.measurement_type) IN ('manual', 'spore', 'spores'))"
+                )
+            else:
+                where.append("LOWER(m.measurement_type) = ?")
+                params.append(category)
+        if exclude_observation_id:
+            where.append("o.id != ?")
+            params.append(exclude_observation_id)
+
+        cursor.execute(
+            f'''
+            SELECT m.length_um, m.width_um, o.id as observation_id
+            FROM spore_measurements m
+            JOIN images i ON m.image_id = i.id
+            JOIN observations o ON i.observation_id = o.id
+            WHERE {' AND '.join(where)}
+            ''',
+            tuple(params),
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    def get_statistics_for_observation(observation_id: int, measurement_category: str = 'spores') -> dict:
         """Calculate statistics for measurements of an observation."""
         measurements = MeasurementDB.get_measurements_for_observation(observation_id)
 
         if measurement_category:
             category = measurement_category.lower()
-            if category == 'spore':
+            if category in ('spore', 'spores'):
                 measurements = [
                     m for m in measurements
-                    if (m.get('measurement_type') in (None, '', 'manual', 'spore'))
+                    if (m.get('measurement_type') in (None, '', 'manual', 'spore', 'spores'))
                 ]
             else:
                 measurements = [
@@ -750,16 +855,16 @@ class MeasurementDB:
         return [row[0] for row in rows]
     
     @staticmethod
-    def get_statistics_for_image(image_id: int, measurement_category: str = 'spore') -> dict:
+    def get_statistics_for_image(image_id: int, measurement_category: str = 'spores') -> dict:
         """Calculate statistics for measurements of an image"""
         measurements = MeasurementDB.get_measurements_for_image(image_id)
 
         if measurement_category:
             category = measurement_category.lower()
-            if category == 'spore':
+            if category in ('spore', 'spores'):
                 measurements = [
                     m for m in measurements
-                    if (m.get('measurement_type') in (None, '', 'manual', 'spore'))
+                    if (m.get('measurement_type') in (None, '', 'manual', 'spore', 'spores'))
                 ]
             else:
                 measurements = [
@@ -980,6 +1085,203 @@ class ReferenceDB:
         return [row[0] for row in rows if row and row[0]]
 
 
+class SpeciesDataAvailability:
+    """Cache and query data availability for species."""
+
+    DATA_POINT_EMOJI = "🔹"
+    MINMAX_EMOJI = "📏"
+
+    def __init__(self):
+        self._cache = None
+        self._last_update = None
+
+    def _build_cache(self) -> dict:
+        cache: dict[tuple[str, str], dict] = {}
+
+        conn = get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT 
+                o.id as obs_id,
+                o.genus, 
+                o.species,
+                o.source_type,
+                COUNT(DISTINCT sm.id) as measurement_count
+            FROM observations o
+            JOIN images i ON i.observation_id = o.id
+            JOIN spore_measurements sm ON sm.image_id = i.id
+            WHERE o.genus IS NOT NULL 
+              AND o.species IS NOT NULL
+              AND sm.length_um IS NOT NULL
+              AND (
+                    sm.measurement_type IS NULL
+                    OR sm.measurement_type = ''
+                    OR LOWER(sm.measurement_type) IN ('manual', 'spore', 'spores')
+                  )
+            GROUP BY o.id, o.genus, o.species, o.source_type
+        ''')
+
+        for row in cursor.fetchall():
+            key = (row["genus"], row["species"])
+            if key not in cache:
+                cache[key] = {
+                    "has_personal_points": False,
+                    "has_shared_points": False,
+                    "has_published_points": False,
+                    "has_reference_minmax": False,
+                    "personal_count": 0,
+                    "shared_count": 0,
+                    "published_count": 0,
+                    "reference_count": 0,
+                    "measurement_count": 0,
+                    "obs_ids_by_source": {"personal": set(), "shared": set(), "published": set()},
+                }
+
+            source_type = row["source_type"] or "personal"
+            if source_type not in ("personal", "shared", "published"):
+                source_type = "personal"
+            obs_id = row["obs_id"]
+            cache[key]["obs_ids_by_source"][source_type].add(obs_id)
+            cache[key]["measurement_count"] += row["measurement_count"] or 0
+
+        for info in cache.values():
+            info["personal_count"] = len(info["obs_ids_by_source"]["personal"])
+            info["shared_count"] = len(info["obs_ids_by_source"]["shared"])
+            info["published_count"] = len(info["obs_ids_by_source"]["published"])
+            info["has_personal_points"] = info["personal_count"] > 0
+            info["has_shared_points"] = info["shared_count"] > 0
+            info["has_published_points"] = info["published_count"] > 0
+
+        conn.close()
+
+        ref_conn = get_reference_connection()
+        ref_conn.row_factory = sqlite3.Row
+        ref_cursor = ref_conn.cursor()
+        ref_cursor.execute('''
+            SELECT 
+                genus, 
+                species,
+                COUNT(*) as ref_count
+            FROM reference_values
+            WHERE length_min IS NOT NULL 
+               OR length_max IS NOT NULL
+               OR length_p05 IS NOT NULL
+               OR length_p50 IS NOT NULL
+               OR length_p95 IS NOT NULL
+               OR length_avg IS NOT NULL
+               OR width_min IS NOT NULL
+               OR width_max IS NOT NULL
+               OR width_p05 IS NOT NULL
+               OR width_p50 IS NOT NULL
+               OR width_p95 IS NOT NULL
+               OR width_avg IS NOT NULL
+               OR q_min IS NOT NULL
+               OR q_p50 IS NOT NULL
+               OR q_max IS NOT NULL
+               OR q_avg IS NOT NULL
+            GROUP BY genus, species
+        ''')
+
+        for row in ref_cursor.fetchall():
+            key = (row["genus"], row["species"])
+            if key not in cache:
+                cache[key] = {
+                    "has_personal_points": False,
+                    "has_shared_points": False,
+                    "has_published_points": False,
+                    "has_reference_minmax": False,
+                    "personal_count": 0,
+                    "shared_count": 0,
+                    "published_count": 0,
+                    "reference_count": 0,
+                    "measurement_count": 0,
+                    "obs_ids_by_source": {"personal": set(), "shared": set(), "published": set()},
+                }
+            cache[key]["has_reference_minmax"] = True
+            cache[key]["reference_count"] = row["ref_count"]
+
+        ref_conn.close()
+        return cache
+
+    def get_cache(self, force_refresh: bool = False) -> dict:
+        if force_refresh or self._cache is None:
+            self._cache = self._build_cache()
+            self._last_update = datetime.now()
+        return self._cache
+
+    def _apply_observation_exclusion(self, info: dict, exclude_observation_id: int | None) -> dict:
+        if not exclude_observation_id:
+            return info
+        adjusted = dict(info)
+        by_source = info.get("obs_ids_by_source") or {}
+        personal_ids = by_source.get("personal", set())
+        shared_ids = by_source.get("shared", set())
+        published_ids = by_source.get("published", set())
+        personal_count = len([obs_id for obs_id in personal_ids if obs_id != exclude_observation_id])
+        shared_count = len([obs_id for obs_id in shared_ids if obs_id != exclude_observation_id])
+        published_count = len([obs_id for obs_id in published_ids if obs_id != exclude_observation_id])
+        adjusted["personal_count"] = personal_count
+        adjusted["shared_count"] = shared_count
+        adjusted["published_count"] = published_count
+        adjusted["has_personal_points"] = personal_count > 0
+        adjusted["has_shared_points"] = shared_count > 0
+        adjusted["has_published_points"] = published_count > 0
+        return adjusted
+
+    def get_species_display_name(
+        self,
+        genus: str,
+        species: str,
+        exclude_observation_id: int | None = None,
+    ) -> tuple[str, bool]:
+        cache = self.get_cache()
+        key = (genus, species)
+        info = cache.get(
+            key,
+            {
+                "has_personal_points": False,
+                "has_shared_points": False,
+                "has_published_points": False,
+                "has_reference_minmax": False,
+                "obs_ids_by_source": {"personal": set(), "shared": set(), "published": set()},
+                "personal_count": 0,
+                "shared_count": 0,
+                "published_count": 0,
+            },
+        )
+        info = self._apply_observation_exclusion(info, exclude_observation_id)
+
+        emojis = []
+        has_any_data = False
+
+        if (
+            info.get("has_personal_points")
+            or info.get("has_shared_points")
+            or info.get("has_published_points")
+        ):
+            emojis.append(self.DATA_POINT_EMOJI)
+            has_any_data = True
+
+        if info.get("has_reference_minmax"):
+            emojis.append(self.MINMAX_EMOJI)
+            has_any_data = True
+
+        emoji_str = " ".join(emojis)
+        display = f"{genus} {species} {emoji_str}".strip()
+        return display, has_any_data
+
+    def get_detailed_info(
+        self,
+        genus: str,
+        species: str,
+        exclude_observation_id: int | None = None,
+    ) -> dict:
+        cache = self.get_cache()
+        info = cache.get((genus, species), {})
+        return self._apply_observation_exclusion(info, exclude_observation_id)
+
+
 class SettingsDB:
     """Store simple key/value settings."""
 
@@ -1037,6 +1339,79 @@ class CalibrationDB:
     """Handle calibration database operations for microscope objectives."""
 
     @staticmethod
+    def _estimate_calibration_megapixels(cal: dict) -> float | None:
+        if not cal:
+            return None
+        values: list[float] = []
+
+        def _add_from_path(path: str | None) -> None:
+            if not path:
+                return
+            try:
+                from PIL import Image
+            except Exception:
+                return
+            try:
+                with Image.open(path) as img:
+                    if img.width > 0 and img.height > 0:
+                        values.append((img.width * img.height) / 1_000_000.0)
+            except Exception:
+                return
+
+        measurements_json = cal.get("measurements_json")
+        if measurements_json:
+            try:
+                loaded = json.loads(measurements_json)
+            except Exception:
+                loaded = None
+            if isinstance(loaded, dict):
+                for info in loaded.get("images") or []:
+                    crop_source = info.get("crop_source_size")
+                    if crop_source and len(crop_source) == 2:
+                        try:
+                            source_w = float(crop_source[0])
+                            source_h = float(crop_source[1])
+                        except (TypeError, ValueError):
+                            source_w = source_h = 0
+                        if source_w > 0 and source_h > 0:
+                            values.append((source_w * source_h) / 1_000_000.0)
+                            continue
+                    _add_from_path(info.get("path"))
+        if not values:
+            _add_from_path(cal.get("image_filepath"))
+        if values:
+            return float(sum(values) / len(values))
+        return None
+
+    @staticmethod
+    def backfill_megapixels(diff_threshold: float = 0.01, force: bool = False) -> int:
+        """Backfill calibration megapixels using full image sizes."""
+        conn = get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, megapixels, measurements_json, image_filepath FROM calibrations")
+        rows = cursor.fetchall()
+        updated = 0
+        for row in rows:
+            cal = dict(row)
+            estimate = CalibrationDB._estimate_calibration_megapixels(cal)
+            if not estimate:
+                continue
+            mp_value = cal.get("megapixels")
+            if isinstance(mp_value, (int, float)) and mp_value > 0:
+                diff_ratio = abs(float(mp_value) - float(estimate)) / max(1e-6, float(estimate))
+                if not force and diff_ratio <= diff_threshold:
+                    continue
+            cursor.execute(
+                "UPDATE calibrations SET megapixels = ? WHERE id = ?",
+                (float(estimate), cal.get("id")),
+            )
+            updated += 1
+        conn.commit()
+        conn.close()
+        return updated
+
+    @staticmethod
     def add_calibration(
         objective_key: str,
         microns_per_pixel: float,
@@ -1047,6 +1422,12 @@ class CalibrationDB:
         num_measurements: int = None,
         measurements_json: str = None,
         image_filepath: str = None,
+        camera: str = None,
+        megapixels: float = None,
+        target_sampling_pct: float | None = None,
+        resample_scale_factor: float | None = None,
+        calibration_image_width: int | None = None,
+        calibration_image_height: int | None = None,
         notes: str = None,
         set_active: bool = True,
     ) -> int:
@@ -1064,18 +1445,60 @@ class CalibrationDB:
                 (objective_key,)
             )
 
-        cursor.execute('''
-            INSERT INTO calibrations (
-                objective_key, calibration_date, microns_per_pixel,
-                microns_per_pixel_std, confidence_interval_low, confidence_interval_high,
-                num_measurements, measurements_json, image_filepath, notes, is_active
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            objective_key, calibration_date, microns_per_pixel,
-            microns_per_pixel_std, confidence_interval_low, confidence_interval_high,
-            num_measurements, measurements_json, image_filepath, notes,
-            1 if set_active else 0
-        ))
+        cursor.execute("PRAGMA table_info(calibrations)")
+        columns = {row[1] for row in cursor.fetchall()}
+
+        insert_cols = [
+            "objective_key",
+            "calibration_date",
+            "microns_per_pixel",
+            "microns_per_pixel_std",
+            "confidence_interval_low",
+            "confidence_interval_high",
+            "num_measurements",
+            "measurements_json",
+            "image_filepath",
+        ]
+        values = [
+            objective_key,
+            calibration_date,
+            microns_per_pixel,
+            microns_per_pixel_std,
+            confidence_interval_low,
+            confidence_interval_high,
+            num_measurements,
+            measurements_json,
+            image_filepath,
+        ]
+
+        if "camera" in columns:
+            insert_cols.append("camera")
+            values.append(camera)
+        if "megapixels" in columns:
+            insert_cols.append("megapixels")
+            values.append(megapixels)
+        if "target_sampling_pct" in columns:
+            insert_cols.append("target_sampling_pct")
+            values.append(target_sampling_pct)
+        if "resample_scale_factor" in columns:
+            insert_cols.append("resample_scale_factor")
+            values.append(resample_scale_factor)
+        if "calibration_image_width" in columns:
+            insert_cols.append("calibration_image_width")
+            values.append(calibration_image_width)
+        if "calibration_image_height" in columns:
+            insert_cols.append("calibration_image_height")
+            values.append(calibration_image_height)
+
+        insert_cols.extend(["notes", "is_active"])
+        values.extend([notes, 1 if set_active else 0])
+
+        placeholders = ", ".join(["?"] * len(insert_cols))
+        cols_sql = ", ".join(insert_cols)
+        cursor.execute(
+            f"INSERT INTO calibrations ({cols_sql}) VALUES ({placeholders})",
+            values,
+        )
 
         calibration_id = cursor.lastrowid
         conn.commit()
@@ -1204,6 +1627,21 @@ class CalibrationDB:
 
         cursor.execute("DELETE FROM calibrations WHERE id = ?", (calibration_id,))
 
+        conn.commit()
+        conn.close()
+
+    @staticmethod
+    def clear_calibration_usage(calibration_id: int, clear_objective: bool = True) -> None:
+        """Clear calibration usage from images tied to a calibration."""
+        conn = get_connection()
+        cursor = conn.cursor()
+        updates = ["calibration_id = NULL", "scale_microns_per_pixel = NULL"]
+        if clear_objective:
+            updates.append("objective_name = NULL")
+        cursor.execute(
+            f"UPDATE images SET {', '.join(updates)} WHERE calibration_id = ?",
+            (calibration_id,),
+        )
         conn.commit()
         conn.close()
 

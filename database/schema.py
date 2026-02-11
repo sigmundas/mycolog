@@ -1,5 +1,6 @@
 """Database schema and initialization"""
 import json
+import re
 import sqlite3
 from pathlib import Path
 from platformdirs import user_data_dir
@@ -11,24 +12,202 @@ SETTINGS_PATH = _app_dir / "app_settings.json"
 
 DEFAULT_OBJECTIVES = {
     "10X": {
+        "magnification": 10.0,
+        "na": 0.25,
+        "objective_name": "Plan achro",
         "name": "10X/0.25 Plan achro",
-        "magnification": "10X",
         "microns_per_pixel": 0.314,
         "notes": "Leica DM2000, Olympus MFT 1:1",
     },
     "40X": {
+        "magnification": 40.0,
+        "na": 0.75,
+        "objective_name": "Plan fluor",
         "name": "40X/0.75 Plan fluor",
-        "magnification": "40X",
         "microns_per_pixel": 0.07875,
         "notes": "Leica DM2000, Olympus MFT 1:1",
     },
     "100X": {
+        "magnification": 100.0,
+        "na": 1.25,
+        "objective_name": "Plan achro Oil",
         "name": "100X/1.25 Plan achro Oil",
-        "magnification": "100X",
         "microns_per_pixel": 0.0315,
         "notes": "Leica DM2000, Olympus MFT 1:1",
     },
 }
+
+
+def _format_objective_number(value, decimals: int = 2) -> str:
+    if value is None:
+        return ""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if abs(number - round(number)) < 1e-6:
+        return str(int(round(number)))
+    text = f"{number:.{max(0, decimals)}f}".rstrip("0").rstrip(".")
+    return text
+
+
+def format_objective_display(
+    magnification,
+    numerical_aperture,
+    objective_name: str | None,
+) -> str:
+    mag_text = _format_objective_number(magnification, decimals=2)
+    na_text = _format_objective_number(numerical_aperture, decimals=2)
+    base = ""
+    if mag_text and na_text:
+        base = f"{mag_text}X/{na_text}"
+    elif mag_text:
+        base = f"{mag_text}X"
+    elif na_text:
+        base = f"NA {na_text}"
+    name = (objective_name or "").strip()
+    if name:
+        return f"{base} {name}".strip()
+    return base.strip()
+
+
+def _parse_magnification(value):
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    match = re.search(r"(\d+(?:\.\d+)?)", str(value))
+    return float(match.group(1)) if match else None
+
+
+def _parse_na(value):
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    match = re.search(r"/\s*([0-9.]+)", str(value))
+    return float(match.group(1)) if match else None
+
+
+def _parse_objective_name(text: str | None) -> str | None:
+    if not text:
+        return None
+    match = re.match(r"\s*(\d+(?:\.\d+)?)\s*[xX]\s*/\s*([0-9.]+)\s*(.*)$", str(text))
+    if match:
+        name = match.group(3).strip()
+        return name or None
+    return None
+
+
+def _upgrade_objective_entry(key: str, obj: dict) -> tuple[dict, bool]:
+    updated = False
+    entry = dict(obj) if isinstance(obj, dict) else {}
+    magnification = entry.get("magnification")
+    na_value = entry.get("na") or entry.get("numerical_aperture")
+    objective_name = entry.get("objective_name")
+    legacy_name = entry.get("name")
+
+    parsed_mag = _parse_magnification(magnification)
+    if parsed_mag is None:
+        parsed_mag = _parse_magnification(key) or _parse_magnification(legacy_name)
+    if parsed_mag is not None and parsed_mag != magnification:
+        entry["magnification"] = parsed_mag
+        updated = True
+
+    parsed_na = _parse_na(na_value)
+    if parsed_na is None:
+        parsed_na = _parse_na(legacy_name)
+    if parsed_na is not None and parsed_na != na_value:
+        entry["na"] = parsed_na
+        updated = True
+
+    if not objective_name:
+        parsed_name = _parse_objective_name(legacy_name)
+        if parsed_name:
+            entry["objective_name"] = parsed_name
+            updated = True
+
+    display_name = format_objective_display(
+        entry.get("magnification"),
+        entry.get("na"),
+        entry.get("objective_name"),
+    )
+    if entry.get("objective_name"):
+        if display_name and entry.get("name") != display_name:
+            entry["name"] = display_name
+            updated = True
+    elif not entry.get("name") and display_name:
+        entry["name"] = display_name
+        updated = True
+
+    return entry, updated
+
+
+def _upgrade_objectives(objectives: dict) -> tuple[dict, bool]:
+    if not isinstance(objectives, dict):
+        return {}, False
+    updated = False
+    normalized = {}
+    for key, obj in objectives.items():
+        entry, changed = _upgrade_objective_entry(key, obj)
+        if changed:
+            updated = True
+        normalized[key] = entry
+    return normalized, updated
+
+
+def objective_display_name(obj: dict, fallback_key: str | None = None) -> str:
+    if not isinstance(obj, dict):
+        return fallback_key or ""
+    objective_name = obj.get("objective_name")
+    if objective_name:
+        display = format_objective_display(obj.get("magnification"), obj.get("na"), objective_name)
+        if display:
+            return display
+    name = obj.get("name")
+    if name:
+        return str(name)
+    return str(fallback_key) if fallback_key is not None else ""
+
+
+def objective_sort_value(obj: dict, fallback_key: str | None = None) -> float:
+    if isinstance(obj, dict):
+        mag = obj.get("magnification")
+        parsed = _parse_magnification(mag)
+        if parsed is not None:
+            return parsed
+    parsed = _parse_magnification(fallback_key)
+    return parsed if parsed is not None else 9999.0
+
+
+def resolve_objective_key(name: str | None, objectives: dict) -> str | None:
+    if not name or not isinstance(objectives, dict):
+        return None
+    if name in objectives:
+        return name
+    normalized = str(name).strip()
+    if not normalized:
+        return None
+    for key, obj in objectives.items():
+        display = objective_display_name(obj, key)
+        if display == normalized:
+            return key
+    # Case-insensitive match on display text
+    lower_name = normalized.lower()
+    for key, obj in objectives.items():
+        display = objective_display_name(obj, key)
+        if display and display.lower() == lower_name:
+            return key
+    mag = _parse_magnification(normalized)
+    if mag is not None:
+        matches = []
+        for key, obj in objectives.items():
+            obj_mag = _parse_magnification(obj.get("magnification"))
+            if obj_mag is not None and abs(obj_mag - mag) < 1e-6:
+                matches.append(key)
+        if len(matches) == 1:
+            return matches[0]
+    return None
 
 
 def get_app_dir() -> Path:
@@ -50,20 +229,25 @@ def load_objectives() -> dict:
             with open(path, "r", encoding="utf-8") as handle:
                 data = json.load(handle)
             if isinstance(data, dict):
-                return data
+                upgraded, changed = _upgrade_objectives(data)
+                if changed:
+                    save_objectives(upgraded)
+                return upgraded
         except (OSError, json.JSONDecodeError):
             pass
     path.parent.mkdir(parents=True, exist_ok=True)
+    normalized, _changed = _upgrade_objectives(DEFAULT_OBJECTIVES)
     with open(path, "w", encoding="utf-8") as handle:
-        json.dump(DEFAULT_OBJECTIVES, handle, indent=2)
-    return dict(DEFAULT_OBJECTIVES)
+        json.dump(normalized, handle, indent=2)
+    return dict(normalized)
 
 
 def save_objectives(objectives: dict) -> None:
     path = get_objectives_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    normalized, _changed = _upgrade_objectives(objectives)
     with open(path, "w", encoding="utf-8") as handle:
-        json.dump(objectives, handle, indent=2)
+        json.dump(normalized, handle, indent=2)
 
 def _load_app_settings() -> dict:
     if not SETTINGS_PATH.exists():
@@ -284,6 +468,9 @@ def init_database():
             spore_statistics TEXT,
             auto_threshold REAL,
             author TEXT,
+            source_type TEXT DEFAULT 'personal',
+            citation TEXT,
+            data_provider TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
@@ -305,6 +492,20 @@ def init_database():
         cursor.execute('ALTER TABLE observations ADD COLUMN author TEXT')
     except sqlite3.OperationalError:
         pass  # Column already exists
+
+    # Add source tracking columns if they don't exist
+    try:
+        cursor.execute("ALTER TABLE observations ADD COLUMN source_type TEXT DEFAULT 'personal'")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute('ALTER TABLE observations ADD COLUMN citation TEXT')
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute('ALTER TABLE observations ADD COLUMN data_provider TEXT')
+    except sqlite3.OperationalError:
+        pass
 
     # Settings table
     cursor.execute('''
@@ -362,10 +563,12 @@ def init_database():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             observation_id INTEGER,
             filepath TEXT NOT NULL,
+            original_filepath TEXT,
             image_type TEXT CHECK(image_type IN ('field', 'microscope')),
             micro_category TEXT,
             objective_name TEXT,
             scale_microns_per_pixel REAL,
+            resample_scale_factor REAL,
             mount_medium TEXT,
             sample_type TEXT,
             contrast TEXT,
@@ -395,6 +598,12 @@ def init_database():
     except sqlite3.OperationalError:
         pass  # Column already exists
 
+    # Add original_filepath column if it doesn't exist
+    try:
+        cursor.execute('ALTER TABLE images ADD COLUMN original_filepath TEXT')
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
     # Add mount_medium column if it doesn't exist
     try:
         cursor.execute('ALTER TABLE images ADD COLUMN mount_medium TEXT')
@@ -416,6 +625,12 @@ def init_database():
     # Add measure_color column if it doesn't exist
     try:
         cursor.execute('ALTER TABLE images ADD COLUMN measure_color TEXT')
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Add resample_scale_factor column if it doesn't exist
+    try:
+        cursor.execute('ALTER TABLE images ADD COLUMN resample_scale_factor REAL')
     except sqlite3.OperationalError:
         pass  # Column already exists
 
@@ -535,11 +750,50 @@ def init_database():
             num_measurements INTEGER,
             measurements_json TEXT,
             image_filepath TEXT,
+            camera TEXT,
+            megapixels REAL,
+            target_sampling_pct REAL,
+            resample_scale_factor REAL,
+            calibration_image_width INTEGER,
+            calibration_image_height INTEGER,
             notes TEXT,
             is_active INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+
+    # Add camera column if it doesn't exist (migration for existing DBs)
+    try:
+        cursor.execute('ALTER TABLE calibrations ADD COLUMN camera TEXT')
+    except sqlite3.OperationalError:
+        pass
+    # Add megapixels column if it doesn't exist (migration for existing DBs)
+    try:
+        cursor.execute('ALTER TABLE calibrations ADD COLUMN megapixels REAL')
+    except sqlite3.OperationalError:
+        pass
+    # Add target sampling percent column if it doesn't exist
+    try:
+        cursor.execute('ALTER TABLE calibrations ADD COLUMN target_sampling_pct REAL')
+    except sqlite3.OperationalError:
+        pass
+    # Add resample scale factor column if it doesn't exist
+    try:
+        cursor.execute('ALTER TABLE calibrations ADD COLUMN resample_scale_factor REAL')
+    except sqlite3.OperationalError:
+        pass
+    # Add calibration image dimensions if they don't exist
+    try:
+        cursor.execute('ALTER TABLE calibrations ADD COLUMN calibration_image_width INTEGER')
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute('ALTER TABLE calibrations ADD COLUMN calibration_image_height INTEGER')
+    except sqlite3.OperationalError:
+        pass
+
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_observations_species ON observations(genus, species)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_observations_source ON observations(source_type)')
 
     conn.commit()
     conn.close()

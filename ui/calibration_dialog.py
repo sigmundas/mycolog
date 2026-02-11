@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -9,23 +10,25 @@ from typing import Optional
 from uuid import uuid4
 
 import numpy as np
-from PIL import Image
-from PySide6.QtCore import Qt, Signal, QPointF
-from PySide6.QtGui import QPixmap, QKeySequence, QShortcut
+from PIL import Image, ImageDraw
+from PySide6.QtCore import Qt, Signal, QPointF, QStandardPaths
+from PySide6.QtGui import QPixmap, QKeySequence, QShortcut, QIntValidator, QDoubleValidator
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QComboBox, QFormLayout, QGroupBox, QTabWidget, QWidget, QDoubleSpinBox,
     QSplitter, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QFileDialog, QMessageBox, QSizePolicy,
-    QCheckBox, QProgressBar,
+    QCheckBox, QProgressBar, QGridLayout,
 )
 
 from database.schema import (
     load_objectives, save_objectives, get_last_objective_path,
-    get_calibrations_dir,
+    get_calibrations_dir, get_app_settings, update_app_settings,
+    format_objective_display, objective_display_name, objective_sort_value,
 )
-from database.models import CalibrationDB, ObservationDB
+from database.models import CalibrationDB, ObservationDB, SettingsDB
 import utils.slide_calibration as slide_calibration
+from utils.exif_reader import get_exif_data
 from .zoomable_image_widget import ZoomableImageLabel
 from .image_gallery_widget import ImageGalleryWidget
 
@@ -102,32 +105,131 @@ def nm_to_um(nm: float) -> float:
     return nm / 1000
 
 
-class NewObjectiveDialog(QDialog):
-    """Dialog for creating a new microscope objective."""
+def get_resolution_status(pixels_per_micron, numerical_aperture, wavelength_um=0.405):
+    """Assess sampling relative to Nyquist (ideal pixel = lambda / (4 * NA))."""
+    if not pixels_per_micron or not numerical_aperture or numerical_aperture <= 0:
+        return {
+            "status": "Unknown",
+            "quality": "unknown",
+            "sampling_pct": 0.0,
+            "ideal_pixel_um": 0.0,
+            "ideal_pixels_per_micron": 0.0,
+            "downsample_advice": None,
+        }
 
-    def __init__(self, parent=None, existing_keys: list[str] = None):
+    ideal_pixel_um = float(wavelength_um) / (4.0 * float(numerical_aperture))
+    ideal_pixels_per_micron = 1.0 / ideal_pixel_um if ideal_pixel_um > 0 else 0.0
+    sampling_pct = (
+        (float(pixels_per_micron) / ideal_pixels_per_micron) * 100.0
+        if ideal_pixels_per_micron > 0
+        else 0.0
+    )
+
+    if sampling_pct < 80.0:
+        status = "Undersampled"
+        quality = "undersampled"
+        downsample = None
+    elif sampling_pct <= 150.0:
+        status = "Good"
+        quality = "good"
+        downsample = None
+    elif sampling_pct < 200.0:
+        status = "Oversampled"
+        quality = "oversampled"
+        reduce_pct = max(1.0, min(100.0, 10000.0 / sampling_pct))
+        downsample = f"Consider downsampling to {reduce_pct:.0f}%"
+    elif sampling_pct <= 260.0:
+        status = "Oversampled"
+        quality = "oversampled"
+        reduce_pct = max(1.0, min(100.0, 10000.0 / sampling_pct))
+        downsample = f"Consider downsampling to {reduce_pct:.0f}%"
+    else:
+        status = "Heavily oversampled"
+        quality = "heavy_oversample"
+        reduce_pct = max(1.0, min(100.0, 10000.0 / sampling_pct))
+        downsample = f"Consider downsampling to {reduce_pct:.0f}%"
+
+    return {
+        "status": status,
+        "quality": quality,
+        "sampling_pct": float(sampling_pct),
+        "ideal_pixel_um": float(ideal_pixel_um),
+        "ideal_pixels_per_micron": float(ideal_pixels_per_micron),
+        "downsample_advice": downsample,
+    }
+
+
+def format_resolution_summary(pixels_per_micron, numerical_aperture, wavelength_um=0.405):
+    """Generate a compact multi-line summary of sampling status."""
+    result = get_resolution_status(pixels_per_micron, numerical_aperture, wavelength_um)
+    ideal_nm = result["ideal_pixel_um"] * 1000.0
+    summary = (
+        f"Calibration: {pixels_per_micron:.2f} px/um\n"
+        f"Nyquist pixel: {ideal_nm:.1f} nm\n"
+        f"Sampling: {result['status']} ({result['sampling_pct']:.0f}% of Nyquist)"
+    )
+    if result["downsample_advice"]:
+        summary += f"\n{result['downsample_advice']}"
+    return summary
+
+
+class NewObjectiveDialog(QDialog):
+    """Dialog for creating or editing a microscope objective."""
+
+    def __init__(
+        self,
+        parent=None,
+        existing_keys: list[str] | None = None,
+        objective_data: dict | None = None,
+        objective_key: str | None = None,
+        edit_mode: bool = False,
+    ):
         super().__init__(parent)
-        self.setWindowTitle(self.tr("New Objective"))
+        self.edit_mode = bool(edit_mode)
+        self.original_key = objective_key
+        self.setWindowTitle(self.tr("Edit Objective") if self.edit_mode else self.tr("New Objective"))
         self.setModal(True)
         self.setMinimumWidth(400)
         self.existing_keys = existing_keys or []
+        self._objective_data = dict(objective_data) if isinstance(objective_data, dict) else {}
 
         self._init_ui()
+        if self._objective_data:
+            self._populate_form(self._objective_data)
+
+    def _make_key(self, display_name: str) -> str:
+        if self.edit_mode and self.original_key:
+            return self.original_key
+        key = re.sub(r"[^A-Za-z0-9._-]+", "_", display_name).strip("_")
+        return key or display_name
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
 
         form = QFormLayout()
 
-        # Display name (e.g., "100x/1.25 N-Plan")
-        self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText(self.tr("e.g., 100x/1.25 N-Plan"))
-        form.addRow(self.tr("Display name:"), self.name_input)
-
-        # Magnification (e.g., "100X")
+        # Magnification
         self.magnification_input = QLineEdit()
-        self.magnification_input.setPlaceholderText(self.tr("e.g., 100X"))
-        form.addRow(self.tr("Magnification:"), self.magnification_input)
+        self.magnification_input.setPlaceholderText(self.tr("e.g., 40"))
+        self.magnification_input.setValidator(QIntValidator(1, 1000, self))
+        self.magnification_input.setMinimumHeight(26)
+        self.magnification_input.setStyleSheet("padding: 4px 6px;")
+        form.addRow(self.tr("Magnification (X):"), self.magnification_input)
+
+        # Numerical aperture
+        self.na_input = QLineEdit()
+        self.na_input.setPlaceholderText(self.tr("e.g., 0.75"))
+        na_validator = QDoubleValidator(0.01, 2.0, 2, self)
+        na_validator.setNotation(QDoubleValidator.StandardNotation)
+        self.na_input.setValidator(na_validator)
+        self.na_input.setMinimumHeight(26)
+        self.na_input.setStyleSheet("padding: 4px 6px;")
+        form.addRow(self.tr("NA:"), self.na_input)
+
+        # Objective name
+        self.objective_name_input = QLineEdit()
+        self.objective_name_input.setPlaceholderText(self.tr("e.g., Plan achro"))
+        form.addRow(self.tr("Objective name:"), self.objective_name_input)
 
         # Notes (microscope and camera description)
         self.notes_input = QLineEdit()
@@ -144,32 +246,61 @@ class NewObjectiveDialog(QDialog):
         cancel_btn.clicked.connect(self.reject)
         button_row.addWidget(cancel_btn)
 
-        self.ok_btn = QPushButton(self.tr("Create"))
+        self.ok_btn = QPushButton(self.tr("Save") if self.edit_mode else self.tr("Create"))
         self.ok_btn.clicked.connect(self._on_create)
         self.ok_btn.setDefault(True)
         button_row.addWidget(self.ok_btn)
 
         layout.addLayout(button_row)
 
-    def _on_create(self):
-        name = self.name_input.text().strip()
-        magnification = self.magnification_input.text().strip()
+    def _populate_form(self, data: dict) -> None:
+        magnification = data.get("magnification")
+        if magnification is not None:
+            self.magnification_input.setText(str(int(magnification)) if float(magnification).is_integer() else str(magnification))
+        na_value = data.get("na")
+        if na_value is not None:
+            self.na_input.setText(str(na_value))
+        self.objective_name_input.setText(str(data.get("objective_name") or ""))
+        self.notes_input.setText(str(data.get("notes") or ""))
 
-        if not name:
-            QMessageBox.warning(self, self.tr("Missing Name"), self.tr("Please enter a display name."))
+    def _on_create(self):
+        objective_name = self.objective_name_input.text().strip()
+        mag_text = self.magnification_input.text().strip()
+        na_text = self.na_input.text().strip()
+
+        try:
+            magnification = int(mag_text)
+        except (TypeError, ValueError):
+            magnification = 0
+
+        try:
+            na_value = float(na_text)
+        except (TypeError, ValueError):
+            na_value = 0.0
+
+        if not objective_name:
+            QMessageBox.warning(self, self.tr("Missing Name"), self.tr("Please enter an objective name."))
             return
 
-        if not magnification:
+        if magnification <= 0:
             QMessageBox.warning(self, self.tr("Missing Magnification"), self.tr("Please enter a magnification."))
             return
 
-        # Generate key from magnification
-        key = magnification.replace(" ", "_").replace("/", "_")
-        if key in self.existing_keys:
+        if na_value <= 0:
+            QMessageBox.warning(self, self.tr("Missing NA"), self.tr("Please enter a numerical aperture (NA)."))
+            return
+
+        display_name = format_objective_display(magnification, na_value, objective_name)
+        if not display_name:
+            QMessageBox.warning(self, self.tr("Invalid Name"), self.tr("Please enter valid objective details."))
+            return
+
+        key = self._make_key(display_name)
+        if key in self.existing_keys or display_name in self.existing_keys:
             QMessageBox.warning(
                 self,
                 self.tr("Duplicate"),
-                self.tr("An objective with magnification '{mag}' already exists.").format(mag=magnification),
+                self.tr("An objective with this name already exists."),
             )
             return
 
@@ -177,11 +308,19 @@ class NewObjectiveDialog(QDialog):
 
     def get_objective_data(self) -> dict:
         """Get the objective data from the dialog."""
-        key = self.magnification_input.text().strip().replace(" ", "_").replace("/", "_")
+        mag_text = self.magnification_input.text().strip()
+        na_text = self.na_input.text().strip()
+        magnification = int(mag_text) if mag_text else 0
+        na_value = float(na_text) if na_text else 0.0
+        objective_name = self.objective_name_input.text().strip()
+        display_name = format_objective_display(magnification, na_value, objective_name)
+        key = self._make_key(display_name)
         return {
             "key": key,
-            "name": self.name_input.text().strip(),
-            "magnification": self.magnification_input.text().strip(),
+            "name": display_name,
+            "objective_name": objective_name,
+            "magnification": magnification,
+            "na": na_value,
             "microns_per_pixel": 0.1,  # Default, will be set by calibration
             "notes": self.notes_input.text().strip(),
         }
@@ -312,15 +451,21 @@ class CalibrationDialog(QDialog):
         self.resize(1200, 750)
 
         self.objectives = load_objectives()
+        self.target_sampling_pct = float(
+            SettingsDB.get_setting("target_sampling_pct", 120.0)
+        )
         self.current_objective_key: str | None = None
         self.calibration_images: list[dict] = []  # [{path, pixmap, measurements}]
         self.current_image_index: int = -1
+        self._preserve_image_zoom = False
         self.measurement_points: list[QPointF] = []  # Points being drawn
         self.is_measuring = False
         self._modified = False  # Track if user made changes
         self.manual_measure_color = "#3498db"
         self.auto_measure_color = "#e74c3c"
+        self.auto_parabola_color = "#b455ff"
         self._auto_crop_active = False
+        self._show_auto_debug_overlays = True
 
         self._init_ui()
         self._load_objectives_combo()
@@ -360,7 +505,7 @@ class CalibrationDialog(QDialog):
         self.set_active_btn.clicked.connect(self._on_set_active_calibration)
         button_row.addWidget(self.set_active_btn)
 
-        self.delete_cal_btn = QPushButton(self.tr("Delete"))
+        self.delete_cal_btn = QPushButton(self.tr("Delete calibration"))
         self.delete_cal_btn.setStyleSheet("background-color: #e74c3c; color: white;")
         self.delete_cal_btn.clicked.connect(self._delete_selected_calibration)
         button_row.addWidget(self.delete_cal_btn)
@@ -394,10 +539,22 @@ class CalibrationDialog(QDialog):
         new_objective_btn.clicked.connect(self._on_new_objective)
         row.addWidget(new_objective_btn)
 
+        edit_objective_btn = QPushButton(self.tr("Edit Objective..."))
+        edit_objective_btn.clicked.connect(self._on_edit_objective)
+        row.addWidget(edit_objective_btn)
+
         # Load images button (moved here from left panel)
         load_btn = QPushButton(self.tr("Load image(s)..."))
         load_btn.clicked.connect(self._on_load_images)
         row.addWidget(load_btn)
+
+        delete_objective_btn = QPushButton(self.tr("Delete objective"))
+        delete_objective_btn.clicked.connect(self._on_delete_objective)
+        row.addWidget(delete_objective_btn)
+
+        export_btn = QPushButton(self.tr("Export Image"))
+        export_btn.clicked.connect(self._on_export_image)
+        row.addWidget(export_btn)
 
         row.addStretch()
 
@@ -426,7 +583,23 @@ class CalibrationDialog(QDialog):
         self.image_viewer.set_pan_without_shift(True)
         self.image_viewer.clicked.connect(self._on_image_clicked)
         self.image_viewer.cropChanged.connect(self._on_crop_changed)
-        left_layout.addWidget(self.image_viewer, 1)
+
+        image_container = QWidget()
+        image_layout = QGridLayout(image_container)
+        image_layout.setContentsMargins(0, 0, 0, 0)
+        image_layout.addWidget(self.image_viewer, 0, 0)
+
+        self.zoom_1to1_btn = QPushButton(self.tr("[ 1:1 ]"))
+        self.zoom_1to1_btn.setCursor(Qt.PointingHandCursor)
+        self.zoom_1to1_btn.setStyleSheet(
+            "QPushButton { background-color: rgba(0, 0, 0, 128); color: white; "
+            "border: none; border-radius: 4px; padding: 2px 8px; }"
+            "QPushButton:hover { background-color: rgba(0, 0, 0, 170); }"
+        )
+        self.zoom_1to1_btn.clicked.connect(self.image_viewer.set_zoom_1_to_1)
+        image_layout.addWidget(self.zoom_1to1_btn, 0, 0, alignment=Qt.AlignTop | Qt.AlignRight)
+
+        left_layout.addWidget(image_container, 1)
 
         # Gallery for loaded calibration images (fixed height, just above thumbnail size)
         self.image_gallery = ImageGalleryWidget(
@@ -468,20 +641,23 @@ class CalibrationDialog(QDialog):
         measurements_group = QGroupBox(self.tr("Calibration Measurements"))
         measurements_layout = QVBoxLayout(measurements_group)
 
-        # Instructions
-        instructions = QLabel(
-            self.tr(
-                "Draw lines on the scale bar. For best accuracy, measure 3-4 distances "
-                "across multiple images (horizontal and vertical lines)."
-            )
-        )
-        instructions.setWordWrap(True)
-        instructions.setStyleSheet("color: #7f8c8d;")
-        measurements_layout.addWidget(instructions)
+        # Known distance input (mm)
+        distance_row = QHBoxLayout()
+        distance_row.addWidget(QLabel(self.tr("Known distance:")))
+        self.known_distance_input = QDoubleSpinBox()
+        self.known_distance_input.setRange(0.01, 1000.0)
+        self.known_distance_input.setValue(1.00)
+        self.known_distance_input.setSuffix(" mm")
+        self.known_distance_input.setDecimals(2)
+        self.known_distance_input.setSingleStep(0.01)
+        self.known_distance_input.valueChanged.connect(self._update_results)
+        distance_row.addWidget(self.known_distance_input)
+        distance_row.addStretch()
+        measurements_layout.addLayout(distance_row)
 
         # Measurement list
         self.measurement_list = QListWidget()
-        self.measurement_list.setMaximumHeight(120)
+        self.measurement_list.setMaximumHeight(90)
         self.measurement_list.setToolTip(self.tr("Press Del to remove selected measurement"))
         measurements_layout.addWidget(self.measurement_list)
 
@@ -494,19 +670,6 @@ class CalibrationDialog(QDialog):
         controls_row.addStretch()
 
         measurements_layout.addLayout(controls_row)
-
-        # Known distance input (still in um)
-        distance_row = QHBoxLayout()
-        distance_row.addWidget(QLabel(self.tr("Known distance:")))
-        self.known_distance_input = QDoubleSpinBox()
-        self.known_distance_input.setRange(0.1, 10000)
-        self.known_distance_input.setValue(100)
-        self.known_distance_input.setSuffix(" um")
-        self.known_distance_input.setDecimals(1)
-        self.known_distance_input.valueChanged.connect(self._update_results)
-        distance_row.addWidget(self.known_distance_input)
-        distance_row.addStretch()
-        measurements_layout.addLayout(distance_row)
 
         manual_layout.addWidget(measurements_group)
 
@@ -525,12 +688,10 @@ class CalibrationDialog(QDialog):
         results_layout.addRow(self.tr("95% CI:"), self.result_ci_label)
 
         self.result_count_label = QLabel("0")
-        results_layout.addRow(self.tr("Measurements:"), self.result_count_label)
 
         # Comparison with active calibration
         self.comparison_label = QLabel("")
         self.comparison_label.setWordWrap(True)
-        results_layout.addRow(self.tr("vs Active:"), self.comparison_label)
 
         manual_layout.addWidget(results_group)
         manual_layout.addStretch()
@@ -538,6 +699,9 @@ class CalibrationDialog(QDialog):
         self.image_mode_tabs.addTab(manual_tab, self.tr("Manual"))
 
         right_layout.addWidget(self.image_mode_tabs, 1)
+
+        resize_group = self._build_resize_options_group()
+        right_layout.addWidget(resize_group)
 
         # Notes
         notes_group = QGroupBox(self.tr("Notes"))
@@ -566,13 +730,9 @@ class CalibrationDialog(QDialog):
         self.auto_division_input.addItem(self.tr("0.01 mm (10 µm)"), 0.01)
         self.auto_division_input.addItem(self.tr("0.1 mm (100 µm)"), 0.1)
         self.auto_division_input.setCurrentIndex(0)
+        self.auto_division_input.currentIndexChanged.connect(self._on_auto_division_changed)
         input_layout.addRow(self.tr("Division distance:"), self.auto_division_input)
 
-        self.auto_axis_combo = QComboBox()
-        self.auto_axis_combo.addItem(self.tr("Auto"), None)
-        self.auto_axis_combo.addItem(self.tr("Horizontal"), "horizontal")
-        self.auto_axis_combo.addItem(self.tr("Vertical"), "vertical")
-        input_layout.addRow(self.tr("Axis override:"), self.auto_axis_combo)
 
         self.auto_status_label = QLabel(self.tr("Ready."))
         self.auto_status_label.setWordWrap(True)
@@ -583,22 +743,26 @@ class CalibrationDialog(QDialog):
         self.auto_progress.setValue(0)
         input_layout.addRow(self.tr("Progress:"), self.auto_progress)
 
-        layout.addWidget(input_group)
-
         run_row = QHBoxLayout()
         self.auto_crop_btn = QPushButton(self.tr("Crop"))
         self.auto_crop_btn.clicked.connect(self._on_crop_button_clicked)
-        run_row.addWidget(self.auto_crop_btn)
-
-        self.auto_run_btn = QPushButton(self.tr("Auto Calibration"))
-        self.auto_run_btn.clicked.connect(self._on_run_auto_calibration)
-        run_row.addWidget(self.auto_run_btn)
-
         self.auto_clear_btn = QPushButton(self.tr("Clear"))
         self.auto_clear_btn.clicked.connect(self._on_clear_auto_calibration)
+        btn_width = max(self.auto_crop_btn.sizeHint().width(), self.auto_clear_btn.sizeHint().width())
+        self.auto_crop_btn.setFixedWidth(btn_width)
+        self.auto_clear_btn.setFixedWidth(btn_width)
+        run_row.addWidget(self.auto_crop_btn)
+        run_row.addStretch(1)
+
+        self.auto_run_btn = QPushButton(self.tr("Calibrate"))
+        self.auto_run_btn.clicked.connect(self._on_run_auto_calibration)
+        run_row.addWidget(self.auto_run_btn)
+        run_row.addStretch(1)
         run_row.addWidget(self.auto_clear_btn)
-        run_row.addStretch()
-        layout.addLayout(run_row)
+
+        input_layout.addRow(run_row)
+
+        layout.addWidget(input_group)
 
         results_group = QGroupBox(self.tr("Results"))
         results_layout = QFormLayout(results_group)
@@ -607,6 +771,12 @@ class CalibrationDialog(QDialog):
         self.auto_scale_label = QLabel("--")
         self.auto_scale_label.setStyleSheet("font-weight: bold;")
         results_layout.addRow(self.auto_scale_title, self.auto_scale_label)
+
+        self.auto_scale_current_title = QLabel(self.tr("Scale (this image):"))
+        self.auto_scale_current_label = QLabel("--")
+        self.auto_scale_current_title.setVisible(False)
+        self.auto_scale_current_label.setVisible(False)
+        results_layout.addRow(self.auto_scale_current_title, self.auto_scale_current_label)
 
         self.auto_scatter_mad_label = QLabel("--")
         results_layout.addRow(
@@ -659,7 +829,8 @@ class CalibrationDialog(QDialog):
                     "Does spacing gradually increase/decrease across the image?\n"
                     "Slope near 0: constant spacing (good)\n"
                     "Positive slope: lines getting farther apart\n"
-                    "Negative slope: lines getting closer together"
+                    "Negative slope: lines getting closer together\n"
+                    "Unit: px/px (relative change in spacing per pixel across the image)"
                 ),
             ),
         )
@@ -671,10 +842,6 @@ class CalibrationDialog(QDialog):
         self.auto_dev_label = QLabel("--")
         results_layout.addRow(self.auto_dev_title, self.auto_dev_label)
 
-        self.auto_count_title = QLabel(self.tr("Images used:"))
-        self.auto_count_label = QLabel("--")
-        results_layout.addRow(self.auto_count_title, self.auto_count_label)
-
         self.auto_spread_title = QLabel(self.tr("Image spread:"))
         self.auto_spread_label = QLabel("--")
         results_layout.addRow(self.auto_spread_title, self.auto_spread_label)
@@ -684,6 +851,33 @@ class CalibrationDialog(QDialog):
         layout.addStretch()
 
         return tab
+
+    def _build_resize_options_group(self) -> QGroupBox:
+        group = QGroupBox(self.tr("Image resize"))
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(6, 6, 6, 6)
+
+        self.sampling_status_label = QLabel("--")
+        self.sampling_status_label.setWordWrap(True)
+        layout.addWidget(self._label_with_widget(self.tr("Resolution:"), self.sampling_status_label))
+
+        self.target_sampling_input = QDoubleSpinBox()
+        self.target_sampling_input.setRange(50.0, 300.0)
+        self.target_sampling_input.setDecimals(0)
+        self.target_sampling_input.setSuffix("%")
+        self.target_sampling_input.setValue(float(self.target_sampling_pct))
+        self.target_sampling_input.valueChanged.connect(self._on_target_sampling_changed)
+        layout.addWidget(
+            self._label_with_widget(self.tr("Ideal sampling (% Nyquist):"), self.target_sampling_input)
+        )
+
+        info = QFormLayout()
+        self.current_resolution_label = QLabel("--")
+        self.target_resolution_label = QLabel("--")
+        info.addRow(self.tr("Current resolution:"), self.current_resolution_label)
+        info.addRow(self.tr("Ideal resolution:"), self.target_resolution_label)
+        layout.addLayout(info)
+        return group
 
     def _build_manual_entry_tab(self) -> QWidget:
         """Build the manual entry tab for direct nm/pixel input."""
@@ -745,6 +939,45 @@ class CalibrationDialog(QDialog):
             return None
         return self.calibration_images[self.current_image_index].get("auto")
 
+    def _auto_overlay_geometry(self, img_data: dict) -> tuple[tuple[int, int], tuple[float, float]]:
+        image_size = (0, 0)
+        crop_offset = (0.0, 0.0)
+        pixmap = img_data.get("pixmap")
+        if pixmap:
+            image_size = (pixmap.width(), pixmap.height())
+        crop_box = img_data.get("crop_box")
+        if crop_box and image_size[0] > 0 and image_size[1] > 0:
+            source_size = img_data.get("crop_source_size") or image_size
+            sw, sh = source_size
+            x1 = max(0, min(sw, int(min(crop_box[0], crop_box[2]) * sw)))
+            y1 = max(0, min(sh, int(min(crop_box[1], crop_box[3]) * sh)))
+            x2 = max(0, min(sw, int(max(crop_box[0], crop_box[2]) * sw)))
+            y2 = max(0, min(sh, int(max(crop_box[1], crop_box[3]) * sh)))
+            if x2 - x1 >= 2 and y2 - y1 >= 2:
+                crop_offset = (float(x1), float(y1))
+                image_size = (int(x2 - x1), int(y2 - y1))
+        return image_size, crop_offset
+
+    def _ensure_auto_overlays(self, auto_data: dict, img_data: dict) -> None:
+        result = auto_data.get("result")
+        if not result:
+            return
+        image_size, crop_offset = self._auto_overlay_geometry(img_data)
+        if image_size[0] <= 0 or image_size[1] <= 0:
+            return
+        if not auto_data.get("overlay_parabola"):
+            auto_data["overlay_parabola"] = slide_calibration.build_overlay_lines(
+                result, image_size, use_edges=False, origin_offset=crop_offset
+            )
+        if not auto_data.get("overlay_edges"):
+            auto_data["overlay_edges"] = slide_calibration.build_overlay_lines(
+                result, image_size, use_edges=True, origin_offset=crop_offset
+            )
+        if auto_data.get("overlay_edges_50") is None or not auto_data.get("overlay_edges_50"):
+            auto_data["overlay_edges_50"] = slide_calibration.build_overlay_edge_lines(
+                result, image_size, origin_offset=crop_offset
+            )
+
     def _collect_auto_values(self, use_edges: bool) -> list[float]:
         values: list[float] = []
         for img_data in self.calibration_images:
@@ -767,31 +1000,55 @@ class CalibrationDialog(QDialog):
             self.auto_scale_title.setText(self.tr("Scale (this image):"))
             self.auto_scale_label.setText("--")
             self.auto_dev_label.setText("--")
-            self.auto_count_label.setText("0")
             if hasattr(self, "auto_spread_label"):
                 self.auto_spread_label.setText("--")
                 self.auto_spread_label.setStyleSheet("")
+            if hasattr(self, "sampling_status_label"):
+                self.sampling_status_label.setText("--")
+            if hasattr(self, "auto_scale_current_title"):
+                self.auto_scale_current_title.setVisible(False)
+                self.auto_scale_current_label.setVisible(False)
             return
         if len(values) == 1:
             self.auto_scale_title.setText(self.tr("Scale (this image):"))
             self.auto_scale_label.setText(f"{values[0]:.2f} nm/px")
             self.auto_dev_label.setText("--")
-            self.auto_count_label.setText("1")
             if hasattr(self, "auto_spread_label"):
                 self.auto_spread_label.setText("--")
                 self.auto_spread_label.setStyleSheet("")
+            if hasattr(self, "sampling_status_label"):
+                self._update_sampling_label(self.sampling_status_label, values[0])
+            if hasattr(self, "auto_scale_current_title"):
+                self.auto_scale_current_title.setVisible(False)
+                self.auto_scale_current_label.setVisible(False)
             return
         mean = float(np.mean(values))
         max_dev = float(np.max(np.abs(np.array(values) - mean))) if values else 0.0
         self.auto_scale_title.setText(self.tr("Scale (average):"))
         self.auto_scale_label.setText(f"{mean:.2f} nm/px")
-        self.auto_dev_label.setText(f"?{max_dev:.2f} nm/px")
-        self.auto_count_label.setText(str(len(values)))
+        self.auto_dev_label.setText(f"+/-{max_dev:.2f} nm/px")
+        if hasattr(self, "auto_scale_current_title"):
+            current = None
+            current_auto = self._current_auto_data()
+            if current_auto:
+                result = current_auto.get("result")
+                if result:
+                    current = result.nm_per_px_edges if self._auto_use_edges() else result.nm_per_px
+            if current and current > 0:
+                self.auto_scale_current_title.setText(self.tr("Scale (this image):"))
+                self.auto_scale_current_label.setText(f"{float(current):.2f} nm/px")
+                self.auto_scale_current_title.setVisible(True)
+                self.auto_scale_current_label.setVisible(True)
+            else:
+                self.auto_scale_current_title.setVisible(False)
+                self.auto_scale_current_label.setVisible(False)
         if hasattr(self, "auto_spread_label"):
             spread_pct = 100.0 * (max_dev / mean) if mean > 0 else 0.0
             self.auto_spread_label.setText(f"{spread_pct:.2f}%")
             color = "#27ae60" if spread_pct <= 0.5 else "#c0392b"
             self.auto_spread_label.setStyleSheet(f"color: {color}; font-weight: bold;")
+        if hasattr(self, "sampling_status_label"):
+            self._update_sampling_label(self.sampling_status_label, mean)
 
     def _make_value_with_info(self, value_label: QLabel, tooltip: str) -> QWidget:
         wrapper = QWidget()
@@ -806,6 +1063,191 @@ class CalibrationDialog(QDialog):
         layout.addStretch()
         value_label.setToolTip(tooltip)
         return wrapper
+
+    def _on_auto_division_changed(self, _index: int) -> None:
+        if not hasattr(self, "auto_division_input"):
+            return
+        spacing_mm = float(self.auto_division_input.currentData() or 0.0)
+        if spacing_mm <= 0:
+            return
+        spacing_um = spacing_mm * 1000.0
+        updated = False
+        for img_data in self.calibration_images:
+            auto_data = img_data.get("auto")
+            if not auto_data:
+                continue
+            result = auto_data.get("result")
+            if not result:
+                continue
+            if hasattr(result, "spacing_median_px") and result.spacing_median_px and result.spacing_median_px > 0:
+                result.nm_per_px = (spacing_um * 1000.0) / float(result.spacing_median_px)
+            if hasattr(result, "spacing_median_edges_px") and result.spacing_median_edges_px and result.spacing_median_edges_px > 0:
+                result.nm_per_px_edges = (spacing_um * 1000.0) / float(result.spacing_median_edges_px)
+            auto_data["spacing_um"] = spacing_um
+            updated = True
+
+        if not updated:
+            return
+
+        self._modified = True
+        self._render_auto_results(self._current_auto_data())
+        self._update_auto_summary()
+        self._update_resize_info()
+        if hasattr(self, "auto_status_label"):
+            self.auto_status_label.setText(self.tr("Division distance updated."))
+            self.auto_status_label.setStyleSheet("color: #2980b9;")
+
+    def _label_with_widget(self, label_text: str, widget: QWidget) -> QWidget:
+        wrapper = QWidget()
+        layout = QHBoxLayout(wrapper)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addWidget(QLabel(label_text))
+        layout.addWidget(widget, 1)
+        return wrapper
+
+    def _update_sampling_label(self, label: QLabel, scale_nm_per_px: float) -> None:
+        na_value = None
+        if self.current_objective_key:
+            obj = self.objectives.get(self.current_objective_key, {})
+            na_value = obj.get("na")
+        if not na_value or not scale_nm_per_px or scale_nm_per_px <= 0:
+            label.setText(self.tr("NA not set") if not na_value else "--")
+            return
+        pixels_per_micron = 1000.0 / float(scale_nm_per_px)
+        result = get_resolution_status(pixels_per_micron, float(na_value))
+        sampling_pct = float(result.get("sampling_pct", 0.0))
+        if not np.isfinite(sampling_pct) or sampling_pct <= 0:
+            label.setText("--")
+            return
+
+        score_text = f"{sampling_pct:.0f}%"
+
+        if sampling_pct < 80.0:
+            status = self.tr("Undersampled")
+            tooltip = self.tr("Camera resolution is too low to resolve all details from this objective.")
+        elif sampling_pct <= 150.0:
+            status = self.tr("Good")
+            tooltip = self.tr("Sampling is close to ideal for this objective.")
+        elif sampling_pct < 200.0:
+            status = self.tr("Oversampled")
+            reduce_pct = max(1.0, min(100.0, 10000.0 / sampling_pct))
+            tooltip = self.tr(
+                "Image contains more pixels than optical detail.\n"
+                "Can likely be scaled to {pct:.0f}% without losing information."
+            ).format(pct=reduce_pct)
+        elif sampling_pct <= 260.0:
+            status = self.tr("Oversampled")
+            reduce_pct = max(1.0, min(100.0, 10000.0 / sampling_pct))
+            tooltip = self.tr(
+                "Image contains more pixels than optical detail.\n"
+                "Image can likely be scaled to {pct:.0f}% without losing optical detail."
+            ).format(pct=reduce_pct)
+        else:
+            status = self.tr("Heavily oversampled")
+            reduce_pct = max(1.0, min(100.0, 10000.0 / sampling_pct))
+            tooltip = self.tr(
+                "Image can be reduced to {pct:.0f}% of current size without losing information."
+            ).format(pct=reduce_pct)
+
+        label.setText(self.tr("{status} ({score})").format(status=status, score=score_text))
+        label.setToolTip(tooltip)
+
+    def _compute_resample_scale_factor(self, scale_um_per_px: float | None) -> float:
+        if not scale_um_per_px or scale_um_per_px <= 0:
+            return 1.0
+        na_value = None
+        if self.current_objective_key:
+            obj = self.objectives.get(self.current_objective_key, {})
+            na_value = obj.get("na")
+        if not na_value:
+            return 1.0
+        target_pct = float(obj.get("target_sampling_pct", self.target_sampling_pct or 120.0))
+        pixels_per_micron = 1.0 / float(scale_um_per_px)
+        result = get_resolution_status(pixels_per_micron, float(na_value))
+        ideal_pixels_per_micron = float(result.get("ideal_pixels_per_micron", 0.0))
+        if not ideal_pixels_per_micron or ideal_pixels_per_micron <= 0:
+            return 1.0
+        target_pixels_per_micron = ideal_pixels_per_micron * (target_pct / 100.0)
+        factor = target_pixels_per_micron / pixels_per_micron
+        if factor > 1.0:
+            factor = 1.0
+        return max(0.01, float(factor))
+
+    def _get_resize_scale_um(self) -> float | None:
+        if self.current_image_index < 0 or self.current_image_index >= len(self.calibration_images):
+            return None
+        img_data = self.calibration_images[self.current_image_index]
+        auto_data = img_data.get("auto")
+        if auto_data:
+            result = auto_data.get("result")
+            if result:
+                value = result.nm_per_px
+                if self._auto_use_edges():
+                    value = result.nm_per_px_edges or value
+                if value and value > 0:
+                    return nm_to_um(float(value))
+        if not img_data.get("measurements"):
+            return None
+        all_measurements = self._get_all_measurements()
+        if not all_measurements:
+            return None
+        measurement_tuples = [(m["known_um"], m["measured_px"]) for m in all_measurements]
+        mean, _std, _ci_low, _ci_high = calculate_calibration_stats(measurement_tuples)
+        if mean and mean > 0:
+            return mean
+        return None
+
+    def _update_resize_info(self) -> None:
+        if not hasattr(self, "current_resolution_label") or not hasattr(self, "target_resolution_label"):
+            return
+        if self.current_image_index < 0 or self.current_image_index >= len(self.calibration_images):
+            self.current_resolution_label.setText("--")
+            self.target_resolution_label.setText("--")
+            return
+        img_data = self.calibration_images[self.current_image_index]
+        pixmap = img_data.get("pixmap")
+        if not pixmap:
+            self.current_resolution_label.setText("--")
+            self.target_resolution_label.setText("--")
+            return
+        width = pixmap.width()
+        height = pixmap.height()
+        if width <= 0 or height <= 0:
+            self.current_resolution_label.setText("--")
+            self.target_resolution_label.setText("--")
+            return
+        mp = (width * height) / 1_000_000.0
+        self.current_resolution_label.setText(f"{mp:.1f} MP ({width} × {height})")
+
+        scale_um = self._get_resize_scale_um()
+        na_value = None
+        if self.current_objective_key:
+            obj = self.objectives.get(self.current_objective_key, {})
+            na_value = obj.get("na")
+        if not scale_um or not na_value:
+            self.target_resolution_label.setText("--")
+            return
+        factor = self._compute_resample_scale_factor(scale_um)
+        if factor >= 0.999:
+            self.target_resolution_label.setText(self.tr("Same as current"))
+            return
+        target_w = max(1, int(round(width * factor)))
+        target_h = max(1, int(round(height * factor)))
+        target_mp = (target_w * target_h) / 1_000_000.0
+        self.target_resolution_label.setText(f"{target_mp:.1f} MP ({target_w} × {target_h})")
+
+    def _on_target_sampling_changed(self, value: float) -> None:
+        self.target_sampling_pct = float(value)
+        SettingsDB.set_setting("target_sampling_pct", float(value))
+        if self.current_objective_key and self.current_objective_key in self.objectives:
+            self.objectives[self.current_objective_key]["target_sampling_pct"] = float(value)
+            save_objectives(self.objectives)
+        if hasattr(self, "target_sampling_label"):
+            self.target_sampling_label.setText(
+                self.tr("{pct:.0f}% of Nyquist").format(pct=float(value))
+            )
+        self._update_resize_info()
 
     def _quality_color(self, value: float, good: float, warn: float) -> str:
         if value is None or not np.isfinite(value):
@@ -832,6 +1274,7 @@ class CalibrationDialog(QDialog):
             angle_deg=float(data.get("angle_deg", 0.0)),
             centers_px=np.array(data.get("centers_px", []), dtype=np.float64),
             centers_edges_px=np.array(data.get("centers_edges_px", []), dtype=np.float64),
+            edges_px=np.array(data.get("edges_px", []), dtype=np.float64),
             spacing_median_px=float(data.get("spacing_median_px", float("nan"))),
             spacing_median_edges_px=float(data.get("spacing_median_edges_px", float("nan"))),
             nm_per_px=float(data.get("nm_per_px", float("nan"))),
@@ -880,7 +1323,7 @@ class CalibrationDialog(QDialog):
         self.auto_residual_label.setStyleSheet(
             self._quality_color_abs(result.residual_slope_deg, good=0.2, warn=0.5)
         )
-        self.auto_drift_label.setText(f"{result.drift_slope:.4g}")
+        self.auto_drift_label.setText(f"{result.drift_slope:.4g} px/px")
         self.auto_drift_label.setStyleSheet(
             self._quality_color_abs(result.drift_slope, good=0.001, warn=0.003)
         )
@@ -892,19 +1335,61 @@ class CalibrationDialog(QDialog):
         """Apply the correct overlay based on the selected tab and method."""
         if self.current_image_index < 0 or self.current_image_index >= len(self.calibration_images):
             self.image_viewer.set_measurement_lines([])
+            self.image_viewer.set_debug_lines([])
             return
 
         if self._is_auto_tab_active():
             auto_data = self._current_auto_data()
             if not auto_data:
                 self.image_viewer.set_measurement_lines([])
+                self.image_viewer.set_debug_lines([])
                 return
-            self.image_viewer.set_measurement_color(self.auto_measure_color)
-            self.image_viewer.set_show_line_endcaps(False)
-            lines = auto_data["overlay_edges"] if self._auto_use_edges() else auto_data["overlay_parabola"]
-            self.image_viewer.set_measurement_lines(lines)
+            img_data = self.calibration_images[self.current_image_index]
+            self._ensure_auto_overlays(auto_data, img_data)
+            use_edges = self._auto_use_edges()
+            self.image_viewer.set_measurement_lines([])
+            self.image_viewer.set_debug_lines([])
+            if self._show_auto_debug_overlays:
+                layers = []
+                if use_edges:
+                    edge_lines = auto_data.get("overlay_edges_50")
+                    if edge_lines is None:
+                        edge_lines = auto_data.get("overlay_edges", [])
+                    if edge_lines:
+                        layers.append({
+                            "lines": edge_lines,
+                            "color": (241, 196, 15, 200),
+                            "width": 2,
+                            "composition": "overlay",
+                        })
+                    edge_center_lines = auto_data.get("overlay_edges", [])
+                    if edge_center_lines:
+                        layers.append({
+                            "lines": edge_center_lines,
+                            "color": (255, 0, 0, 200),
+                            "width": 3,
+                            "composition": "screen",
+                        })
+                else:
+                    parabola_lines = auto_data.get("overlay_parabola", [])
+                    if parabola_lines:
+                        layers.append({
+                            "lines": parabola_lines,
+                            "color": (186, 85, 255, 170),
+                            "width": 3,
+                            "composition": "screen",
+                        })
+                self.image_viewer.set_debug_lines(layers)
+            else:
+                self.image_viewer.set_measurement_color(
+                    self.auto_measure_color if use_edges else self.auto_parabola_color
+                )
+                self.image_viewer.set_show_line_endcaps(False)
+                lines = auto_data["overlay_edges"] if use_edges else auto_data["overlay_parabola"]
+                self.image_viewer.set_measurement_lines(lines)
             return
 
+        self.image_viewer.set_debug_lines([])
         self.image_viewer.set_measurement_color(self.manual_measure_color)
         self.image_viewer.set_show_line_endcaps(True)
         self._update_measurement_lines()
@@ -941,6 +1426,7 @@ class CalibrationDialog(QDialog):
                 self.auto_status_label.setStyleSheet("")
 
         self._update_auto_summary()
+        self._update_resize_info()
         self._apply_current_overlay()
 
     def _set_auto_results(
@@ -967,6 +1453,9 @@ class CalibrationDialog(QDialog):
             "overlay_edges": slide_calibration.build_overlay_lines(
                 result, image_size, use_edges=True, origin_offset=crop_offset
             ),
+            "overlay_edges_50": slide_calibration.build_overlay_edge_lines(
+                result, image_size, origin_offset=crop_offset
+            ),
         }
         img_data["auto"] = auto_data
         self._modified = True
@@ -976,6 +1465,7 @@ class CalibrationDialog(QDialog):
         self.auto_status_label.setStyleSheet("color: #27ae60;")
         if hasattr(self, "auto_progress"):
             self.auto_progress.setValue(100)
+        self._update_resize_info()
         self._apply_current_overlay()
 
     def _on_clear_auto_calibration(self):
@@ -1020,7 +1510,7 @@ class CalibrationDialog(QDialog):
 
         self._reset_auto_results(status_text=self.tr("Running..."), status_color="#2980b9")
         spacing_um = float(spacing_mm) * 1000.0
-        axis_hint = self.auto_axis_combo.currentData()
+        axis_hint = None
 
         crop_offset = (0.0, 0.0)
         crop_size = None
@@ -1050,11 +1540,13 @@ class CalibrationDialog(QDialog):
                 pil_img if pil_img is not None else image_path,
                 spacing_um=spacing_um,
                 axis_hint=axis_hint,
+                use_edges=self._auto_use_edges(),
+                use_large_angles=True,
                 progress_cb=self._update_auto_progress,
             )
         except Exception as exc:
             self._reset_auto_results(
-                status_text=self.tr("Auto calibration failed: {err} (try axis override)").format(err=str(exc)),
+                status_text=self.tr("Auto calibration failed: {err}").format(err=str(exc)),
                 status_color="#c0392b",
             )
             return
@@ -1066,19 +1558,18 @@ class CalibrationDialog(QDialog):
         group = QGroupBox(self.tr("Calibration History"))
         layout = QVBoxLayout(group)
 
-        self.history_table = QTableWidget(0, 13)
+        self.history_table = QTableWidget(0, 12)
         self.history_table.setHorizontalHeaderLabels([
             self.tr("Date"),
             self.tr("nm/px"),
-            self.tr("±Std"),
+            self.tr("MP"),
             self.tr("n"),
             self.tr("Diff%"),
             self.tr("MAD%"),
             self.tr("IQR%"),
             self.tr("Residual tilt"),
             self.tr("Observations"),
-            self.tr("Images"),
-            self.tr("Measurements"),
+            self.tr("Camera"),
             self.tr("Active"),
             self.tr("Notes"),
         ])
@@ -1088,10 +1579,10 @@ class CalibrationDialog(QDialog):
         header.setSectionResizeMode(0, QHeaderView.Fixed)
         self.history_table.setColumnWidth(0, 120)
         # Data columns - resize to contents
-        for col in range(1, 12):
+        for col in range(1, 11):
             header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         # Notes - stretch to fill remaining space
-        header.setSectionResizeMode(12, QHeaderView.Stretch)
+        header.setSectionResizeMode(11, QHeaderView.Stretch)
         self.history_table.verticalHeader().setVisible(False)
         self.history_table.verticalHeader().setDefaultSectionSize(26)
         self.history_table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -1099,6 +1590,10 @@ class CalibrationDialog(QDialog):
         self.history_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.history_table.setMinimumHeight(150)
         self.history_table.setMaximumHeight(220)
+        self.history_table.setStyleSheet(
+            "QTableWidget::item:selected { background: #2d89ef; color: #ffffff; }"
+            "QTableWidget::item:selected:!active { background: #9bbce5; color: #000000; }"
+        )
         # Click row to view calibration
         self.history_table.cellClicked.connect(self._on_history_row_clicked)
 
@@ -1109,10 +1604,9 @@ class CalibrationDialog(QDialog):
     def _load_objectives_combo(self):
         """Load objectives into the combo box."""
         self.objective_combo.clear()
-        for key in sorted(self.objectives.keys()):
-            obj = self.objectives[key]
-            display_name = obj.get("name", key)
-            self.objective_combo.addItem(display_name, key)
+        for key, obj in sorted(self.objectives.items(), key=lambda item: objective_sort_value(item[1], item[0])):
+            display_name = objective_display_name(obj, key)
+            self.objective_combo.addItem(display_name or key, key)
 
         if self.objective_combo.count() > 0:
             self.objective_combo.setCurrentIndex(0)
@@ -1175,16 +1669,36 @@ class CalibrationDialog(QDialog):
         # Clear current calibration state
         self._clear_all()
 
+        if self.current_objective_key and self.current_objective_key in self.objectives:
+            obj = self.objectives.get(self.current_objective_key, {})
+            self.target_sampling_pct = float(obj.get("target_sampling_pct", self.target_sampling_pct))
+            if hasattr(self, "target_sampling_input"):
+                self.target_sampling_input.blockSignals(True)
+                self.target_sampling_input.setValue(float(self.target_sampling_pct))
+                self.target_sampling_input.blockSignals(False)
+            if hasattr(self, "target_sampling_label"):
+                self.target_sampling_label.setText(
+                    self.tr("{pct:.0f}% of Nyquist").format(pct=float(self.target_sampling_pct))
+                )
+            self._update_resize_info()
+
     def _on_new_objective(self):
         """Create a new objective using the full dialog."""
-        dialog = NewObjectiveDialog(self, list(self.objectives.keys()))
+        existing_names = set(self.objectives.keys())
+        for key, obj in self.objectives.items():
+            display_name = objective_display_name(obj, key)
+            if display_name:
+                existing_names.add(display_name)
+        dialog = NewObjectiveDialog(self, sorted(existing_names))
         if dialog.exec() == QDialog.Accepted:
             data = dialog.get_objective_data()
             key = data["key"]
 
             self.objectives[key] = {
                 "name": data["name"],
+                "objective_name": data["objective_name"],
                 "magnification": data["magnification"],
+                "na": data["na"],
                 "microns_per_pixel": data["microns_per_pixel"],
                 "notes": data["notes"],
             }
@@ -1195,6 +1709,98 @@ class CalibrationDialog(QDialog):
             idx = self.objective_combo.findData(key)
             if idx >= 0:
                 self.objective_combo.setCurrentIndex(idx)
+
+    def _on_edit_objective(self) -> None:
+        """Edit the currently selected objective definition."""
+        if not self.current_objective_key:
+            return
+        obj = self.objectives.get(self.current_objective_key)
+        if not obj:
+            return
+
+        existing_names = set(self.objectives.keys())
+        existing_names.discard(self.current_objective_key)
+        for key, entry in self.objectives.items():
+            if key == self.current_objective_key:
+                continue
+            display_name = objective_display_name(entry, key)
+            if display_name:
+                existing_names.add(display_name)
+
+        dialog = NewObjectiveDialog(
+            self,
+            sorted(existing_names),
+            objective_data=obj,
+            objective_key=self.current_objective_key,
+            edit_mode=True,
+        )
+        if dialog.exec() == QDialog.Accepted:
+            data = dialog.get_objective_data()
+            key = self.current_objective_key
+            self.objectives[key] = {
+                "name": data["name"],
+                "objective_name": data["objective_name"],
+                "magnification": data["magnification"],
+                "na": data["na"],
+                "microns_per_pixel": self.objectives.get(key, {}).get("microns_per_pixel", data["microns_per_pixel"]),
+                "notes": data["notes"],
+            }
+            save_objectives(self.objectives)
+            self._load_objectives_combo()
+            idx = self.objective_combo.findData(key)
+            if idx >= 0:
+                self.objective_combo.setCurrentIndex(idx)
+
+    def _on_delete_objective(self) -> None:
+        """Delete the currently selected objective definition."""
+        if not self.current_objective_key:
+            return
+
+        usage_summary = CalibrationDB.get_calibration_usage_summary(self.current_objective_key)
+        for usage in usage_summary:
+            image_count = usage.get("image_count", 0)
+            measurement_count = usage.get("measurement_count", 0)
+            if image_count > 0 or measurement_count > 0:
+                self._show_calibration_in_use_dialog(
+                    usage.get("calibration_id"),
+                    image_count,
+                    measurement_count,
+                )
+                return
+
+        reply = QMessageBox.question(
+            self,
+            self.tr("Delete Objective"),
+            self.tr("Objective will be deleted.\n\nThis action cannot be undone."),
+            QMessageBox.Yes | QMessageBox.Cancel,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        self.objectives.pop(self.current_objective_key, None)
+        save_objectives(self.objectives)
+        self._clear_all()
+        self._load_objectives_combo()
+        if self.objective_combo.count() == 0:
+            self.current_objective_key = None
+            self.active_cal_label.setText("")
+            self._update_history_table()
+
+    def _get_default_export_dir(self) -> str:
+        settings = get_app_settings()
+        last_dir = settings.get("last_export_dir")
+        if last_dir and Path(last_dir).exists():
+            return last_dir
+        docs = QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
+        if docs:
+            return docs
+        return str(Path.home())
+
+    def _remember_export_dir(self, filepath: str | None) -> None:
+        if not filepath:
+            return
+        export_dir = str(Path(filepath).parent)
+        update_app_settings({"last_export_dir": export_dir})
 
     def _on_load_images(self):
         """Load calibration target images (multi-select)."""
@@ -1207,6 +1813,143 @@ class CalibrationDialog(QDialog):
         for path in paths:
             self._add_calibration_image(path)
 
+    def _overlay_color_rgba(self, color, alpha: int = 180) -> tuple[int, int, int, int]:
+        if isinstance(color, tuple):
+            if len(color) == 4:
+                return color
+            if len(color) == 3:
+                return (color[0], color[1], color[2], alpha)
+        if isinstance(color, str) and color.startswith("#") and len(color) == 7:
+            try:
+                r = int(color[1:3], 16)
+                g = int(color[3:5], 16)
+                b = int(color[5:7], 16)
+                return (r, g, b, alpha)
+            except ValueError:
+                pass
+        return (231, 76, 60, alpha)
+
+    def _collect_export_layers(self, img_data: dict) -> list[dict]:
+        if self._is_auto_tab_active():
+            auto_data = img_data.get("auto")
+            if not auto_data:
+                return []
+            use_edges = self._auto_use_edges()
+            if self._show_auto_debug_overlays:
+                layers = []
+                if use_edges:
+                    edge_lines = auto_data.get("overlay_edges_50")
+                    if edge_lines is None:
+                        edge_lines = auto_data.get("overlay_edges", [])
+                    if edge_lines:
+                        layers.append({"lines": edge_lines, "color": (241, 196, 15, 200)})
+                    edge_center_lines = auto_data.get("overlay_edges", [])
+                    if edge_center_lines:
+                        layers.append({"lines": edge_center_lines, "color": (255, 0, 0, 140)})
+                else:
+                    parabola_lines = auto_data.get("overlay_parabola", [])
+                    if parabola_lines:
+                        layers.append({
+                            "lines": parabola_lines,
+                            "color": (186, 85, 255, 170),
+                            "width": 3,
+                            "composition": "screen",
+                        })
+                return layers
+            lines = auto_data["overlay_edges"] if use_edges else auto_data["overlay_parabola"]
+            color = self.auto_measure_color if use_edges else self.auto_parabola_color
+            return [{"lines": lines, "color": color}]
+
+        lines = []
+        for m in img_data.get("measurements", []):
+            coords = m.get("line_coords", [])
+            if len(coords) == 4:
+                lines.append(coords)
+        return [{"lines": lines, "color": self.manual_measure_color}]
+
+    def _on_export_image(self) -> None:
+        """Export the current image with overlay lines."""
+        if self.current_image_index < 0 or self.current_image_index >= len(self.calibration_images):
+            QMessageBox.information(
+                self,
+                self.tr("No Image"),
+                self.tr("Please load a calibration image first."),
+            )
+            return
+
+        img_data = self.calibration_images[self.current_image_index]
+        image_path = img_data.get("path")
+        if not image_path or not Path(image_path).exists():
+            QMessageBox.warning(
+                self,
+                self.tr("Missing Image"),
+                self.tr("The selected image could not be found on disk."),
+            )
+            return
+
+        default_name = f"{Path(image_path).stem}_overlay.png"
+        default_path = str(Path(self._get_default_export_dir()) / default_name)
+        save_path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            self.tr("Export Image"),
+            default_path,
+            self.tr("PNG Image (*.png);;JPEG Image (*.jpg *.jpeg)"),
+        )
+        if not save_path:
+            return
+
+        suffix = Path(save_path).suffix.lower()
+        if not suffix:
+            if "PNG" in selected_filter:
+                suffix = ".png"
+            else:
+                suffix = ".jpg"
+            save_path = f"{save_path}{suffix}"
+        self._remember_export_dir(save_path)
+
+        img = Image.open(image_path).convert("RGBA")
+        w, h = img.size
+        crop_offset = (0, 0)
+        crop_box = img_data.get("crop_box")
+        if crop_box:
+            x1 = max(0, min(w, int(min(crop_box[0], crop_box[2]) * w)))
+            y1 = max(0, min(h, int(min(crop_box[1], crop_box[3]) * h)))
+            x2 = max(0, min(w, int(max(crop_box[0], crop_box[2]) * w)))
+            y2 = max(0, min(h, int(max(crop_box[1], crop_box[3]) * h)))
+            if x2 - x1 >= 2 and y2 - y1 >= 2:
+                img = img.crop((x1, y1, x2, y2))
+                crop_offset = (x1, y1)
+
+        layers = self._collect_export_layers(img_data)
+        if layers:
+            overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+            draw = ImageDraw.Draw(overlay, "RGBA")
+            for layer in layers:
+                lines = layer.get("lines", [])
+                if not lines:
+                    continue
+                color = self._overlay_color_rgba(layer.get("color"))
+                width = int(layer.get("width", 2)) if isinstance(layer, dict) else 2
+                for line in lines:
+                    if len(line) != 4:
+                        continue
+                    x1, y1, x2, y2 = line
+                    draw.line(
+                        [
+                            (x1 - crop_offset[0], y1 - crop_offset[1]),
+                            (x2 - crop_offset[0], y2 - crop_offset[1]),
+                        ],
+                        fill=color,
+                        width=width,
+                    )
+            # Overlay blend to brighten underlying pixels.
+            img = Image.blend(img, Image.alpha_composite(img, overlay), 0.75)
+
+        if suffix in {".jpg", ".jpeg"}:
+            img.convert("RGB").save(save_path, "JPEG", quality=75)
+        else:
+            img.save(save_path, "PNG")
+
     def _add_calibration_image(self, path: str):
         """Add a calibration image."""
         pixmap = QPixmap(path)
@@ -1218,12 +1961,14 @@ class CalibrationDialog(QDialog):
             )
             return
 
+        camera_text = self._extract_camera_text(path)
         self.calibration_images.append({
             "path": path,
             "pixmap": pixmap,
             "measurements": [],  # Measurements for this specific image
             "crop_box": None,
             "crop_source_size": None,
+            "camera": camera_text,
         })
         self._modified = True  # User added a new image
         self._refresh_image_gallery()
@@ -1247,6 +1992,155 @@ class CalibrationDialog(QDialog):
                 "crop_source_size": img_data.get("crop_source_size"),
             })
         self.image_gallery.set_items(items)
+
+    def _extract_camera_text(self, path: str) -> str | None:
+        if not path:
+            return None
+        exif = get_exif_data(path)
+        make = exif.get("Make") or ""
+        model = exif.get("Model") or ""
+        camera = " ".join(str(part).strip() for part in (make, model) if part).strip()
+        return camera or None
+
+    def _collect_camera_summary(self) -> str | None:
+        cameras = []
+        for img in self.calibration_images:
+            cam = img.get("camera")
+            if cam:
+                cameras.append(cam)
+        if not cameras:
+            return None
+        unique = []
+        for cam in cameras:
+            if cam not in unique:
+                unique.append(cam)
+        if len(unique) == 1:
+            return unique[0]
+        return "; ".join(unique)
+
+    def _selected_camera_text(self) -> str | None:
+        if self.current_image_index < 0 or self.current_image_index >= len(self.calibration_images):
+            return None
+        img = self.calibration_images[self.current_image_index]
+        cam = img.get("camera")
+        if cam:
+            return cam
+        path = img.get("path")
+        return self._extract_camera_text(path) if path else None
+
+    def _compute_megapixels(self, img_data: dict) -> float | None:
+        if not img_data:
+            return None
+        crop_source = img_data.get("crop_source_size")
+        if crop_source and len(crop_source) == 2:
+            try:
+                source_w = float(crop_source[0])
+                source_h = float(crop_source[1])
+            except (TypeError, ValueError):
+                source_w = source_h = 0
+            if source_w > 0 and source_h > 0:
+                return (source_w * source_h) / 1_000_000.0
+
+        pixmap = img_data.get("pixmap")
+        if pixmap:
+            width = float(pixmap.width())
+            height = float(pixmap.height())
+            if width > 0 and height > 0:
+                return (width * height) / 1_000_000.0
+        return None
+
+    def _collect_megapixels_summary(self) -> float | None:
+        values = []
+        for img in self.calibration_images:
+            mp = self._compute_megapixels(img)
+            if mp and mp > 0:
+                values.append(mp)
+        if not values:
+            return None
+        return float(np.mean(values))
+
+    def _collect_image_dimensions_summary(self) -> tuple[int | None, int | None]:
+        widths = []
+        heights = []
+        for img in self.calibration_images:
+            crop_source = img.get("crop_source_size")
+            if crop_source and len(crop_source) == 2:
+                try:
+                    source_w = int(crop_source[0])
+                    source_h = int(crop_source[1])
+                except (TypeError, ValueError):
+                    source_w = source_h = 0
+                if source_w > 0 and source_h > 0:
+                    widths.append(source_w)
+                    heights.append(source_h)
+                    continue
+            pixmap = img.get("pixmap")
+            if pixmap:
+                width = pixmap.width()
+                height = pixmap.height()
+                if width > 0 and height > 0:
+                    widths.append(int(width))
+                    heights.append(int(height))
+        if not widths or not heights:
+            return None, None
+        return int(round(float(np.mean(widths)))), int(round(float(np.mean(heights))))
+
+    def _estimate_megapixels_from_calibration(self, cal: dict) -> float | None:
+        if not cal:
+            return None
+        mp_value = cal.get("megapixels")
+        if isinstance(mp_value, (int, float)) and mp_value > 0:
+            return float(mp_value)
+        measurements_json = cal.get("measurements_json")
+        if measurements_json:
+            try:
+                loaded = json.loads(measurements_json)
+            except Exception:
+                loaded = None
+            if isinstance(loaded, dict):
+                image_entries = loaded.get("images") or []
+                values = []
+                for info in image_entries:
+                    crop_source = info.get("crop_source_size")
+                    if crop_source and len(crop_source) == 2:
+                        try:
+                            source_w = float(crop_source[0])
+                            source_h = float(crop_source[1])
+                        except (TypeError, ValueError):
+                            source_w = source_h = 0
+                        if source_w > 0 and source_h > 0:
+                            values.append((source_w * source_h) / 1_000_000.0)
+                            continue
+                    path = info.get("path")
+                    if path and Path(path).exists():
+                        try:
+                            with Image.open(path) as img:
+                                values.append((img.width * img.height) / 1_000_000.0)
+                        except Exception:
+                            pass
+                if values:
+                    return float(np.mean(values))
+            elif isinstance(loaded, list):
+                image_path = cal.get("image_filepath")
+                if image_path and Path(image_path).exists():
+                    try:
+                        with Image.open(image_path) as img:
+                            return float((img.width * img.height) / 1_000_000.0)
+                    except Exception:
+                        return None
+        image_path = cal.get("image_filepath")
+        if image_path and Path(image_path).exists():
+            try:
+                with Image.open(image_path) as img:
+                    return float((img.width * img.height) / 1_000_000.0)
+            except Exception:
+                return None
+        return None
+
+    def _effective_megapixels(self, mp_value: float | None, cal: dict | None) -> float | None:
+        if not mp_value:
+            return mp_value
+        return float(mp_value)
 
     def _on_gallery_image_clicked(self, image_id, path: str):
         """Handle click on an image in the gallery."""
@@ -1280,6 +2174,7 @@ class CalibrationDialog(QDialog):
                 else:
                     self.image_viewer.set_image(None)
                     self.image_viewer.set_measurement_lines([])
+                    self._preserve_image_zoom = False
                 self._update_measurement_list()
                 self._update_results()
                 self._update_auto_summary()
@@ -1310,10 +2205,14 @@ class CalibrationDialog(QDialog):
         """Show the currently selected image."""
         if self.current_image_index < 0 or self.current_image_index >= len(self.calibration_images):
             self.image_viewer.set_image(None)
+            self._preserve_image_zoom = False
+            self._update_resize_info()
             return
 
         img_data = self.calibration_images[self.current_image_index]
-        self.image_viewer.set_image(img_data["pixmap"])
+        self.image_viewer.set_image(img_data["pixmap"], preserve_view=self._preserve_image_zoom)
+        if not self._preserve_image_zoom:
+            self._preserve_image_zoom = True
         crop_box = img_data.get("crop_box")
         if crop_box and self.image_viewer.original_pixmap:
             width = float(self.image_viewer.original_pixmap.width())
@@ -1328,6 +2227,7 @@ class CalibrationDialog(QDialog):
         self._set_auto_crop_active(False)
         self._render_auto_results(self._current_auto_data())
         self._apply_current_overlay()
+        self._update_resize_info()
 
     def _start_measurement(self):
         """Start a new measurement."""
@@ -1381,7 +2281,7 @@ class CalibrationDialog(QDialog):
                         self.tr("Auto calibration results are available. Manual measures are ignored."),
                     )
                     return
-                known_um = self.known_distance_input.value()
+                known_um = self.known_distance_input.value() * 1000.0
                 measurement = {
                     "known_um": known_um,
                     "measured_px": distance_px,
@@ -1488,14 +2388,15 @@ class CalibrationDialog(QDialog):
         measurement_count: int,
     ) -> None:
         dialog = QDialog(self)
-        dialog.setWindowTitle(self.tr("Cannot Delete"))
+        dialog.setWindowTitle(self.tr("Warning - calibration in use"))
         dialog.setModal(True)
+        dialog.setMinimumWidth(400)
+        dialog.resize(400, 320)
 
         layout = QVBoxLayout(dialog)
         message = QLabel(
             self.tr(
-                "This calibration is used by {images} images and {measurements} measurements.\n"
-                "You cannot delete a calibration that is in use."
+                "This calibration is used by {images} images and {measurements} measurements."
             ).format(images=image_count, measurements=measurement_count)
         )
         message.setWordWrap(True)
@@ -1519,6 +2420,7 @@ class CalibrationDialog(QDialog):
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.Stretch)
         header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        table.setSortingEnabled(False)
 
         rows = CalibrationDB.get_images_by_calibration(calibration_id)
         obs_map: dict[int, dict] = {}
@@ -1554,7 +2456,9 @@ class CalibrationDialog(QDialog):
 
         button_row = QHBoxLayout()
         go_btn = QPushButton(self.tr("Go to observation"))
+        delete_btn = QPushButton(self.tr("Delete calibration"))
         close_btn = QPushButton(self.tr("Close"))
+        button_row.addWidget(delete_btn)
         button_row.addWidget(go_btn)
         button_row.addStretch()
         button_row.addWidget(close_btn)
@@ -1564,18 +2468,16 @@ class CalibrationDialog(QDialog):
             row = table.currentRow()
             if row < 0:
                 return
-            item = table.item(row, 0)
-            if item is None:
+            if row >= len(obs_list):
                 return
-            obs_id = item.data(Qt.UserRole)
+            obs_id = obs_list[row].get("id")
             if not obs_id:
                 return
-            genus = table.item(row, 1).text() if table.item(row, 1) else ""
-            species = table.item(row, 2).text() if table.item(row, 2) else ""
-            date = table.item(row, 4).text() if table.item(row, 4) else ""
-            display_name = f"{genus} {species} {date}".strip()
-            if not display_name:
-                display_name = f"Observation {obs_id}"
+            obs = ObservationDB.get_observation(obs_id)
+            genus = obs.get("genus") if obs else ""
+            species = obs.get("species") if obs else ""
+            date = (obs.get("date") or "")[:10] if obs else ""
+            display_name = f"{genus} {species} {date}".strip() or f"Observation {obs_id}"
             parent = self.parent()
             if parent and hasattr(parent, "on_observation_selected"):
                 dialog.accept()
@@ -1587,7 +2489,25 @@ class CalibrationDialog(QDialog):
                 self.close()
                 parent._on_observation_selected_impl(obs_id, display_name, switch_tab=True, schedule_gallery=True)
 
+        def _delete_calibration_in_use():
+            reply = QMessageBox.question(
+                dialog,
+                self.tr("Delete Calibration"),
+                self.tr(
+                    "Delete this calibration and remove scale data from all observations that use it?\n\n"
+                    "This action cannot be undone."
+                ),
+                QMessageBox.Yes | QMessageBox.Cancel,
+            )
+            if reply != QMessageBox.Yes:
+                return
+            CalibrationDB.clear_calibration_usage(calibration_id, clear_objective=True)
+            CalibrationDB.delete_calibration(calibration_id)
+            dialog.accept()
+            self._update_history_table()
+
         go_btn.clicked.connect(_open_selected_observation)
+        delete_btn.clicked.connect(_delete_calibration_in_use)
         close_btn.clicked.connect(dialog.reject)
 
         dialog.exec()
@@ -1694,6 +2614,7 @@ class CalibrationDialog(QDialog):
         self.measurement_points = []
         self.is_measuring = False
         self._modified = False  # Reset modified flag
+        self._preserve_image_zoom = False
         self.add_measurement_btn.setText(self.tr("Add Measurement"))
         self.add_measurement_btn.setEnabled(True)
         self.image_viewer.clear_preview_line()
@@ -1702,6 +2623,7 @@ class CalibrationDialog(QDialog):
         self.image_viewer.set_crop_box(None)
         self._set_auto_crop_active(False)
         self.image_viewer.setCursor(Qt.ArrowCursor)
+        self._update_resize_info()
         self._update_measurement_list()
         self._update_results()
         self._refresh_image_gallery()
@@ -1728,7 +2650,8 @@ class CalibrationDialog(QDialog):
             um_per_px = known / px if px > 0 else 0
             nm_per_px = um_to_nm(um_per_px)
             img_num = m.get("image_index", 0) + 1
-            text = f"#{i+1} (img{img_num}): {known:.1f} µm = {px:.1f} px → {nm_per_px:.2f} nm/px"
+            known_mm = known / 1000.0
+            text = f"#{i+1} (img{img_num}): {known_mm:.2f} mm = {px:.1f} px → {nm_per_px:.2f} nm/px"
             item = QListWidgetItem(text)
             item.setData(Qt.UserRole, {
                 "image_index": m.get("image_index"),
@@ -1761,6 +2684,8 @@ class CalibrationDialog(QDialog):
             self.result_std_label.setText("--")
             self.result_ci_label.setText("--")
             self.result_count_label.setText("0")
+            if hasattr(self, "sampling_status_label"):
+                self.sampling_status_label.setText("--")
             self.comparison_label.setText("")
             return
 
@@ -1778,7 +2703,7 @@ class CalibrationDialog(QDialog):
 
         if std is not None:
             std_nm = um_to_nm(std)
-            self.result_std_label.setText(f"±{std_nm:.2f} nm/px")
+            self.result_std_label.setText(f"+/-{std_nm:.2f} nm/px")
         else:
             self.result_std_label.setText("--")
 
@@ -1788,6 +2713,21 @@ class CalibrationDialog(QDialog):
             self.result_ci_label.setText(f"[{ci_low_nm:.2f}, {ci_high_nm:.2f}]")
         else:
             self.result_ci_label.setText("--")
+
+        if hasattr(self, "sampling_status_label"):
+            na_value = None
+            if self.current_objective_key:
+                obj = self.objectives.get(self.current_objective_key, {})
+                na_value = obj.get("na")
+            if mean and na_value:
+                pixels_per_micron = 1.0 / mean if mean > 0 else None
+                if pixels_per_micron:
+                    summary = format_resolution_summary(pixels_per_micron, float(na_value))
+                    self.sampling_status_label.setText(summary)
+                else:
+                    self.sampling_status_label.setText("--")
+            else:
+                self.sampling_status_label.setText(self.tr("NA not set") if not na_value else "--")
 
         # Compare with active calibration
         if mean and self.current_objective_key:
@@ -1833,14 +2773,19 @@ class CalibrationDialog(QDialog):
             scale_nm = um_to_nm(scale_um)
             self.history_table.setItem(row_idx, 1, QTableWidgetItem(f"{scale_nm:.2f}"))
 
-            # Std
-            std_um = cal.get("microns_per_pixel_std")
-            if std_um:
-                std_nm = um_to_nm(std_um)
-                std_text = f"±{std_nm:.2f}"
-            else:
-                std_text = "--"
-            self.history_table.setItem(row_idx, 2, QTableWidgetItem(std_text))
+            # MP (megapixels used)
+            mp_value = cal.get("megapixels")
+            estimate = self._estimate_megapixels_from_calibration(cal)
+            if isinstance(mp_value, (int, float)) and mp_value > 0:
+                if estimate:
+                    diff_ratio = abs(float(mp_value) - float(estimate)) / max(1e-6, float(estimate))
+                    if diff_ratio > 0.01:
+                        mp_value = estimate
+            elif estimate:
+                mp_value = estimate
+            mp_value = self._effective_megapixels(mp_value, cal)
+            mp_text = f"{float(mp_value):.3f}" if isinstance(mp_value, (int, float)) and mp_value > 0 else "--"
+            self.history_table.setItem(row_idx, 2, QTableWidgetItem(mp_text))
 
             # n (calibration measurements)
             n = cal.get("num_measurements", 0)
@@ -1900,28 +2845,20 @@ class CalibrationDialog(QDialog):
             obs_item.setTextAlignment(Qt.AlignCenter)
             self.history_table.setItem(row_idx, 8, obs_item)
 
-            # Images count
-            image_count = usage.get("image_count", 0)
-            image_item = QTableWidgetItem(str(image_count))
-            image_item.setTextAlignment(Qt.AlignCenter)
-            self.history_table.setItem(row_idx, 9, image_item)
-
-            # Measurements count
-            measurement_count = usage.get("measurement_count", 0)
-            measure_item = QTableWidgetItem(str(measurement_count))
-            measure_item.setTextAlignment(Qt.AlignCenter)
-            self.history_table.setItem(row_idx, 10, measure_item)
+            # Camera
+            camera_text = cal.get("camera") or "--"
+            self.history_table.setItem(row_idx, 9, QTableWidgetItem(camera_text))
 
             # Active
             is_active = cal.get("is_active", 0)
             active_text = "✓" if is_active else ""
             active_item = QTableWidgetItem(active_text)
             active_item.setTextAlignment(Qt.AlignCenter)
-            self.history_table.setItem(row_idx, 11, active_item)
+            self.history_table.setItem(row_idx, 10, active_item)
 
             # Notes
             notes = cal.get("notes", "") or ""
-            self.history_table.setItem(row_idx, 12, QTableWidgetItem(notes))
+            self.history_table.setItem(row_idx, 11, QTableWidgetItem(notes))
 
     def _on_history_row_clicked(self, row: int, column: int):
         """Handle click on a history table row to view that calibration."""
@@ -2052,6 +2989,7 @@ class CalibrationDialog(QDialog):
                         "spacing_um": auto_info.get("spacing_um"),
                         "overlay_parabola": auto_info.get("overlay_parabola", []),
                         "overlay_edges": auto_info.get("overlay_edges", []),
+                        "overlay_edges_50": auto_info.get("overlay_edges_50", []),
                     }
             elif "auto" in loaded_data and self.calibration_images:
                 auto_info = loaded_data.get("auto") or {}
@@ -2061,6 +2999,7 @@ class CalibrationDialog(QDialog):
                     "spacing_um": auto_info.get("spacing_um"),
                     "overlay_parabola": auto_info.get("overlay_parabola", []),
                     "overlay_edges": auto_info.get("overlay_edges", []),
+                    "overlay_edges_50": auto_info.get("overlay_edges_50", []),
                 }
 
         # Update UI
@@ -2143,9 +3082,11 @@ class CalibrationDialog(QDialog):
                         "rel_scatter_iqr_pct": result.rel_scatter_iqr_pct,
                         "drift_slope": result.drift_slope,
                         "residual_slope_deg": result.residual_slope_deg,
+                        "edges_px": result.edges_px.tolist() if hasattr(result, "edges_px") else [],
                     },
                     "overlay_parabola": auto_data.get("overlay_parabola", []),
                     "overlay_edges": auto_data.get("overlay_edges", []),
+                    "overlay_edges_50": auto_data.get("overlay_edges_50", []),
                 })
 
             calibration_data = {
@@ -2160,6 +3101,8 @@ class CalibrationDialog(QDialog):
             }
             notes = self.tr("Automatic image calibration")
             image_filepath = first_saved_path
+            cal_width, cal_height = self._collect_image_dimensions_summary()
+            resample_factor = 1.0
 
             calibration_id = CalibrationDB.add_calibration(
                 objective_key=self.current_objective_key,
@@ -2168,12 +3111,20 @@ class CalibrationDialog(QDialog):
                 num_measurements=len(auto_images),
                 measurements_json=json.dumps(calibration_data),
                 image_filepath=image_filepath,
+                camera=self._selected_camera_text(),
+                megapixels=self._collect_megapixels_summary(),
+                target_sampling_pct=float(self.target_sampling_pct),
+                resample_scale_factor=resample_factor,
+                calibration_image_width=cal_width,
+                calibration_image_height=cal_height,
                 notes=notes,
                 set_active=True,
             )
 
             if self.current_objective_key in self.objectives:
                 self.objectives[self.current_objective_key]["microns_per_pixel"] = scale_um
+                self.objectives[self.current_objective_key]["target_sampling_pct"] = float(self.target_sampling_pct)
+                self.objectives[self.current_objective_key]["resample_scale_factor"] = resample_factor
                 save_objectives(self.objectives)
 
             self._prompt_recalculate_measurements(old_calibration_id, old_scale, calibration_id, scale_um)
@@ -2236,6 +3187,9 @@ class CalibrationDialog(QDialog):
         elif "Manual image calibration" not in notes:
             notes = f"{notes} | {self.tr('Manual image calibration')}"
 
+        cal_width, cal_height = self._collect_image_dimensions_summary()
+        resample_factor = 1.0
+
         # Save to database
         calibration_id = CalibrationDB.add_calibration(
             objective_key=self.current_objective_key,
@@ -2246,6 +3200,12 @@ class CalibrationDialog(QDialog):
             num_measurements=len(all_measurements),
             measurements_json=json.dumps(calibration_data),
             image_filepath=image_filepath,
+            camera=self._selected_camera_text(),
+            megapixels=self._collect_megapixels_summary(),
+            target_sampling_pct=float(self.target_sampling_pct),
+            resample_scale_factor=resample_factor,
+            calibration_image_width=cal_width,
+            calibration_image_height=cal_height,
             notes=notes,
             set_active=True,
         )
@@ -2253,6 +3213,8 @@ class CalibrationDialog(QDialog):
         # Update objectives.json
         if self.current_objective_key in self.objectives:
             self.objectives[self.current_objective_key]["microns_per_pixel"] = mean
+            self.objectives[self.current_objective_key]["target_sampling_pct"] = float(self.target_sampling_pct)
+            self.objectives[self.current_objective_key]["resample_scale_factor"] = resample_factor
             save_objectives(self.objectives)
 
         # Prompt to update existing measurements if scale changed
@@ -2302,11 +3264,20 @@ class CalibrationDialog(QDialog):
         elif "Manually entered scale" not in notes:
             notes = f"{notes} | {self.tr('Manually entered scale')}"
 
+        cal_width, cal_height = self._collect_image_dimensions_summary()
+        resample_factor = 1.0
+
         # Save to database
         calibration_id = CalibrationDB.add_calibration(
             objective_key=self.current_objective_key,
             microns_per_pixel=scale_um,
             num_measurements=0,  # Manual entry
+            camera=self._selected_camera_text(),
+            megapixels=self._collect_megapixels_summary(),
+            target_sampling_pct=float(self.target_sampling_pct),
+            resample_scale_factor=resample_factor,
+            calibration_image_width=cal_width,
+            calibration_image_height=cal_height,
             notes=notes,
             set_active=True,
         )
@@ -2314,6 +3285,8 @@ class CalibrationDialog(QDialog):
         # Update objectives.json
         if self.current_objective_key in self.objectives:
             self.objectives[self.current_objective_key]["microns_per_pixel"] = scale_um
+            self.objectives[self.current_objective_key]["target_sampling_pct"] = float(self.target_sampling_pct)
+            self.objectives[self.current_objective_key]["resample_scale_factor"] = resample_factor
             save_objectives(self.objectives)
 
         # Prompt to update existing measurements if scale changed
@@ -2413,8 +3386,12 @@ class CalibrationDialog(QDialog):
 
         obj = self.objectives.get(self.current_objective_key, {})
         objective_data = {
-            "name": obj.get("name", self.current_objective_key),
-            "magnification": obj.get("magnification", self.current_objective_key),
+            "key": self.current_objective_key,
+            "objective_key": self.current_objective_key,
+            "name": objective_display_name(obj, self.current_objective_key),
+            "objective_name": obj.get("objective_name"),
+            "magnification": obj.get("magnification"),
+            "na": obj.get("na"),
             "microns_per_pixel": microns_per_pixel,
             "notes": obj.get("notes", ""),
         }
@@ -2471,6 +3448,8 @@ class CalibrationDialog(QDialog):
                 if active_cal:
                     obj = dict(obj)
                     obj["microns_per_pixel"] = active_cal.get("microns_per_pixel", obj.get("microns_per_pixel", 0))
+                obj = dict(obj)
+                obj["key"] = key
                 return obj
 
         # Fall back to last used
@@ -2479,14 +3458,16 @@ class CalibrationDialog(QDialog):
             try:
                 with open(last_used_file, 'r') as f:
                     last_used = json.load(f)
-                    mag = last_used.get("magnification", "")
-                    if mag in self.objectives:
-                        obj = self.objectives[mag]
+                    key = last_used.get("objective_key") or last_used.get("key") or last_used.get("magnification", "")
+                    if key in self.objectives:
+                        obj = self.objectives[key]
                         # Get active calibration scale
-                        active_cal = CalibrationDB.get_active_calibration(mag)
+                        active_cal = CalibrationDB.get_active_calibration(key)
                         if active_cal:
                             obj = dict(obj)
                             obj["microns_per_pixel"] = active_cal.get("microns_per_pixel", obj.get("microns_per_pixel", 0))
+                        obj = dict(obj)
+                        obj["key"] = key
                         return obj
             except (json.JSONDecodeError, IOError):
                 pass
@@ -2494,11 +3475,12 @@ class CalibrationDialog(QDialog):
         # Fall back to first objective
         if self.objectives:
             key = sorted(self.objectives.keys())[0]
-            obj = self.objectives[key]
+            obj = dict(self.objectives[key])
             active_cal = CalibrationDB.get_active_calibration(key)
             if active_cal:
                 obj = dict(obj)
                 obj["microns_per_pixel"] = active_cal.get("microns_per_pixel", obj.get("microns_per_pixel", 0))
+            obj["key"] = key
             return obj
 
         return None

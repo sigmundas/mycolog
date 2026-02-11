@@ -1,6 +1,7 @@
 """Reusable image thumbnail gallery widget."""
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Iterable
 
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from database.models import ImageDB, MeasurementDB
+from database.schema import load_objectives, objective_display_name, resolve_objective_key
 from utils.thumbnail_generator import get_thumbnail_path
 
 
@@ -134,19 +136,105 @@ class ImageGalleryWidget(QGroupBox):
             self.clear()
             return
         images = ImageDB.get_images_for_observation(observation_id)
+        objectives = load_objectives()
         items = []
         for idx, img in enumerate(images):
             img_id = img.get("id")
+            image_type = (img.get("image_type") or "field").strip().lower()
+            objective_name = img.get("objective_name")
+            objective_display = objective_name
+            if objective_name:
+                resolved_key = resolve_objective_key(objective_name, objectives)
+                if resolved_key and resolved_key in objectives:
+                    objective_display = objective_display_name(objectives[resolved_key], resolved_key)
+                elif objective_name in objectives:
+                    objective_display = objective_display_name(objectives[objective_name], objective_name)
+            objective_short = ImageGalleryWidget._short_objective_label(objective_display, self.tr) or objective_display
+            contrast = img.get("contrast")
+            scale_value = img.get("scale_microns_per_pixel")
+            custom_scale = bool(scale_value) and (not objective_name or str(objective_name).strip().lower() == "custom")
+            needs_scale = (
+                image_type == "microscope"
+                and not objective_name
+                and not scale_value
+            )
+            badges = self.build_image_type_badges(
+                image_type=image_type,
+                objective_name=objective_short,
+                contrast=contrast,
+                scale_microns_per_pixel=scale_value,
+                custom_scale=custom_scale,
+                needs_scale=needs_scale,
+                translate=self.tr,
+            )
             items.append(
                 {
                     "id": img_id,
                     "filepath": img.get("filepath"),
                     "has_measurements": self._has_spore_measurements(img_id) if img_id else False,
                     "image_number": idx + 1,
+                    "badges": badges,
                 }
             )
         self._items = items
         self._render()
+
+    @staticmethod
+    def _short_objective_label(name: str | None, translate=None) -> str | None:
+        tr = translate if translate is not None else (lambda text: text)
+        if not name:
+            return None
+        text = str(name).strip()
+        if not text:
+            return None
+        if text.lower() == "custom":
+            return tr("Scale bar")
+        match = re.search(r"(\d+(?:\.\d+)?)\s*[xX]", text)
+        if match:
+            return f"{match.group(1)}X"
+        match = re.search(r"(\d+(?:\.\d+)?)", text)
+        if match:
+            return f"{match.group(1)}X"
+        return text
+
+    @staticmethod
+    def build_image_type_badges(
+        image_type: str | None,
+        objective_name: str | None = None,
+        contrast: str | None = None,
+        scale_microns_per_pixel: float | None = None,
+        custom_scale: bool = False,
+        needs_scale: bool = False,
+        translate=None,
+    ) -> list[str]:
+        tr = translate if translate is not None else (lambda text: text)
+        image_type = (image_type or "field").strip().lower()
+        badges: list[str] = []
+
+        if image_type == "microscope":
+            detail = None
+            if custom_scale:
+                detail = tr("Scale bar")
+            elif objective_name:
+                if str(objective_name).strip().lower() == "custom":
+                    detail = tr("Scale bar")
+                else:
+                    detail = ImageGalleryWidget._short_objective_label(objective_name, tr)
+                    if not detail:
+                        detail = tr("Micro")
+            elif scale_microns_per_pixel:
+                detail = tr("Scale bar")
+            else:
+                detail = tr("Micro")
+            if contrast:
+                detail = f"{detail} {contrast}"
+            badges.append(detail)
+            if needs_scale:
+                badges.append(tr("(!) needs scale"))
+        else:
+            badges.append(tr("Field"))
+
+        return badges
 
     def select_image(self, image_id: int | None) -> None:
         self._selected_id = image_id
@@ -249,7 +337,7 @@ class ImageGalleryWidget(QGroupBox):
                 % (color, background, weight)
             )
             gps_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-            image_layout.addWidget(gps_label, 0, 0, alignment=Qt.AlignTop | Qt.AlignRight)
+            image_layout.addWidget(gps_label, 0, 0, alignment=Qt.AlignTop | Qt.AlignHCenter)
 
         badges = item.get("badges") or []
         if badges:
@@ -284,14 +372,15 @@ class ImageGalleryWidget(QGroupBox):
             )
             overlay_layout.addWidget(badge)
 
-        if self._show_delete and item.get("id"):
+        delete_key = item.get("id") if item.get("id") is not None else item.get("filepath")
+        if self._show_delete and delete_key:
             delete_btn = QToolButton()
             delete_btn.setText("X")
             delete_btn.setFixedSize(16, 16)
             delete_btn.setStyleSheet(
                 "QToolButton { background-color: #e74c3c; color: white; border-radius: 8px; font-size: 8pt; }"
             )
-            delete_btn.clicked.connect(lambda _, img_id=item["id"]: self.deleteRequested.emit(img_id))
+            delete_btn.clicked.connect(lambda _, key=delete_key: self.deleteRequested.emit(key))
             overlay_layout.addWidget(delete_btn)
 
         image_layout.addWidget(overlay, 0, 0, alignment=Qt.AlignTop | Qt.AlignRight)

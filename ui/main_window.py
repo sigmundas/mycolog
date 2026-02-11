@@ -7,18 +7,21 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                 QCheckBox, QDoubleSpinBox, QDialog, QFormLayout,
                                 QDialogButtonBox, QSpinBox, QSizePolicy, QToolButton,
                                 QStyle, QLineEdit, QApplication, QProgressDialog,
-                                QToolTip, QCompleter)
+                                QToolTip, QCompleter, QSplitterHandle)
 from PySide6.QtGui import (
     QPixmap,
     QAction,
     QColor,
     QImage,
+    QImageReader,
     QPainter,
     QPen,
     QIcon,
     QKeySequence,
     QShortcut,
     QDesktopServices,
+    QStandardItemModel,
+    QStandardItem,
 )
 from PySide6.QtCore import (
     Qt,
@@ -31,6 +34,8 @@ from PySide6.QtCore import (
     QEvent,
     QStringListModel,
     QUrl,
+    QStandardPaths,
+    QModelIndex,
 )
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 import json
@@ -43,6 +48,7 @@ from pathlib import Path
 import re
 from PIL import Image, ExifTags
 from database.models import ObservationDB, ImageDB, MeasurementDB, SettingsDB, ReferenceDB, CalibrationDB
+from database.models import SpeciesDataAvailability
 from database.schema import (
     get_connection,
     get_app_settings,
@@ -51,12 +57,16 @@ from database.schema import (
     get_database_path,
     get_images_dir,
     init_database,
-    load_objectives
+    load_objectives,
+    objective_display_name,
+    objective_sort_value,
+    resolve_objective_key,
 )
 from utils.annotation_capture import save_spore_annotation
 from utils.thumbnail_generator import generate_all_sizes
 from utils.image_utils import cleanup_import_temp_file
 from utils.heic_converter import maybe_convert_heic
+from .delegates import SpeciesItemDelegate
 from utils.vernacular_utils import (
     normalize_vernacular_language,
     vernacular_language_label,
@@ -74,7 +84,7 @@ from utils.db_share import export_database_bundle as export_db_bundle
 from utils.db_share import import_database_bundle as import_db_bundle
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from matplotlib.patches import Rectangle, Circle
+from matplotlib.patches import Circle, Ellipse
 
 
 class SpinnerWidget(QWidget):
@@ -127,10 +137,119 @@ class LoadingDialog(QDialog):
         layout.addWidget(label)
 
 
+class CollapsibleSplitterHandle(QSplitterHandle):
+    """Splitter handle with a collapse/expand button."""
+
+    def __init__(self, orientation, parent=None):
+        super().__init__(orientation, parent)
+        self._button = QToolButton(self)
+        self._button.setAutoRaise(True)
+        self._button.setFixedSize(18, 18)
+        self._button.clicked.connect(self._on_clicked)
+        self._button.setStyleSheet("QToolButton { border: none; }")
+        self._update_icon()
+
+    def _on_clicked(self):
+        splitter = self.splitter()
+        if hasattr(splitter, "toggle_collapse"):
+            splitter.toggle_collapse()
+        self._update_icon()
+
+    def _update_icon(self):
+        splitter = self.splitter()
+        collapsed = bool(getattr(splitter, "_is_collapsed", False))
+        if self.orientation() == Qt.Vertical:
+            icon = self.style().standardIcon(QStyle.SP_ArrowUp if collapsed else QStyle.SP_ArrowDown)
+        else:
+            icon = self.style().standardIcon(QStyle.SP_ArrowLeft if collapsed else QStyle.SP_ArrowRight)
+        self._button.setIcon(icon)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        size = self._button.size()
+        self._button.move(
+            (self.width() - size.width()) // 2,
+            (self.height() - size.height()) // 2
+        )
+
+
+class CollapsibleSplitter(QSplitter):
+    """Splitter that can collapse/expand a child with a handle button."""
+
+    collapse_toggled = Signal(bool)
+
+    def __init__(self, orientation, collapse_index=1, parent=None):
+        super().__init__(orientation, parent)
+        self._collapse_index = collapse_index
+        self._last_sizes = None
+        self._is_collapsed = False
+
+    def createHandle(self):
+        handle = CollapsibleSplitterHandle(self.orientation(), self)
+        self.collapse_toggled.connect(lambda _state: handle._update_icon())
+        return handle
+
+    def toggle_collapse(self):
+        sizes = self.sizes()
+        if not sizes:
+            return
+        if not self._is_collapsed and sizes[self._collapse_index] > 0:
+            self._last_sizes = sizes
+            total = sum(sizes)
+            sizes[self._collapse_index] = 0
+            sizes[1 - self._collapse_index] = total
+            self.setSizes(sizes)
+            self._is_collapsed = True
+        else:
+            if self._last_sizes:
+                self.setSizes(self._last_sizes)
+            self._is_collapsed = False
+        self.collapse_toggled.emit(self._is_collapsed)
+
+
+class CollapsibleSection(QWidget):
+    """Collapsible section with a header button."""
+
+    def __init__(self, title, content, expanded=True, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        self._toggle_btn = QToolButton()
+        self._toggle_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self._toggle_btn.setText(title)
+        self._toggle_btn.setCheckable(True)
+        self._toggle_btn.setChecked(bool(expanded))
+        self._toggle_btn.setAutoRaise(True)
+        self._toggle_btn.setStyleSheet(
+            "QToolButton { font-weight: bold; padding: 6px 8px; background-color: transparent; "
+            "color: #2c3e50; border: none; text-align: left; }"
+            "QToolButton:hover { background-color: #ecf0f1; }"
+            "QToolButton:checked { background-color: white; color: #2c3e50; }"
+        )
+        self._toggle_btn.clicked.connect(self._on_toggled)
+        layout.addWidget(self._toggle_btn)
+
+        self._content = content
+        layout.addWidget(self._content)
+
+        self._on_toggled(self._toggle_btn.isChecked())
+
+    def _on_toggled(self, checked):
+        self._toggle_btn.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+        self._content.setVisible(bool(checked))
 class ScaleBarCalibrationDialog(QDialog):
     """Simple scale bar calibration dialog for two-point measurement."""
 
-    def __init__(self, main_window, initial_um: float = 10.0, previous_key: str | None = None):
+    def __init__(
+        self,
+        main_window,
+        initial_value: float | None = None,
+        unit_label: str = "\u03bcm",
+        unit_multiplier: float = 1.0,
+        previous_key: str | None = None,
+    ):
         super().__init__(main_window)
         self.setWindowTitle("Scale bar")
         self.setModal(False)
@@ -138,15 +257,24 @@ class ScaleBarCalibrationDialog(QDialog):
         self.previous_key = previous_key
         self.scale_applied = False
         self.auto_apply = False
+        self.unit_label = unit_label
+        self.unit_multiplier = unit_multiplier
+        if initial_value is None:
+            initial_value = 10.0 if unit_label == "\u03bcm" else 1.0
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
 
         self.length_input = QDoubleSpinBox()
-        self.length_input.setRange(0.1, 100000.0)
-        self.length_input.setDecimals(2)
-        self.length_input.setValue(initial_um)
-        self.length_input.setSuffix(" µm")
+        if unit_label == "mm":
+            self.length_input.setRange(1.0, 100000.0)
+            self.length_input.setDecimals(0)
+            self.length_input.setSingleStep(1.0)
+        else:
+            self.length_input.setRange(0.1, 100000.0)
+            self.length_input.setDecimals(2)
+        self.length_input.setValue(initial_value)
+        self.length_input.setSuffix(f" {unit_label}")
         form.addRow("Scale bar length:", self.length_input)
 
         self.scale_label = QLabel("--")
@@ -175,7 +303,7 @@ class ScaleBarCalibrationDialog(QDialog):
     def set_calibration_distance(self, distance_pixels: float):
         if not distance_pixels or distance_pixels <= 0:
             return
-        length_um = float(self.length_input.value())
+        length_um = float(self.length_input.value()) * self.unit_multiplier
         scale_um = length_um / distance_pixels
         scale_nm = scale_um * 1000.0
         self.scale_label.setText(f"{scale_nm:.2f} nm/px")
@@ -185,7 +313,7 @@ class ScaleBarCalibrationDialog(QDialog):
     def apply_scale(self, distance_pixels: float):
         if not distance_pixels or distance_pixels <= 0:
             return
-        length_um = float(self.length_input.value())
+        length_um = float(self.length_input.value()) * self.unit_multiplier
         scale_um = length_um / distance_pixels
         scale_nm = scale_um * 1000.0
         self.scale_label.setText(f"{scale_nm:.2f} nm/px")
@@ -230,6 +358,12 @@ class DatabaseSettingsDialog(QDialog):
         img_row.addWidget(img_browse)
         form.addRow(self.tr("Images folder:"), img_row)
 
+        self.sampling_pct_input = QDoubleSpinBox()
+        self.sampling_pct_input.setRange(50.0, 300.0)
+        self.sampling_pct_input.setDecimals(0)
+        self.sampling_pct_input.setSuffix("%")
+        form.addRow(self.tr("Ideal sampling (% Nyquist):"), self.sampling_pct_input)
+
         self.contrast_input = QLineEdit()
         form.addRow(self.tr("Contrast values:"), self.contrast_input)
         self.mount_input = QLineEdit()
@@ -238,6 +372,37 @@ class DatabaseSettingsDialog(QDialog):
         form.addRow(self.tr("Sample values:"), self.sample_input)
         self.measure_input = QLineEdit()
         form.addRow(self.tr("Measure categories:"), self.measure_input)
+
+        originals_group = QGroupBox(self.tr("Original images"))
+        originals_layout = QVBoxLayout(originals_group)
+        self.originals_button_group = QButtonGroup(self)
+
+        self.originals_none_radio = QRadioButton(self.tr("Don't store originals"))
+        self.originals_obs_radio = QRadioButton(self.tr("Observation folder / originals"))
+        self.originals_global_radio = QRadioButton(self.tr("Appdata original images"))
+        self.originals_button_group.addButton(self.originals_none_radio)
+        self.originals_button_group.addButton(self.originals_obs_radio)
+        self.originals_button_group.addButton(self.originals_global_radio)
+
+        originals_layout.addWidget(self.originals_none_radio)
+        originals_layout.addWidget(self.originals_obs_radio)
+        self.originals_obs_path = QLineEdit()
+        self.originals_obs_path.setReadOnly(True)
+        originals_layout.addWidget(self.originals_obs_path)
+
+        originals_layout.addWidget(self.originals_global_radio)
+        global_row = QHBoxLayout()
+        self.originals_global_input = QLineEdit()
+        self.originals_global_browse = QPushButton(self.tr("Browse"))
+        self.originals_global_browse.clicked.connect(self._browse_originals_dir)
+        global_row.addWidget(self.originals_global_input)
+        global_row.addWidget(self.originals_global_browse)
+        originals_layout.addLayout(global_row)
+
+        self.originals_none_radio.toggled.connect(self._update_originals_controls)
+        self.originals_obs_radio.toggled.connect(self._update_originals_controls)
+        self.originals_global_radio.toggled.connect(self._update_originals_controls)
+        self.images_dir_input.textChanged.connect(self._update_originals_path_hints)
 
         hint = QLabel(
             self.tr(
@@ -248,6 +413,7 @@ class DatabaseSettingsDialog(QDialog):
         hint.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
 
         layout.addLayout(form)
+        layout.addWidget(originals_group)
         layout.addWidget(hint)
 
         buttons = QHBoxLayout()
@@ -272,6 +438,24 @@ class DatabaseSettingsDialog(QDialog):
             db_folder = str(get_database_path().parent)
         self.db_path_input.setText(db_folder)
         self.images_dir_input.setText(str(settings.get("images_dir") or get_images_dir()))
+        self.sampling_pct_input.setValue(float(SettingsDB.get_setting("target_sampling_pct", 120.0)))
+
+        storage_mode = SettingsDB.get_setting("original_storage_mode")
+        if not storage_mode:
+            storage_mode = "observation" if SettingsDB.get_setting("store_original_images", False) else "none"
+        if storage_mode == "none":
+            self.originals_none_radio.setChecked(True)
+        elif storage_mode == "global":
+            self.originals_global_radio.setChecked(True)
+        else:
+            self.originals_obs_radio.setChecked(True)
+
+        global_dir = SettingsDB.get_setting("originals_dir") or ""
+        if not global_dir:
+            global_dir = str(Path(self.images_dir_input.text()) / "originals")
+        self.originals_global_input.setText(global_dir)
+        self._update_originals_path_hints()
+        self._update_originals_controls()
 
         contrast = SettingsDB.get_list_setting("contrast_options", ["BF", "DF", "DIC", "Phase"])
         mount = SettingsDB.get_list_setting(
@@ -284,13 +468,22 @@ class DatabaseSettingsDialog(QDialog):
         )
         categories = SettingsDB.get_list_setting(
             "measure_categories",
-            ["Spore", "Basidia", "Pleurocystidia", "Cheilocystidia", "Caulocystidia", "Other"]
+            ["Spores", "Field", "Pleurocystidia", "Cheilocystidia", "Caulocystidia", "Other"]
         )
+        categories = [
+            "Spores" if str(c).strip().lower() == "spore" else c
+            for c in categories
+            if str(c).strip().lower() != "basidia"
+        ]
+        if not any(str(c).strip().lower() == "field" for c in categories):
+            categories.insert(1, "Field")
 
         contrast_default = SettingsDB.get_setting("contrast_default", contrast[0] if contrast else "BF")
         mount_default = SettingsDB.get_setting("mount_default", mount[0] if mount else "Not set")
         sample_default = SettingsDB.get_setting("sample_default", sample[0] if sample else "Not set")
-        category_default = SettingsDB.get_setting("measure_default", categories[0] if categories else "Spore")
+        category_default = SettingsDB.get_setting("measure_default", categories[0] if categories else "Spores")
+        if str(category_default).strip().lower() == "spore":
+            category_default = "Spores"
 
         self.contrast_input.setText(self._format_list_with_default(contrast, contrast_default))
         self.mount_input.setText(self._format_list_with_default(mount, mount_default))
@@ -306,6 +499,27 @@ class DatabaseSettingsDialog(QDialog):
         path = QFileDialog.getExistingDirectory(self, "Select Images Folder", self.images_dir_input.text())
         if path:
             self.images_dir_input.setText(path)
+
+    def _browse_originals_dir(self):
+        path = QFileDialog.getExistingDirectory(self, "Select Originals Folder", self.originals_global_input.text())
+        if path:
+            self.originals_global_input.setText(path)
+
+    def _update_originals_path_hints(self):
+        base = self.images_dir_input.text().strip()
+        if base:
+            obs_path = str(Path(base) / "<observation>" / "originals")
+        else:
+            obs_path = self.tr("Observation folder / originals")
+        self.originals_obs_path.setText(obs_path)
+        if not self.originals_global_input.text().strip():
+            default_global = str(Path(base) / "originals") if base else ""
+            self.originals_global_input.setText(default_global)
+
+    def _update_originals_controls(self):
+        use_global = self.originals_global_radio.isChecked()
+        self.originals_global_input.setEnabled(use_global)
+        self.originals_global_browse.setEnabled(use_global)
 
     def _format_list_with_default(self, values, default_value):
         formatted = []
@@ -401,8 +615,18 @@ class DatabaseSettingsDialog(QDialog):
         categories, category_default = self._parse_list_with_default(
             "Measure category",
             self.measure_input.text(),
-            ["Spore", "Basidia", "Pleurocystidia", "Cheilocystidia", "Caulocystidia", "Other"]
+            ["Spores", "Field", "Pleurocystidia", "Cheilocystidia", "Caulocystidia", "Other"]
         )
+        if categories:
+            categories = [
+                "Spores" if str(c).strip().lower() == "spore" else c
+                for c in categories
+                if str(c).strip().lower() != "basidia"
+            ]
+            if not any(str(c).strip().lower() == "field" for c in categories):
+                categories.insert(1, "Field")
+        if category_default and str(category_default).strip().lower() == "spore":
+            category_default = "Spores"
 
         if not all([contrast, mount, sample, categories, contrast_default, mount_default, sample_default, category_default]):
             return
@@ -415,6 +639,15 @@ class DatabaseSettingsDialog(QDialog):
         SettingsDB.set_setting("mount_default", mount_default)
         SettingsDB.set_setting("sample_default", sample_default)
         SettingsDB.set_setting("measure_default", category_default)
+        SettingsDB.set_setting("target_sampling_pct", float(self.sampling_pct_input.value()))
+
+        if self.originals_none_radio.isChecked():
+            SettingsDB.set_setting("original_storage_mode", "none")
+        elif self.originals_global_radio.isChecked():
+            SettingsDB.set_setting("original_storage_mode", "global")
+        else:
+            SettingsDB.set_setting("original_storage_mode", "observation")
+        SettingsDB.set_setting("originals_dir", self.originals_global_input.text().strip())
 
         self.accept()
 
@@ -1248,6 +1481,347 @@ class ReferenceValuesDialog(QDialog):
         else:
             self._species_model.setStringList(values)
 
+class SporeDataTable(QTableWidget):
+    """Editable table for spore data with auto-added rows and Q calculation."""
+
+    def __init__(self, parent=None):
+        super().__init__(0, 3, parent)
+        self.setHorizontalHeaderLabels(["Length (µm)", "Width (µm)", "Q"])
+        header = self.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.verticalHeader().setVisible(False)
+        self.setSelectionBehavior(QAbstractItemView.SelectItems)
+        self.setEditTriggers(QAbstractItemView.AllEditTriggers)
+        self.setStyleSheet("QTableWidget QLineEdit { padding: 0px; }")
+        self._updating_q = False
+        self.itemChanged.connect(self._on_item_changed)
+        self._ensure_rows(1)
+
+    def _ensure_rows(self, count):
+        while self.rowCount() < count:
+            row = self.rowCount()
+            self.insertRow(row)
+            q_item = QTableWidgetItem("")
+            q_item.setFlags(q_item.flags() & ~Qt.ItemIsEditable)
+            self.setItem(row, 2, q_item)
+
+    def _on_item_changed(self, item):
+        if self._updating_q:
+            return
+        if item.column() not in (0, 1):
+            return
+        self._update_q_for_row(item.row())
+
+    def _update_q_for_row(self, row):
+        if row < 0 or row >= self.rowCount():
+            return
+        length = self._cell_float(row, 0)
+        width = self._cell_float(row, 1)
+        q_value = None
+        if length is not None and width is not None and width > 0:
+            q_value = length / width
+        self._updating_q = True
+        try:
+            if self.item(row, 2) is None:
+                q_item = QTableWidgetItem("")
+                q_item.setFlags(q_item.flags() & ~Qt.ItemIsEditable)
+                self.setItem(row, 2, q_item)
+            self.item(row, 2).setText(f"{q_value:.2f}" if q_value is not None else "")
+        finally:
+            self._updating_q = False
+
+    def _cell_float(self, row, col):
+        item = self.item(row, col)
+        if not item:
+            return None
+        try:
+            return float(item.text().strip())
+        except ValueError:
+            return None
+
+    def keyPressEvent(self, event):
+        if event.matches(QKeySequence.Paste):
+            self._paste_from_clipboard()
+            return
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            current = self.currentIndex()
+            if current.isValid() and current.row() == self.rowCount() - 1:
+                self._ensure_rows(self.rowCount() + 1)
+                self.setCurrentCell(self.rowCount() - 1, current.column())
+                return
+        text = event.text()
+        if text and not text.isspace():
+            item = self.currentItem()
+            if item and (item.flags() & Qt.ItemIsEditable):
+                if self.state() != QAbstractItemView.EditingState:
+                    self.editItem(item)
+        super().keyPressEvent(event)
+
+    def _paste_from_clipboard(self):
+        text = QApplication.clipboard().text()
+        if not text:
+            return
+        rows = [line for line in text.splitlines() if line.strip()]
+        if not rows:
+            return
+        start_row = max(0, self.currentRow())
+        start_col = max(0, self.currentColumn())
+        needed_rows = start_row + len(rows)
+        self._ensure_rows(needed_rows)
+        for r_index, line in enumerate(rows):
+            cols = [c.strip() for c in re.split(r"[\t,;]", line) if c.strip()]
+            for c_index, value in enumerate(cols[:2]):
+                row = start_row + r_index
+                col = start_col + c_index
+                if col > 1:
+                    break
+                item = self.item(row, col)
+                if item is None:
+                    item = QTableWidgetItem()
+                    self.setItem(row, col, item)
+                item.setText(value)
+            self._update_q_for_row(start_row + r_index)
+
+    def get_points(self) -> list[dict]:
+        points = []
+        for row in range(self.rowCount()):
+            length = self._cell_float(row, 0)
+            width = self._cell_float(row, 1)
+            if length is None or width is None or width <= 0:
+                continue
+            points.append({"length_um": float(length), "width_um": float(width)})
+        return points
+
+
+class ReferenceAddDialog(QDialog):
+    """Dialog for adding reference min/max or spore data."""
+
+    def __init__(
+        self,
+        parent,
+        genus: str,
+        species: str,
+        vernacular: str | None = None,
+        data: dict | None = None,
+        title: str | None = None,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle(title or parent.tr("Add reference data"))
+        self.setModal(True)
+        self._result = None
+        self._genus = genus
+        self._species = species
+        self._prefill_data = data or {}
+
+        layout = QVBoxLayout(self)
+
+        sci_label = QLabel(f"{genus} {species}".strip())
+        sci_label.setStyleSheet("font-weight: bold;")
+        layout.addWidget(sci_label)
+        if vernacular:
+            vern_label = QLabel(vernacular)
+            vern_label.setStyleSheet("color: #7f8c8d;")
+            layout.addWidget(vern_label)
+
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs)
+
+        minmax_tab = QWidget()
+        minmax_layout = QVBoxLayout(minmax_tab)
+        self.minmax_table = QTableWidget(3, 5)
+        self.minmax_table.setHorizontalHeaderLabels(
+            [self.tr("Min"), self.tr("5%"), self.tr("50%"), self.tr("95%"), self.tr("Max")]
+        )
+        self.minmax_table.setVerticalHeaderLabels([self.tr("Length"), self.tr("Width"), self.tr("Q")])
+        self.minmax_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.minmax_table.verticalHeader().setDefaultSectionSize(30)
+        self.minmax_table.setStyleSheet("QTableWidget QLineEdit { padding: 0px; }")
+        self._formatting_minmax = False
+        self.minmax_table.itemChanged.connect(self._on_minmax_item_changed)
+        minmax_layout.addWidget(self.minmax_table)
+        self.tabs.addTab(minmax_tab, self.tr("Min/max"))
+
+        spore_tab = QWidget()
+        spore_layout = QVBoxLayout(spore_tab)
+        self.spore_table = SporeDataTable()
+        spore_layout.addWidget(self.spore_table)
+        hint = QLabel(self.tr("Paste from Excel/CSV is supported (Ctrl+V)."))
+        hint.setStyleSheet("color: #7f8c8d; font-size: 8pt;")
+        spore_layout.addWidget(hint)
+        self.tabs.addTab(spore_tab, self.tr("Spore data"))
+
+        source_row = QFormLayout()
+        self.source_input = QLineEdit()
+        source_prefill = (
+            self._prefill_data.get("source")
+            or self._prefill_data.get("points_label")
+            or self._prefill_data.get("source_label")
+            or ""
+        )
+        if source_prefill:
+            self.source_input.setText(source_prefill)
+        source_row.addRow(self.tr("Source:"), self.source_input)
+        layout.addLayout(source_row)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch()
+        self.save_btn = QPushButton(self.tr("Save"))
+        self.save_btn.clicked.connect(self._on_save)
+        self.cancel_btn = QPushButton(self.tr("Cancel"))
+        self.cancel_btn.clicked.connect(self.reject)
+        button_row.addWidget(self.save_btn)
+        button_row.addWidget(self.cancel_btn)
+        layout.addLayout(button_row)
+
+        self._apply_prefill()
+
+    def _table_value(self, row, col):
+        item = self.minmax_table.item(row, col)
+        if not item:
+            return None
+        try:
+            return float(item.text().strip())
+        except ValueError:
+            return None
+
+    def _on_minmax_item_changed(self, item: QTableWidgetItem):
+        if self._formatting_minmax:
+            return
+        if not item:
+            return
+        text = item.text().strip()
+        if not text:
+            return
+        try:
+            value = float(text)
+        except ValueError:
+            return
+        self._formatting_minmax = True
+        try:
+            item.setText(f"{value:.2f}")
+        finally:
+            self._formatting_minmax = False
+
+    def _minmax_data(self):
+        data = {
+            "genus": self._genus,
+            "species": self._species,
+            "source": self.source_input.text().strip() or None,
+            "length_min": self._table_value(0, 0),
+            "length_p05": self._table_value(0, 1),
+            "length_p50": self._table_value(0, 2),
+            "length_p95": self._table_value(0, 3),
+            "length_max": self._table_value(0, 4),
+            "width_min": self._table_value(1, 0),
+            "width_p05": self._table_value(1, 1),
+            "width_p50": self._table_value(1, 2),
+            "width_p95": self._table_value(1, 3),
+            "width_max": self._table_value(1, 4),
+            "q_min": self._table_value(2, 0),
+            "q_p50": self._table_value(2, 2),
+            "q_max": self._table_value(2, 4),
+        }
+        has_values = any(
+            data.get(key) is not None
+            for key in (
+                "length_min",
+                "length_p05",
+                "length_p50",
+                "length_p95",
+                "length_max",
+                "width_min",
+                "width_p05",
+                "width_p50",
+                "width_p95",
+                "width_max",
+            )
+        )
+        if not has_values:
+            return None
+        data["source_kind"] = "reference"
+        return data
+
+    def _points_data(self):
+        points = self.spore_table.get_points()
+        if not points:
+            return None
+        source_label = self.source_input.text().strip()
+        if not source_label:
+            source_label = self.tr("Reference points")
+        return {
+            "genus": self._genus,
+            "species": self._species,
+            "points": points,
+            "points_label": source_label,
+            "source_kind": "points",
+            "source_type": "custom",
+        }
+
+    def _on_save(self):
+        if self.tabs.currentIndex() == 0:
+            data = self._minmax_data()
+            if not data:
+                QMessageBox.warning(
+                    self,
+                    self.tr("Missing Data"),
+                    self.tr("Enter at least one length or width value.")
+                )
+                return
+        else:
+            data = self._points_data()
+            if not data:
+                QMessageBox.warning(
+                    self,
+                    self.tr("Missing Data"),
+                    self.tr("Enter at least one length and width value.")
+                )
+                return
+        self._result = data
+        self.accept()
+
+    def result_data(self):
+        return self._result
+
+    def _apply_prefill(self):
+        data = self._prefill_data
+        if not data:
+            return
+
+        def _set_cell(row, col, value):
+            if value is None:
+                return
+            item = QTableWidgetItem(f"{value:.2f}")
+            self.minmax_table.setItem(row, col, item)
+
+        _set_cell(0, 0, data.get("length_min"))
+        _set_cell(0, 1, data.get("length_p05"))
+        _set_cell(0, 2, data.get("length_p50"))
+        _set_cell(0, 3, data.get("length_p95"))
+        _set_cell(0, 4, data.get("length_max"))
+        _set_cell(1, 0, data.get("width_min"))
+        _set_cell(1, 1, data.get("width_p05"))
+        _set_cell(1, 2, data.get("width_p50"))
+        _set_cell(1, 3, data.get("width_p95"))
+        _set_cell(1, 4, data.get("width_max"))
+        _set_cell(2, 0, data.get("q_min"))
+        _set_cell(2, 2, data.get("q_p50"))
+        _set_cell(2, 4, data.get("q_max"))
+
+        points = data.get("points") or []
+        if points:
+            self.spore_table._ensure_rows(len(points))
+            for row, point in enumerate(points):
+                length = point.get("length_um")
+                width = point.get("width_um")
+                if length is not None:
+                    self.spore_table.setItem(row, 0, QTableWidgetItem(f"{length:g}"))
+                if width is not None:
+                    self.spore_table.setItem(row, 1, QTableWidgetItem(f"{width:g}"))
+                self.spore_table._update_q_for_row(row)
+            self.tabs.setCurrentIndex(1)
+
 class MainWindow(QMainWindow):
     """Main application window with modern UI and measurement table."""
 
@@ -1283,6 +1857,8 @@ class MainWindow(QMainWindow):
         self.current_objective = None
         self.current_objective_name = None
         self.microns_per_pixel = 0.5
+        self.current_calibration_id = None
+        self.current_image_type = None
 
         # Active observation tracking
         self.active_observation_id = None
@@ -1314,8 +1890,18 @@ class MainWindow(QMainWindow):
         self._gallery_refresh_timer = None
         self._gallery_refresh_pending = False
         self._gallery_last_refresh_time = 0.0
+        self._gallery_thumb_cache = {}
+        self._gallery_thumb_cache_observation_id = None
+        self._gallery_pixmap_cache = {}
+        self._gallery_render_timer = None
+        self._gallery_render_queue = []
+        self._gallery_render_state = None
+        self._gallery_collapsed = False
         self.loading_dialog = None
         self.reference_values = {}
+        self.species_availability = SpeciesDataAvailability()
+        self._ref_completer_suppress = False
+        self.reference_series = []
         self.suppress_scale_prompt = False
         self._measure_category_sync = False
 
@@ -1340,6 +1926,31 @@ class MainWindow(QMainWindow):
                     QToolTip.showText(obj.mapToGlobal(QPoint(0, obj.height())), tip, obj)
             elif event.type() == QEvent.Leave:
                 QToolTip.hideText()
+        if event.type() == QEvent.FocusIn:
+            if obj == getattr(self, "ref_genus_input", None):
+                text = self.ref_genus_input.text().strip()
+                self._update_ref_genus_suggestions(text)
+                if self._ref_genus_model.stringList():
+                    self._ref_genus_completer.complete()
+            elif obj == getattr(self, "ref_species_input", None):
+                genus = self.ref_genus_input.text().strip()
+                if genus:
+                    text = self._clean_ref_species_text(self.ref_species_input.text())
+                    self._update_ref_species_suggestions(genus, text)
+                    if self._ref_species_model.rowCount() > 0:
+                        self._ref_species_completer.complete()
+            elif obj == getattr(self, "ref_vernacular_input", None):
+                if not self.ref_vernacular_input.text().strip():
+                    self._on_ref_vernacular_text_changed("")
+                    if self._ref_vernacular_model.rowCount() > 0:
+                        self._ref_vernacular_completer.complete()
+        if event.type() == QEvent.MouseButtonPress:
+            if obj == getattr(self, "ref_source_input", None):
+                if self.ref_source_input.count() > 1:
+                    self.ref_source_input.showPopup()
+            if hasattr(self, "ref_source_input") and obj == self.ref_source_input.lineEdit():
+                if self.ref_source_input.count() > 1:
+                    self.ref_source_input.showPopup()
         return super().eventFilter(obj, event)
 
     def init_ui(self):
@@ -1583,7 +2194,7 @@ class MainWindow(QMainWindow):
         self.scale_combo.currentIndexChanged.connect(self.on_scale_combo_changed)
         calib_layout.addWidget(self.scale_combo)
 
-        self.calib_info_label = QLabel("No objective")
+        self.calib_info_label = QLabel(self.tr("Scale: -- nm/px"))
         self.calib_info_label.setWordWrap(True)
         self.calib_info_label.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
         self.calib_info_label.setTextFormat(Qt.RichText)
@@ -1591,6 +2202,12 @@ class MainWindow(QMainWindow):
         self.calib_info_label.setOpenExternalLinks(False)
         self.calib_info_label.linkActivated.connect(self._on_calibration_link_clicked)
         calib_layout.addWidget(self.calib_info_label)
+
+        self.scale_warning_label = QLabel("")
+        self.scale_warning_label.setWordWrap(True)
+        self.scale_warning_label.setStyleSheet("color: #e74c3c; font-weight: bold; font-size: 9pt;")
+        self.scale_warning_label.setVisible(False)
+        calib_layout.addWidget(self.scale_warning_label)
 
         calib_group.setLayout(calib_layout)
         layout.addWidget(calib_group)
@@ -1622,7 +2239,7 @@ class MainWindow(QMainWindow):
 
         mode_row = QHBoxLayout()
         self.mode_group = QButtonGroup(self)
-        self.mode_lines = QRadioButton(self.tr("Lines"))
+        self.mode_lines = QRadioButton(self.tr("Line"))
         self.mode_rect = QRadioButton(self.tr("Rectangle"))
         self.mode_rect.setChecked(True)
         self.mode_group.addButton(self.mode_lines)
@@ -1691,6 +2308,7 @@ class MainWindow(QMainWindow):
         zoom_layout.addLayout(view_buttons_row)
 
         self.show_measures_checkbox = QCheckBox(self.tr("Show measures"))
+        self.show_measures_checkbox.setChecked(True)
         self.show_measures_checkbox.toggled.connect(self.on_show_measures_toggled)
         zoom_layout.addWidget(self.show_measures_checkbox)
 
@@ -1796,12 +2414,13 @@ class MainWindow(QMainWindow):
         self.measure_gallery = ImageGalleryWidget(
             self.tr("Images"),
             self,
-            show_delete=False,
-            show_badges=False,
+            show_delete=True,
+            show_badges=True,
             min_height=50,
             default_height=220,
         )
         self.measure_gallery.imageClicked.connect(self._on_measure_gallery_clicked)
+        self.measure_gallery.deleteRequested.connect(self._on_measure_gallery_delete_requested)
 
         splitter = QSplitter(Qt.Vertical)
         splitter.setChildrenCollapsible(False)
@@ -1816,121 +2435,1099 @@ class MainWindow(QMainWindow):
 
     def create_gallery_panel(self):
         """Create the gallery panel showing all measured spores in a grid."""
-        from PySide6.QtWidgets import QScrollArea, QGridLayout, QCheckBox
+        from PySide6.QtWidgets import QScrollArea, QGridLayout, QFormLayout
 
         panel = QWidget()
-        main_layout = QVBoxLayout(panel)
+        main_layout = QHBoxLayout(panel)
         main_layout.setContentsMargins(10, 10, 10, 10)
 
-        splitter = QSplitter(Qt.Horizontal)
+        main_splitter = QSplitter(Qt.Horizontal)
+        main_splitter.setChildrenCollapsible(False)
 
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setContentsMargins(0, 0, 12, 0)
         left_layout.setSpacing(8)
 
-        left_controls = QHBoxLayout()
-        left_controls.addWidget(QLabel("Measurement Type:"))
+        category_row = QHBoxLayout()
+        category_row.addWidget(QLabel(self.tr("Category:")))
         self.gallery_filter_combo = QComboBox()
-        self.gallery_filter_combo.setFixedWidth(140)
+        self.gallery_filter_combo.setFixedWidth(160)
         self.gallery_filter_combo.currentIndexChanged.connect(self.on_gallery_thumbnail_setting_changed)
-        left_controls.addWidget(self.gallery_filter_combo)
+        category_row.addWidget(self.gallery_filter_combo)
+        category_row.addStretch()
+        left_layout.addLayout(category_row)
 
         self.gallery_plot_settings = {
             "bins": 8,
+            "histogram": True,
             "ci": True,
             "legend": False,
-            "avg_q": True,
-            "q_minmax": True,
+            "avg_q": False,
+            "q_minmax": False,
             "x_min": None,
             "x_max": None,
             "y_min": None,
             "y_max": None,
         }
 
-        plot_settings_btn = QPushButton(self.tr("Plot settings"))
-        plot_settings_btn.clicked.connect(self.open_gallery_plot_settings)
-        left_controls.addWidget(plot_settings_btn)
+        plot_panel = QWidget()
+        plot_layout = QFormLayout(plot_panel)
+        plot_layout.setContentsMargins(8, 8, 8, 8)
+        plot_layout.setSpacing(6)
 
-        plot_export_btn = QPushButton(self.tr("Export Plot"))
-        plot_export_btn.clicked.connect(self.export_graph_plot_svg)
-        left_controls.addWidget(plot_export_btn)
+        self.gallery_hist_checkbox = QCheckBox(self.tr("Histogram"))
+        self.gallery_hist_checkbox.setChecked(bool(self.gallery_plot_settings.get("histogram", True)))
+        self.gallery_hist_checkbox.stateChanged.connect(self.on_gallery_plot_setting_changed)
+        plot_layout.addRow("", self.gallery_hist_checkbox)
 
-        reference_btn = QPushButton(self.tr("Reference Values"))
-        reference_btn.clicked.connect(self.open_reference_values_dialog)
-        left_controls.addWidget(reference_btn)
+        bins_row = QWidget()
+        bins_row_layout = QHBoxLayout(bins_row)
+        bins_row_layout.setContentsMargins(0, 0, 0, 0)
+        bins_row_layout.setSpacing(6)
+        bins_row_layout.addSpacing(16)
+        self.gallery_bins_label = QLabel(self.tr("Bins:"))
+        bins_row_layout.addWidget(self.gallery_bins_label)
+        self.gallery_bins_spin = QSpinBox()
+        self.gallery_bins_spin.setRange(3, 50)
+        self.gallery_bins_spin.setValue(int(self.gallery_plot_settings.get("bins", 8)))
+        self.gallery_bins_spin.valueChanged.connect(self.on_gallery_plot_setting_changed)
+        bins_row_layout.addWidget(self.gallery_bins_spin)
+        bins_row_layout.addStretch()
+        plot_layout.addRow("", bins_row)
 
-        left_controls.addStretch()
-        left_layout.addLayout(left_controls)
+        self.gallery_ci_checkbox = QCheckBox(self.tr("Confidence interval (95%)"))
+        self.gallery_ci_checkbox.setChecked(bool(self.gallery_plot_settings.get("ci", True)))
+        self.gallery_ci_checkbox.stateChanged.connect(self.on_gallery_plot_setting_changed)
+        plot_layout.addRow("", self.gallery_ci_checkbox)
 
-        self.gallery_stats_label = QLabel("")
-        self.gallery_stats_label.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
-        self.gallery_stats_label.setWordWrap(False)
-        self.gallery_stats_label.setMaximumHeight(22)
-        self.gallery_stats_label.setMinimumHeight(22)
-        self.gallery_stats_label.setStyleSheet("color: #2c3e50; font-size: 9pt;")
-        left_layout.addWidget(self.gallery_stats_label)
+        self.gallery_avg_q_checkbox = QCheckBox(self.tr("Plot Avg Q"))
+        self.gallery_avg_q_checkbox.setChecked(bool(self.gallery_plot_settings.get("avg_q", False)))
+        self.gallery_avg_q_checkbox.stateChanged.connect(self.on_gallery_plot_setting_changed)
+        plot_layout.addRow("", self.gallery_avg_q_checkbox)
 
-        self.gallery_plot_figure = Figure(figsize=(6, 3.8))
-        self.gallery_plot_canvas = FigureCanvas(self.gallery_plot_figure)
-        self.gallery_plot_canvas.mpl_connect("pick_event", self.on_gallery_plot_pick)
-        left_layout.addWidget(self.gallery_plot_canvas)
+        self.gallery_q_minmax_checkbox = QCheckBox(self.tr("Plot Q min/max"))
+        self.gallery_q_minmax_checkbox.setChecked(bool(self.gallery_plot_settings.get("q_minmax", False)))
+        self.gallery_q_minmax_checkbox.stateChanged.connect(self.on_gallery_plot_setting_changed)
+        plot_layout.addRow("", self.gallery_q_minmax_checkbox)
+        plot_section = CollapsibleSection(self.tr("Plot settings"), plot_panel, expanded=True)
+        reference_section = CollapsibleSection(self.tr("Reference values"), self._build_reference_panel(), expanded=False)
+
+        gallery_group = QGroupBox(self.tr("Gallery settings"))
+        gallery_controls = QVBoxLayout(gallery_group)
+        gallery_controls.setContentsMargins(8, 8, 8, 8)
+        gallery_controls.setSpacing(6)
+
+        gallery_row = QHBoxLayout()
+        self.orient_checkbox = QCheckBox(self.tr("Orient"))
+        self.orient_checkbox.setToolTip("Rotate thumbnails so length axis is vertical")
+        self.orient_checkbox.stateChanged.connect(self.on_gallery_thumbnail_setting_changed)
+        gallery_row.addWidget(self.orient_checkbox)
+
+        self.uniform_scale_checkbox = QCheckBox(self.tr("Uniform scale"))
+        self.uniform_scale_checkbox.setToolTip("Use the same scale for all thumbnails")
+        self.uniform_scale_checkbox.stateChanged.connect(self.on_gallery_thumbnail_setting_changed)
+        gallery_row.addWidget(self.uniform_scale_checkbox)
+        gallery_row.addStretch()
+        gallery_controls.addLayout(gallery_row)
+
+        self.gallery_filter_label = QLabel("")
+        self.gallery_filter_label.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
+        gallery_controls.addWidget(self.gallery_filter_label)
+
+        left_layout.addWidget(plot_section)
+        left_layout.addWidget(reference_section)
+        left_layout.addStretch()
+        left_layout.addWidget(gallery_group)
+
+        output_group = QGroupBox(self.tr("Output"))
+        output_layout = QVBoxLayout(output_group)
+        output_layout.setContentsMargins(8, 8, 8, 8)
+        output_layout.setSpacing(6)
+
+        row1 = QHBoxLayout()
+        self.gallery_plot_export_btn = QPushButton(self.tr("Export Plot"))
+        self.gallery_plot_export_btn.setMinimumHeight(36)
+        self.gallery_plot_export_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.gallery_plot_export_btn.clicked.connect(self.export_graph_plot_svg)
+        row1.addWidget(self.gallery_plot_export_btn)
+
+        self.gallery_export_btn = QPushButton(self.tr("Export gallery"))
+        self.gallery_export_btn.setMinimumHeight(36)
+        self.gallery_export_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.gallery_export_btn.clicked.connect(self.export_gallery_composite)
+        row1.addWidget(self.gallery_export_btn)
+        output_layout.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        self.gallery_copy_stats_btn = QPushButton(self.tr("Copy stats"))
+        self.gallery_copy_stats_btn.setMinimumHeight(36)
+        self.gallery_copy_stats_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.gallery_copy_stats_btn.clicked.connect(self.copy_spore_stats)
+        row2.addWidget(self.gallery_copy_stats_btn)
+
+        self.gallery_save_stats_btn = QPushButton(self.tr("Save stats"))
+        self.gallery_save_stats_btn.setMinimumHeight(36)
+        self.gallery_save_stats_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.gallery_save_stats_btn.clicked.connect(self.save_spore_stats)
+        row2.addWidget(self.gallery_save_stats_btn)
+        output_layout.addLayout(row2)
+
+        left_layout.addWidget(output_group)
+        self._sync_gallery_histogram_controls()
+
+        left_panel.setMinimumWidth(250)
+        left_panel.setMaximumWidth(450)
 
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(8)
 
-        right_controls = QHBoxLayout()
-        right_controls.addWidget(QLabel("Columns:"))
-        self.gallery_columns_spin = QSpinBox()
-        self.gallery_columns_spin.setRange(1, 12)
-        self.gallery_columns_spin.setValue(4)
-        self.gallery_columns_spin.valueChanged.connect(self.on_gallery_thumbnail_setting_changed)
-        right_controls.addWidget(self.gallery_columns_spin)
+        self.gallery_splitter = CollapsibleSplitter(Qt.Vertical, collapse_index=1)
+        self.gallery_splitter.setChildrenCollapsible(True)
+        self.gallery_splitter.collapse_toggled.connect(self._on_gallery_collapse_toggled)
+        self.gallery_splitter.splitterMoved.connect(self._on_gallery_splitter_moved)
 
-        self.orient_checkbox = QCheckBox(self.tr("Orient"))
-        self.orient_checkbox.setToolTip("Rotate thumbnails so length axis is vertical")
-        self.orient_checkbox.stateChanged.connect(self.on_gallery_thumbnail_setting_changed)
-        right_controls.addWidget(self.orient_checkbox)
+        plot_panel = QWidget()
+        plot_layout = QVBoxLayout(plot_panel)
+        plot_layout.setContentsMargins(0, 0, 0, 0)
+        plot_layout.setSpacing(6)
 
-        self.uniform_scale_checkbox = QCheckBox(self.tr("Uniform scale"))
-        self.uniform_scale_checkbox.setToolTip("Use the same scale for all thumbnails")
-        self.uniform_scale_checkbox.stateChanged.connect(self.on_gallery_thumbnail_setting_changed)
-        right_controls.addWidget(self.uniform_scale_checkbox)
+        plot_hint_row = QHBoxLayout()
+        plot_hint_row.addStretch()
+        self.gallery_plot_hint = QLabel(self.tr("Click plot elements to filter gallery"))
+        self.gallery_plot_hint.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
+        plot_hint_row.addWidget(self.gallery_plot_hint)
+        self.gallery_clear_filter_btn = QPushButton(self.tr("Clear filter"))
+        self.gallery_clear_filter_btn.setFixedHeight(20)
+        self.gallery_clear_filter_btn.setStyleSheet("font-size: 8pt; padding: 2px 6px;")
+        self.gallery_clear_filter_btn.clicked.connect(self.clear_gallery_filter)
+        plot_hint_row.addWidget(self.gallery_clear_filter_btn)
+        plot_layout.addLayout(plot_hint_row)
 
-        export_btn = QPushButton(self.tr("Export Thumbnails"))
-        export_btn.clicked.connect(self.export_gallery_composite)
-        right_controls.addWidget(export_btn)
-        self.clear_filter_btn = QPushButton(self.tr("Clear Filter"))
-        self.clear_filter_btn.clicked.connect(self.clear_gallery_filter)
-        right_controls.addWidget(self.clear_filter_btn)
-        self.gallery_filter_label = QLabel("")
-        self.gallery_filter_label.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
-        right_controls.addWidget(self.gallery_filter_label)
-        right_controls.addStretch()
-        right_layout.addLayout(right_controls)
+        self.gallery_plot_figure = Figure(figsize=(6, 3.8))
+        self.gallery_plot_canvas = FigureCanvas(self.gallery_plot_figure)
+        self.gallery_plot_canvas.mpl_connect("pick_event", self.on_gallery_plot_pick)
+        plot_layout.addWidget(self.gallery_plot_canvas)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        gallery_panel = QWidget()
+        gallery_layout = QVBoxLayout(gallery_panel)
+        gallery_layout.setContentsMargins(0, 0, 0, 0)
+        gallery_layout.setSpacing(6)
+
+        gallery_toolbar = QHBoxLayout()
+        gallery_toolbar.addStretch()
+        gallery_layout.addLayout(gallery_toolbar)
+
+        self.gallery_scroll = QScrollArea()
+        self.gallery_scroll.setWidgetResizable(True)
+        self.gallery_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.gallery_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         self.gallery_container = QWidget()
+        self.gallery_container.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
         self.gallery_grid = QGridLayout(self.gallery_container)
         self.gallery_grid.setSpacing(10)
         self.gallery_grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
 
-        scroll.setWidget(self.gallery_container)
-        right_layout.addWidget(scroll)
+        self.gallery_scroll.setWidget(self.gallery_container)
+        gallery_layout.addWidget(self.gallery_scroll)
 
-        splitter.addWidget(left_panel)
-        splitter.addWidget(right_panel)
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 3)
-        main_layout.addWidget(splitter)
+        self.gallery_splitter.addWidget(plot_panel)
+        self.gallery_splitter.addWidget(gallery_panel)
+        self.gallery_splitter.setStretchFactor(0, 1)
+        self.gallery_splitter.setStretchFactor(1, 0)
+        self.gallery_splitter.setSizes([650, 220])
+        right_layout.addWidget(self.gallery_splitter)
 
+        main_splitter.addWidget(left_panel)
+        main_splitter.addWidget(right_panel)
+        main_splitter.setStretchFactor(0, 0)
+        main_splitter.setStretchFactor(1, 1)
+        main_splitter.setSizes([350, 1000])
+
+        main_layout.addWidget(main_splitter)
+        self._set_gallery_strip_height()
         return panel
+
+    def _set_gallery_strip_height(self):
+        if not hasattr(self, "gallery_splitter"):
+            return
+        thumbnail_size = self._gallery_thumbnail_size()
+        target_height = thumbnail_size + 30
+        gallery_widget = self.gallery_splitter.widget(1)
+        if gallery_widget:
+            gallery_widget.setMaximumHeight(target_height)
+            gallery_widget.setMinimumHeight(0)
+        sizes = self.gallery_splitter.sizes()
+        total = sum(sizes) if sizes else 0
+        if total <= 0:
+            total = self.gallery_splitter.height()
+        if total <= 0:
+            return
+        self.gallery_splitter.setSizes([max(0, total - target_height), target_height])
+
+    def _gallery_thumbnail_size(self):
+        return 200
+
+    def _on_gallery_collapse_toggled(self, collapsed):
+        self._gallery_collapsed = bool(collapsed)
+        if collapsed:
+            self._cancel_gallery_render()
+            self._gallery_refresh_in_progress = False
+        else:
+            self._set_gallery_strip_height()
+            self.schedule_gallery_refresh()
+
+    def _sync_gallery_histogram_controls(self):
+        enabled = bool(self.gallery_hist_checkbox.isChecked()) if hasattr(self, "gallery_hist_checkbox") else True
+        if hasattr(self, "gallery_bins_spin"):
+            self.gallery_bins_spin.setEnabled(enabled)
+        if hasattr(self, "gallery_bins_label"):
+            self.gallery_bins_label.setEnabled(enabled)
+
+    def _on_gallery_splitter_moved(self, _pos, _index):
+        if not hasattr(self, "gallery_splitter"):
+            return
+        sizes = self.gallery_splitter.sizes()
+        collapsed = bool(sizes and sizes[1] == 0)
+        if collapsed != self._gallery_collapsed:
+            self._gallery_collapsed = collapsed
+            self.gallery_splitter._is_collapsed = collapsed
+            self.gallery_splitter.collapse_toggled.emit(collapsed)
+
+    def _build_reference_panel(self):
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        form = QFormLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setSpacing(6)
+
+        self.ref_vernacular_label = QLabel(self._reference_vernacular_label())
+        self.ref_vernacular_input = QLineEdit()
+        self.ref_genus_input = QLineEdit()
+        self.ref_species_input = QLineEdit()
+        self.ref_source_input = QComboBox()
+        self.ref_source_input.setEditable(True)
+        self.ref_source_input.setInsertPolicy(QComboBox.NoInsert)
+
+        form.addRow(self.ref_vernacular_label, self.ref_vernacular_input)
+        form.addRow(self.tr("Genus:"), self.ref_genus_input)
+        form.addRow(self.tr("Species:"), self.ref_species_input)
+        form.addRow(self.tr("Source:"), self.ref_source_input)
+        layout.addLayout(form)
+
+
+        btn_row = QHBoxLayout()
+        self.ref_plot_btn = QPushButton(self.tr("Plot"))
+        self.ref_plot_btn.clicked.connect(self._on_reference_panel_plot_clicked)
+        self.ref_add_btn = QPushButton(self.tr("Add"))
+        self.ref_add_btn.clicked.connect(self._on_reference_panel_add_clicked)
+        self.ref_edit_btn = QPushButton(self.tr("Edit"))
+        self.ref_edit_btn.clicked.connect(self._on_reference_panel_edit_clicked)
+        self.ref_clear_btn = QPushButton(self.tr("Clear"))
+        self.ref_clear_btn.clicked.connect(self._on_reference_panel_clear_clicked)
+        btn_row.addStretch()
+        btn_row.addWidget(self.ref_plot_btn)
+        btn_row.addWidget(self.ref_add_btn)
+        btn_row.addWidget(self.ref_edit_btn)
+        btn_row.addWidget(self.ref_clear_btn)
+        layout.addLayout(btn_row)
+
+        self.ref_series_table = QTableWidget(0, 2)
+        self.ref_series_table.setHorizontalHeaderLabels(["", self.tr("Data set")])
+        self.ref_series_table.verticalHeader().setVisible(False)
+        self.ref_series_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.ref_series_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.ref_series_table.horizontalHeader().setStretchLastSection(True)
+        self.ref_series_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.ref_series_table.setShowGrid(False)
+        self.ref_series_table.setMinimumHeight(80)
+        layout.addWidget(self.ref_series_table)
+
+        self._init_reference_panel_completers()
+        self._populate_reference_panel_sources()
+        self._apply_reference_panel_values(self.reference_values)
+        self._refresh_reference_series_table()
+        self._update_reference_add_state()
+        return panel
+
+    def _reference_vernacular_label(self) -> str:
+        lang = normalize_vernacular_language(SettingsDB.get_setting("vernacular_language", "no"))
+        base = self.tr("Common name")
+        return f"{common_name_display_label(lang, base)}:"
+
+    def _update_reference_add_state(self):
+        if not hasattr(self, "ref_add_btn"):
+            return
+        genus = self.ref_genus_input.text().strip() if hasattr(self, "ref_genus_input") else ""
+        species = self._clean_ref_species_text(self.ref_species_input.text()) if hasattr(self, "ref_species_input") else ""
+        has_species = bool(genus and species)
+        self.ref_add_btn.setEnabled(has_species)
+        if hasattr(self, "ref_edit_btn"):
+            has_source = bool(self.ref_source_input.currentText().strip()) if hasattr(self, "ref_source_input") else False
+            self.ref_edit_btn.setEnabled(has_species and has_source)
+
+    def _reference_allow_points(self) -> bool:
+        if not hasattr(self, "gallery_filter_combo"):
+            return True
+        category = self.gallery_filter_combo.currentData()
+        if not category:
+            return False
+        normalized = self.normalize_measurement_category(category)
+        return normalized == "spores"
+
+    def _reference_series_key(self, data: dict) -> tuple | None:
+        if not isinstance(data, dict):
+            return None
+        genus = (data.get("genus") or "").strip()
+        species = (data.get("species") or "").strip()
+        kind = data.get("source_kind") or ("points" if data.get("points") else "reference")
+        if kind == "points":
+            source_type = (data.get("source_type") or "").strip()
+            label = (data.get("points_label") or data.get("source_label") or "").strip()
+            return ("points", genus, species, source_type, label)
+        source = (data.get("source") or "").strip()
+        mount = (data.get("mount_medium") or "").strip()
+        return ("reference", genus, species, source, mount)
+
+    def _format_reference_series_label(self, data: dict) -> str:
+        genus = (data.get("genus") or "").strip()
+        species = (data.get("species") or "").strip()
+        kind = data.get("source_kind") or ("points" if data.get("points") else "reference")
+        source = (
+            (data.get("source") or "")
+            or (data.get("points_label") or "")
+            or (data.get("source_label") or "")
+        ).strip()
+        genus_label = f"{genus[0].upper()}." if genus else ""
+        base = f"{genus_label} {species}".strip() if genus_label else (f"{genus} {species}".strip() or species)
+        if source:
+            return f"{base} ({source})".strip()
+        return base or self.tr("Reference")
+
+    def _refresh_reference_series_table(self):
+        if not hasattr(self, "ref_series_table"):
+            return
+        self.ref_series_table.setRowCount(0)
+        for entry in self.reference_series:
+            if not isinstance(entry, dict):
+                data = entry
+                key = self._reference_series_key(data)
+                label = self._format_reference_series_label(data)
+            else:
+                data = entry.get("data", entry)
+                key = entry.get("key") or self._reference_series_key(data)
+                label = entry.get("label") or self._format_reference_series_label(data)
+            if not key:
+                continue
+            row = self.ref_series_table.rowCount()
+            self.ref_series_table.insertRow(row)
+            remove_btn = QToolButton()
+            remove_btn.setText("X")
+            remove_btn.setAutoRaise(True)
+            remove_btn.setStyleSheet("color: #e74c3c; font-weight: bold; font-size: 11pt;")
+            remove_btn.clicked.connect(lambda _checked=False, k=key: self._remove_reference_series_key(k))
+            self.ref_series_table.setCellWidget(row, 0, remove_btn)
+            label_item = QTableWidgetItem(label)
+            label_item.setFlags(Qt.ItemIsEnabled)
+            self.ref_series_table.setItem(row, 1, label_item)
+            self.ref_series_table.setRowHeight(row, 26)
+        self.ref_series_table.resizeColumnToContents(0)
+
+    def _set_reference_series(self, series: list[dict]):
+        self.reference_series = []
+        for data in series or []:
+            if not isinstance(data, dict) or not data:
+                continue
+            key = self._reference_series_key(data)
+            if not key:
+                continue
+            label = self._format_reference_series_label(data)
+            self.reference_series.append({"key": key, "data": data, "label": label})
+        self._refresh_reference_series_table()
+        self.update_graph_plots_only()
+
+    def _add_reference_series_entry(self, data: dict) -> bool:
+        if not isinstance(data, dict) or not data:
+            return False
+        key = self._reference_series_key(data)
+        if not key:
+            return False
+        for entry in self.reference_series:
+            if isinstance(entry, dict) and entry.get("key") == key:
+                entry["data"] = data
+                entry["label"] = self._format_reference_series_label(data)
+                self._refresh_reference_series_table()
+                self.update_graph_plots_only()
+                return True
+        label = self._format_reference_series_label(data)
+        self.reference_series.append({"key": key, "data": data, "label": label})
+        self._refresh_reference_series_table()
+        self.update_graph_plots_only()
+        return True
+
+    def _remove_reference_series_key(self, key: tuple):
+        if not key:
+            return
+        self.reference_series = [
+            entry for entry in self.reference_series
+            if not (isinstance(entry, dict) and entry.get("key") == key)
+        ]
+        if not self.reference_series:
+            self.reference_values = {}
+        self._refresh_reference_series_table()
+        self.update_graph_plots_only()
+
+    def _clean_ref_species_text(self, text: str | None) -> str:
+        if not text:
+            return ""
+        tokens = str(text).strip().split()
+        for token in tokens:
+            if re.search(r"[A-Za-z]", token):
+                return token.strip()
+        return str(text).strip()
+
+    def _suppress_ref_completer_updates(self):
+        if self._ref_completer_suppress:
+            return
+        self._ref_completer_suppress = True
+        try:
+            if hasattr(self, "_ref_genus_completer") and self._ref_genus_completer.popup():
+                self._ref_genus_completer.popup().hide()
+            if hasattr(self, "_ref_species_completer") and self._ref_species_completer.popup():
+                self._ref_species_completer.popup().hide()
+            if hasattr(self, "_ref_vernacular_completer") and self._ref_vernacular_completer.popup():
+                self._ref_vernacular_completer.popup().hide()
+        except Exception:
+            pass
+        QTimer.singleShot(0, lambda: (
+            self._ref_genus_completer.popup().hide() if hasattr(self, "_ref_genus_completer") and self._ref_genus_completer.popup() else None,
+            self._ref_species_completer.popup().hide() if hasattr(self, "_ref_species_completer") and self._ref_species_completer.popup() else None,
+            self._ref_vernacular_completer.popup().hide() if hasattr(self, "_ref_vernacular_completer") and self._ref_vernacular_completer.popup() else None
+        ))
+        QTimer.singleShot(0, lambda: setattr(self, "_ref_completer_suppress", False))
+
+    def _format_observation_legend_label(self) -> str:
+        if not self.active_observation_id:
+            return self.tr("Observation")
+        obs = ObservationDB.get_observation(self.active_observation_id)
+        if not obs:
+            return self.tr("Observation")
+        genus = (obs.get("genus") or "").strip()
+        species = (obs.get("species") or obs.get("species_guess") or "").strip()
+        date_value = (obs.get("date") or "").strip()
+        if " " in date_value:
+            date_value = date_value.split(" ")[0]
+        if "T" in date_value:
+            date_value = date_value.split("T")[0]
+        genus_label = f"{genus[0].upper()}." if genus else ""
+        name = f"{genus_label} {species}".strip()
+        if date_value:
+            return f"{name} {date_value}".strip()
+        return name or self.tr("Observation")
+
+    def _format_reference_label(self, kind: str, source: str | None) -> str:
+        genus = (self.reference_values.get("genus") or "").strip() if isinstance(self.reference_values, dict) else ""
+        species = (self.reference_values.get("species") or "").strip() if isinstance(self.reference_values, dict) else ""
+        genus_label = f"{genus[0].upper()}." if genus else ""
+        base = f"{genus_label} {species}".strip() if genus_label else (f"{genus} {species}".strip() or species)
+        if source:
+            return f"{base} ({source})".strip()
+        return base or self.tr("Reference")
+
+    def _init_reference_panel_completers(self):
+        self._ref_genus_model = QStringListModel()
+        self._ref_species_model = QStandardItemModel()
+        self._ref_genus_completer = QCompleter(self._ref_genus_model, self)
+        self._ref_genus_completer.setCaseSensitivity(Qt.CaseInsensitive)
+        self._ref_genus_completer.setCompletionMode(QCompleter.PopupCompletion)
+        self._ref_species_completer = QCompleter(self._ref_species_model, self)
+        self._ref_species_completer.setCaseSensitivity(Qt.CaseInsensitive)
+        self._ref_species_completer.setCompletionMode(QCompleter.PopupCompletion)
+        self._ref_species_completer.setCompletionRole(Qt.UserRole)
+        self._ref_species_completer.setFilterMode(Qt.MatchContains)
+        self.ref_genus_input.setCompleter(self._ref_genus_completer)
+        self.ref_species_input.setCompleter(self._ref_species_completer)
+        species_popup = self._ref_species_completer.popup()
+        species_popup.setItemDelegate(
+            SpeciesItemDelegate(
+                self.species_availability,
+                species_popup,
+                exclude_observation_id=lambda: self.active_observation_id,
+                genus_provider=lambda: self.ref_genus_input.text().strip(),
+            )
+        )
+        species_popup.clicked.connect(self._on_ref_species_popup_clicked)
+        self._ref_genus_completer.activated[QModelIndex].connect(self._on_ref_genus_selected)
+        self._ref_species_completer.activated[QModelIndex].connect(self._on_ref_species_selected)
+        self._ref_genus_completer.popup().clicked.connect(self._on_ref_genus_popup_clicked)
+        self.ref_genus_input.textChanged.connect(self._on_ref_genus_text_changed)
+        self.ref_species_input.textChanged.connect(self._on_ref_species_text_changed)
+        self.ref_genus_input.editingFinished.connect(self._on_ref_taxon_editing_finished)
+        self.ref_species_input.editingFinished.connect(self._on_ref_taxon_editing_finished)
+        self.ref_source_input.currentTextChanged.connect(self._on_ref_source_changed)
+        self.ref_genus_input.installEventFilter(self)
+        self.ref_species_input.installEventFilter(self)
+        self.ref_vernacular_input.installEventFilter(self)
+        if self.ref_source_input.lineEdit():
+            self.ref_source_input.lineEdit().installEventFilter(self)
+
+        self.ref_vernacular_db = None
+        lang = normalize_vernacular_language(SettingsDB.get_setting("vernacular_language", "no"))
+        db_path = resolve_vernacular_db_path(lang)
+        if db_path:
+            self.ref_vernacular_db = VernacularDB(db_path, language_code=lang)
+        self._ref_vernacular_model = QStandardItemModel()
+        self._ref_vernacular_completer = QCompleter(self._ref_vernacular_model, self)
+        self._ref_vernacular_completer.setCaseSensitivity(Qt.CaseInsensitive)
+        self._ref_vernacular_completer.setCompletionMode(QCompleter.PopupCompletion)
+        self._ref_vernacular_completer.setCompletionRole(Qt.UserRole)
+        self.ref_vernacular_input.setCompleter(self._ref_vernacular_completer)
+        self._ref_vernacular_completer.activated[QModelIndex].connect(self._on_ref_vernacular_selected)
+        self._ref_vernacular_completer.popup().clicked.connect(self._on_ref_vernacular_popup_clicked)
+        self.ref_vernacular_input.textChanged.connect(self._on_ref_vernacular_text_changed)
+        self.ref_vernacular_input.editingFinished.connect(self._on_ref_vernacular_editing_finished)
+
+    def _update_ref_genus_suggestions(self, text, hide_on_exact: bool = False):
+        values = ReferenceDB.list_genera(text or "")
+        if getattr(self, "ref_vernacular_db", None):
+            values.extend(self.ref_vernacular_db.suggest_genus(text or ""))
+        values = sorted({value for value in values if value})
+        if hide_on_exact and text.strip():
+            text_lower = text.strip().lower()
+            if any(value.lower() == text_lower for value in values):
+                self._ref_genus_model.setStringList([])
+                if self._ref_genus_completer:
+                    self._ref_genus_completer.popup().hide()
+                return values
+        self._ref_genus_model.setStringList(values)
+        return values
+
+    def _update_ref_species_suggestions(self, genus, text, hide_on_exact: bool = False):
+        genus = (genus or "").strip()
+        prefix = (text or "").strip()
+        values = ReferenceDB.list_species(genus, prefix)
+        if getattr(self, "ref_vernacular_db", None):
+            values.extend(self.ref_vernacular_db.suggest_species(genus, prefix))
+        exclude_id = self.active_observation_id if hasattr(self, "active_observation_id") else None
+        if hasattr(self, "species_availability"):
+            cache = self.species_availability.get_cache()
+            for (g, s), _info in cache.items():
+                if g != genus:
+                    continue
+                if prefix and not s.lower().startswith(prefix.lower()):
+                    continue
+                values.append(s)
+        values = sorted({value for value in values if value})
+        if hide_on_exact and prefix:
+            prefix_lower = prefix.lower()
+            if any(value.lower() == prefix_lower for value in values):
+                self._ref_species_model.clear()
+                if self._ref_species_completer:
+                    self._ref_species_completer.popup().hide()
+                return values
+        self._ref_species_model.clear()
+        for species in values:
+            display, has_data = self.species_availability.get_species_display_name(
+                genus,
+                species,
+                exclude_observation_id=exclude_id,
+            )
+            # Keep display focused on species while preserving emojis
+            display_text = display
+            if display.lower().startswith(genus.lower()):
+                display_text = display[len(genus):].strip()
+            item = QStandardItem(display_text)
+            item.setData(species, Qt.UserRole)
+            item.setData(genus, Qt.UserRole + 1)
+            item.setData(species, Qt.UserRole + 2)
+            item.setData(bool(has_data), Qt.UserRole + 3)
+            self._ref_species_model.appendRow(item)
+        return values
+
+    def _on_ref_genus_text_changed(self, text):
+        if self._ref_completer_suppress:
+            return
+        self._update_ref_genus_suggestions(text or "", hide_on_exact=True)
+        if not text.strip():
+            self.ref_species_input.setText("")
+            self._ref_species_model.clear()
+            if hasattr(self, "ref_vernacular_input"):
+                self.ref_vernacular_input.setText("")
+            if hasattr(self, "ref_source_input"):
+                self.ref_source_input.setCurrentText("")
+        self._populate_reference_panel_sources()
+        self._update_reference_add_state()
+
+    def _on_ref_species_text_changed(self, text):
+        if self._ref_completer_suppress:
+            return
+        genus = self.ref_genus_input.text().strip()
+        clean_text = self._clean_ref_species_text(text)
+        if genus:
+            self._update_ref_species_suggestions(genus, clean_text or "", hide_on_exact=True)
+        else:
+            self._ref_species_model.clear()
+        self._populate_reference_panel_sources()
+        self._update_reference_add_state()
+
+    def _on_ref_genus_selected(self, index: QModelIndex):
+        if self._ref_completer_suppress:
+            return
+        self._suppress_ref_completer_updates()
+        value = ""
+        if isinstance(index, QModelIndex) and index.isValid():
+            value = (index.data(Qt.DisplayRole) or "").strip()
+        if not value:
+            value = (self.ref_genus_input.text() or "").strip()
+        if not value:
+            return
+        self.ref_genus_input.blockSignals(True)
+        self.ref_genus_input.setText(value)
+        self.ref_genus_input.blockSignals(False)
+        if self._ref_genus_completer.popup():
+            self._ref_genus_completer.popup().hide()
+        self._ref_genus_model.setStringList([])
+        self._ref_genus_completer.setCompletionPrefix("")
+        self._update_ref_genus_suggestions(value)
+        species_text = self.ref_species_input.text().strip()
+        if species_text:
+            self._update_ref_species_suggestions(value, species_text)
+        self._populate_reference_panel_sources()
+        self._update_reference_add_state()
+
+    def _on_ref_species_selected(self, index: QModelIndex):
+        if self._ref_completer_suppress:
+            return
+        self._suppress_ref_completer_updates()
+        value = ""
+        if isinstance(index, QModelIndex) and index.isValid():
+            value = (index.data(Qt.UserRole) or index.data(Qt.DisplayRole) or "").strip()
+        if not value:
+            value = (self.ref_species_input.text() or "").strip()
+        if not value:
+            return
+        value = self._clean_ref_species_text(value)
+        self.ref_species_input.blockSignals(True)
+        self.ref_species_input.setText(value)
+        self.ref_species_input.blockSignals(False)
+        if self._ref_species_completer.popup():
+            self._ref_species_completer.popup().hide()
+        self._ref_species_model.clear()
+        self._ref_species_completer.setCompletionPrefix("")
+        QTimer.singleShot(0, lambda: self._ref_species_completer.popup().hide() if self._ref_species_completer.popup() else None)
+        self._populate_reference_panel_sources()
+        self._maybe_load_reference_panel_reference()
+        self._maybe_set_ref_vernacular_from_taxon()
+        self._update_reference_add_state()
+
+    def _on_ref_vernacular_selected(self, index: QModelIndex):
+        if self._ref_completer_suppress:
+            return
+        self._suppress_ref_completer_updates()
+        value = ""
+        if isinstance(index, QModelIndex) and index.isValid():
+            value = (index.data(Qt.UserRole) or index.data(Qt.DisplayRole) or "").strip()
+        if not value:
+            value = (self.ref_vernacular_input.text() or "").strip()
+        if not value:
+            return
+        self.ref_vernacular_input.blockSignals(True)
+        self.ref_vernacular_input.setText(value)
+        self.ref_vernacular_input.blockSignals(False)
+        if self._ref_vernacular_completer.popup():
+            self._ref_vernacular_completer.popup().hide()
+        self._ref_vernacular_model.clear()
+        self._ref_vernacular_completer.setCompletionPrefix("")
+
+    def _on_ref_genus_popup_clicked(self, index: QModelIndex):
+        self._on_ref_genus_selected(index)
+
+    def _on_ref_species_popup_clicked(self, index: QModelIndex):
+        self._on_ref_species_selected(index)
+
+    def _on_ref_vernacular_popup_clicked(self, index: QModelIndex):
+        self._on_ref_vernacular_selected(index)
+
+    def _on_ref_taxon_editing_finished(self):
+        self._populate_reference_panel_sources()
+        self._maybe_load_reference_panel_reference()
+        self._maybe_set_ref_vernacular_from_taxon()
+        self._update_reference_add_state()
+
+    def _on_ref_source_changed(self, _text):
+        self._maybe_load_reference_panel_reference()
+        self._update_reference_add_state()
+
+    def _on_ref_vernacular_text_changed(self, text):
+        if self._ref_completer_suppress:
+            return
+        if not self.ref_vernacular_db:
+            self._ref_vernacular_model.clear()
+            return
+        genus = self.ref_genus_input.text().strip() or None
+        species = self.ref_species_input.text().strip() or None
+        suggestions = self.ref_vernacular_db.suggest_vernacular(text, genus=genus, species=species)
+        text_lower = text.strip().lower()
+        if text_lower and any(name.lower() == text_lower for name in suggestions):
+            self._ref_vernacular_model.clear()
+            if self._ref_vernacular_completer:
+                self._ref_vernacular_completer.popup().hide()
+            return
+        self._ref_vernacular_model.clear()
+        exclude_id = self.active_observation_id if hasattr(self, "active_observation_id") else None
+        for name in suggestions:
+            display = name
+            emojis = []
+            if self.species_availability and name:
+                taxon = self.ref_vernacular_db.taxon_from_vernacular(name)
+                if taxon:
+                    tax_genus, tax_species, _family = taxon
+                    info = self.species_availability.get_detailed_info(
+                        tax_genus,
+                        tax_species,
+                        exclude_observation_id=exclude_id,
+                    )
+                    if (
+                        info.get("has_personal_points")
+                        or info.get("has_shared_points")
+                        or info.get("has_published_points")
+                    ):
+                        emojis.append(self.species_availability.DATA_POINT_EMOJI)
+                    if info.get("has_reference_minmax"):
+                        emojis.append(self.species_availability.MINMAX_EMOJI)
+            if emojis:
+                display = f"{name} {' '.join(emojis)}"
+            item = QStandardItem(display)
+            item.setData(name, Qt.UserRole)
+            self._ref_vernacular_model.appendRow(item)
+
+    def _on_ref_vernacular_editing_finished(self):
+        if not self.ref_vernacular_db:
+            return
+        name = self.ref_vernacular_input.text().strip()
+        if not name:
+            return
+        taxon = self.ref_vernacular_db.taxon_from_vernacular(name)
+        if taxon:
+            genus, species, _family = taxon
+            self.ref_genus_input.setText(genus)
+            self.ref_species_input.setText(species)
+            self._populate_reference_panel_sources()
+
+    def _maybe_set_ref_vernacular_from_taxon(self):
+        if not self.ref_vernacular_db:
+            return
+        if self.ref_vernacular_input.text().strip():
+            return
+        genus = self.ref_genus_input.text().strip()
+        species = self.ref_species_input.text().strip()
+        if not genus or not species:
+            return
+        suggestions = self.ref_vernacular_db.suggest_vernacular_for_taxon(genus=genus, species=species)
+        if len(suggestions) == 1:
+            self.ref_vernacular_input.setText(suggestions[0])
+
+    def _populate_reference_panel_sources(self):
+        if not hasattr(self, "ref_source_input"):
+            return
+        genus = self.ref_genus_input.text().strip()
+        species = self._clean_ref_species_text(self.ref_species_input.text())
+        current = self.ref_source_input.currentText().strip()
+        current_data = self.ref_source_input.currentData()
+        current_is_points = isinstance(current_data, dict) and current_data.get("kind") == "points"
+        allow_points = self._reference_allow_points()
+        values = self._reference_source_options(genus, species)
+        self.ref_source_input.blockSignals(True)
+        self.ref_source_input.clear()
+        self.ref_source_input.addItem("")
+        for label, data in values:
+            self.ref_source_input.addItem(label)
+            self.ref_source_input.setItemData(self.ref_source_input.count() - 1, data)
+        self.ref_source_input.blockSignals(False)
+        if current and (not current_is_points or allow_points):
+            idx = self.ref_source_input.findText(current)
+            if idx >= 0:
+                self.ref_source_input.setCurrentIndex(idx)
+            else:
+                self.ref_source_input.setCurrentText(current)
+        elif len(values) == 1:
+            self.ref_source_input.setCurrentIndex(1)
+        else:
+            self.ref_source_input.setCurrentIndex(0)
+        self._update_reference_add_state()
+
+    def _reference_source_options(self, genus: str, species: str) -> list[tuple[str, dict]]:
+        options: list[tuple[str, dict]] = []
+        if not genus or not species:
+            return options
+        allow_points = self._reference_allow_points()
+        exclude_id = self.active_observation_id if hasattr(self, "active_observation_id") else None
+        info = self.species_availability.get_detailed_info(
+            genus,
+            species,
+            exclude_observation_id=exclude_id,
+        )
+        if allow_points:
+            if info.get("personal_count", 0) > 0:
+                options.append(
+                    (self.tr("Personal measurements"), {"kind": "points", "source_type": "personal"})
+                )
+            if info.get("shared_count", 0) > 0:
+                options.append(
+                    (self.tr("Shared measurements"), {"kind": "points", "source_type": "shared"})
+                )
+            if info.get("published_count", 0) > 0:
+                options.append(
+                    (self.tr("Published measurements"), {"kind": "points", "source_type": "published"})
+                )
+        sources = ReferenceDB.list_sources(genus or "", species or "", "")
+        for source in sources:
+            if not source:
+                continue
+            options.append((source, {"kind": "reference", "source": source}))
+        return options
+
+    def _reference_stats_from_points(self, points: list[dict]) -> dict:
+        if not points:
+            return {}
+        L = np.array([row["length_um"] for row in points if row.get("length_um") is not None], dtype=float)
+        W = np.array([row["width_um"] for row in points if row.get("width_um") is not None], dtype=float)
+        if L.size == 0 or W.size == 0:
+            return {}
+        Q = L / W
+        return {
+            "length_min": float(np.min(L)),
+            "length_p05": float(np.percentile(L, 5)),
+            "length_p50": float(np.percentile(L, 50)),
+            "length_p95": float(np.percentile(L, 95)),
+            "length_max": float(np.max(L)),
+            "length_avg": float(np.mean(L)),
+            "width_min": float(np.min(W)),
+            "width_p05": float(np.percentile(W, 5)),
+            "width_p50": float(np.percentile(W, 50)),
+            "width_p95": float(np.percentile(W, 95)),
+            "width_max": float(np.max(W)),
+            "width_avg": float(np.mean(W)),
+            "q_min": float(np.min(Q)),
+            "q_p50": float(np.percentile(Q, 50)),
+            "q_max": float(np.max(Q)),
+            "q_avg": float(np.mean(Q)),
+        }
+
+    def _maybe_load_reference_panel_reference(self):
+        genus = self.ref_genus_input.text().strip()
+        species = self._clean_ref_species_text(self.ref_species_input.text())
+        if not genus or not species:
+            return
+        source = self.ref_source_input.currentText().strip() or None
+        data = self.ref_source_input.currentData()
+        if isinstance(data, dict) and data.get("kind") == "points":
+            if not self._reference_allow_points():
+                self.reference_values = {}
+                self._apply_reference_panel_values({})
+                return
+            source_type = data.get("source_type") or "personal"
+            exclude_id = self.active_observation_id if hasattr(self, "active_observation_id") else None
+            points = MeasurementDB.get_measurements_for_species(
+                genus,
+                species,
+                source_type=source_type,
+                measurement_category="spores",
+                exclude_observation_id=exclude_id,
+            )
+            if points:
+                stats = self._reference_stats_from_points(points)
+                ref = {
+                    **stats,
+                    "points": points,
+                    "points_label": self.ref_source_input.currentText().strip(),
+                    "source_kind": "points",
+                    "source_type": source_type,
+                    "genus": genus,
+                    "species": species,
+                }
+                self.reference_values = ref
+                self._apply_reference_panel_values(ref)
+                return
+            self.reference_values = {}
+            self._apply_reference_panel_values({})
+            return
+        if isinstance(data, dict) and data.get("kind") == "reference":
+            source = data.get("source") or source
+        ref = ReferenceDB.get_reference(genus, species, source)
+        if ref:
+            ref["source_kind"] = "reference"
+            self.reference_values = ref
+            self._apply_reference_panel_values(ref)
+
+    def _reference_panel_cell_value(self, row, col):
+        if not hasattr(self, "ref_table"):
+            return None
+        item = self.ref_table.item(row, col)
+        if not item:
+            return None
+        try:
+            return float(item.text().strip())
+        except ValueError:
+            return None
+
+    def _reference_panel_get_data(self):
+        data = {
+            "genus": self.ref_genus_input.text().strip() or None,
+            "species": self._clean_ref_species_text(self.ref_species_input.text()) or None,
+            "source": self.ref_source_input.currentText().strip() or None,
+        }
+        if not hasattr(self, "ref_table"):
+            return data
+        data.update({
+            "length_min": self._reference_panel_cell_value(0, 0),
+            "length_p05": self._reference_panel_cell_value(0, 1),
+            "length_p50": self._reference_panel_cell_value(0, 2),
+            "length_p95": self._reference_panel_cell_value(0, 3),
+            "length_max": self._reference_panel_cell_value(0, 4),
+            "width_min": self._reference_panel_cell_value(1, 0),
+            "width_p05": self._reference_panel_cell_value(1, 1),
+            "width_p50": self._reference_panel_cell_value(1, 2),
+            "width_p95": self._reference_panel_cell_value(1, 3),
+            "width_max": self._reference_panel_cell_value(1, 4),
+            "q_min": self._reference_panel_cell_value(2, 0),
+            "q_p50": self._reference_panel_cell_value(2, 2),
+            "q_max": self._reference_panel_cell_value(2, 4),
+        })
+        return data
+
+    def _apply_reference_panel_values(self, ref_values):
+        if not hasattr(self, "ref_table"):
+            return
+        self.ref_table.blockSignals(True)
+        self.ref_table.clearContents()
+        self.ref_table.blockSignals(False)
+        if not ref_values:
+            return
+
+        def _set_cell(row, col, value):
+            if value is None:
+                return
+            item = QTableWidgetItem(f"{value:g}")
+            self.ref_table.setItem(row, col, item)
+
+        _set_cell(0, 0, ref_values.get("length_min"))
+        _set_cell(0, 1, ref_values.get("length_p05"))
+        _set_cell(0, 2, ref_values.get("length_p50"))
+        _set_cell(0, 3, ref_values.get("length_p95"))
+        _set_cell(0, 4, ref_values.get("length_max"))
+        _set_cell(1, 0, ref_values.get("width_min"))
+        _set_cell(1, 1, ref_values.get("width_p05"))
+        _set_cell(1, 2, ref_values.get("width_p50"))
+        _set_cell(1, 3, ref_values.get("width_p95"))
+        _set_cell(1, 4, ref_values.get("width_max"))
+        _set_cell(2, 0, ref_values.get("q_min"))
+        _set_cell(2, 2, ref_values.get("q_p50"))
+        _set_cell(2, 4, ref_values.get("q_max"))
+
+    def _on_reference_panel_plot_clicked(self):
+        source_data = self.ref_source_input.currentData()
+        if source_data:
+            self._maybe_load_reference_panel_reference()
+            data = self.reference_values
+        elif isinstance(self.reference_values, dict) and self.reference_values:
+            data = self.reference_values
+        else:
+            data = self._reference_panel_get_data()
+        if not isinstance(data, dict) or not data:
+            return
+        if not (data.get("genus") and data.get("species")):
+            return
+        self.reference_values = data
+        self._add_reference_series_entry(data)
+
+    def _on_reference_panel_add_clicked(self):
+        genus = self.ref_genus_input.text().strip()
+        species = self._clean_ref_species_text(self.ref_species_input.text())
+        if not genus or not species:
+            return
+        vernacular = self.ref_vernacular_input.text().strip() if hasattr(self, "ref_vernacular_input") else ""
+        dialog = ReferenceAddDialog(self, genus, species, vernacular=vernacular)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        data = dialog.result_data()
+        if not isinstance(data, dict) or not data:
+            return
+        if data.get("source_kind") == "reference":
+            ReferenceDB.set_reference(data)
+            self._refresh_reference_species_availability()
+            self._populate_reference_panel_sources()
+            if data.get("source"):
+                idx = self.ref_source_input.findText(data.get("source"))
+                if idx >= 0:
+                    self.ref_source_input.setCurrentIndex(idx)
+                else:
+                    self.ref_source_input.setCurrentText(data.get("source"))
+        self.reference_values = data
+        self._add_reference_series_entry(data)
+
+    def _on_reference_panel_edit_clicked(self):
+        genus = self.ref_genus_input.text().strip()
+        species = self._clean_ref_species_text(self.ref_species_input.text())
+        if not genus or not species:
+            return
+        source_text = self.ref_source_input.currentText().strip()
+        if not source_text:
+            return
+        self._maybe_load_reference_panel_reference()
+        data = self.reference_values if isinstance(self.reference_values, dict) else {}
+        vernacular = self.ref_vernacular_input.text().strip() if hasattr(self, "ref_vernacular_input") else ""
+        dialog = ReferenceAddDialog(
+            self,
+            genus,
+            species,
+            vernacular=vernacular,
+            data=data,
+            title=self.tr("Edit reference data"),
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return
+        updated = dialog.result_data()
+        if not isinstance(updated, dict) or not updated:
+            return
+        if updated.get("source_kind") == "reference":
+            ReferenceDB.set_reference(updated)
+            self._refresh_reference_species_availability()
+            self._populate_reference_panel_sources()
+            if updated.get("source"):
+                idx = self.ref_source_input.findText(updated.get("source"))
+                if idx >= 0:
+                    self.ref_source_input.setCurrentIndex(idx)
+                else:
+                    self.ref_source_input.setCurrentText(updated.get("source"))
+        self.reference_values = updated
+        self._add_reference_series_entry(updated)
+
+    def _on_reference_panel_save_clicked(self):
+        data = self._reference_panel_get_data()
+        if not (data.get("genus") and data.get("species")):
+            QMessageBox.warning(
+                self,
+                self.tr("Missing Species"),
+                self.tr("Please enter genus and species to save.")
+            )
+            return
+        self._handle_reference_save(data)
+
+    def _on_reference_panel_clear_clicked(self):
+        self.ref_vernacular_input.setText("")
+        self.ref_genus_input.setText("")
+        self.ref_species_input.setText("")
+        self.ref_source_input.setCurrentText("")
+        if hasattr(self, "ref_table"):
+            self.ref_table.clearContents()
+        self._update_reference_add_state()
 
     def create_right_panel(self):
         """Create the right panel with statistics, preview, and measurements table."""
@@ -2062,13 +3659,12 @@ class MainWindow(QMainWindow):
 
         def _sort_key(item):
             key, obj = item
-            match = re.search(r"(\d+)", str(key))
-            return int(match.group(1)) if match else 9999
+            return objective_sort_value(obj, key)
 
         self.scale_combo.blockSignals(True)
         self.scale_combo.clear()
         for key, obj in sorted(objectives.items(), key=_sort_key):
-            label = obj.get("name") or obj.get("magnification") or key
+            label = objective_display_name(obj, key) or key
             self.scale_combo.addItem(label, key)
         self.scale_combo.addItem("Scale bar", "custom")
         if selected_key is None:
@@ -2087,7 +3683,17 @@ class MainWindow(QMainWindow):
         previous_key = getattr(self, "_last_scale_combo_key", None)
         selected_key = self.scale_combo.currentData()
         if selected_key == "custom":
-            dialog = ScaleBarCalibrationDialog(self, previous_key=previous_key)
+            is_field = (self.current_image_type == "field")
+            unit_label = "mm" if is_field else "\u03bcm"
+            unit_multiplier = 1000.0 if is_field else 1.0
+            initial_value = 1.0 if is_field else 10.0
+            dialog = ScaleBarCalibrationDialog(
+                self,
+                initial_value=initial_value,
+                unit_label=unit_label,
+                unit_multiplier=unit_multiplier,
+                previous_key=previous_key,
+            )
             dialog.show()
             return
 
@@ -2096,7 +3702,9 @@ class MainWindow(QMainWindow):
         objectives = self.load_objective_definitions()
         objective = objectives.get(selected_key)
         if objective:
-            if not self.apply_objective(objective):
+            objective_data = dict(objective)
+            objective_data["key"] = selected_key
+            if not self.apply_objective(objective_data):
                 self.scale_combo.blockSignals(True)
                 if previous_key is None:
                     self.scale_combo.setCurrentIndex(0)
@@ -2116,31 +3724,40 @@ class MainWindow(QMainWindow):
         if not self._maybe_rescale_current_image(old_scale, new_scale):
             self._populate_scale_combo(previous_key)
             return False
+        objective_key = objective.get("key") or objective.get("objective_key")
+        if not objective_key:
+            objective_key = objective.get("magnification") or objective.get("name")
         self.current_objective = objective
-        self.current_objective_name = objective.get("magnification") or objective.get("name")
+        self.current_objective_name = objective_key
         self.microns_per_pixel = new_scale
 
         # Update calibration info
-        mag = objective.get("magnification", "Unknown")
+        display_name = objective_display_name(objective, objective_key) or str(objective_key or "Unknown")
+        tag_text = self._objective_tag_text(display_name, objective_key)
         scale_nm = self.microns_per_pixel * 1000.0
-        self.calib_info_label.setText(f"{mag}: {scale_nm:.2f} nm/px")
+        self.calib_info_label.setText(self.tr("Scale: {scale:.2f} nm/px").format(scale=scale_nm))
         self._calib_link_objective_key = None
         self._calib_link_calibration_id = None
+        self.current_calibration_id = CalibrationDB.get_active_calibration_id(objective_key) if objective_key else None
+        self._update_field_scale_label()
 
         # Update image overlay
         if self.current_pixmap:
-            self.image_label.set_objective_text(mag)
-            self.image_label.set_objective_color(self._objective_color_for_name(mag))
+            self.image_label.set_objective_text(tag_text)
+            self.image_label.set_objective_color(self._objective_color_for_name(tag_text))
         self.image_label.set_microns_per_pixel(self.microns_per_pixel)
 
         if self.current_image_id:
+            calibration_id = CalibrationDB.get_active_calibration_id(objective_key) if objective_key else None
             ImageDB.update_image(
                 self.current_image_id,
                 scale=self.microns_per_pixel,
-                objective_name=self.current_objective_name
+                objective_name=self.current_objective_name,
+                calibration_id=calibration_id,
             )
         self._populate_scale_combo(self.current_objective_name)
         self._last_scale_combo_key = self.current_objective_name
+        self._update_scale_mismatch_warning()
         return True
 
     def load_objective_definitions(self):
@@ -2162,9 +3779,11 @@ class MainWindow(QMainWindow):
         self.current_objective_name = "Custom"
         self.microns_per_pixel = scale
         scale_nm = scale * 1000.0
-        self.calib_info_label.setText(f"Scale bar: {scale_nm:.2f} nm/px")
+        self.calib_info_label.setText(self.tr("Scale: {scale:.2f} nm/px").format(scale=scale_nm))
         self._calib_link_objective_key = None
         self._calib_link_calibration_id = None
+        self.current_calibration_id = None
+        self._update_field_scale_label()
 
         if self.current_pixmap:
             self.image_label.set_objective_text("Scale bar")
@@ -2181,10 +3800,12 @@ class MainWindow(QMainWindow):
             ImageDB.update_image(
                 self.current_image_id,
                 scale=scale,
-                objective_name=self.current_objective_name
+                objective_name=self.current_objective_name,
+                calibration_id=None,
             )
         self._populate_scale_combo("custom")
         self._last_scale_combo_key = "custom"
+        self._update_scale_mismatch_warning()
         return True
 
     def apply_image_scale(self, image_data):
@@ -2194,25 +3815,44 @@ class MainWindow(QMainWindow):
             scale = None
         objective_name = image_data.get('objective_name')
         calibration_id = image_data.get('calibration_id')
+        resample_factor = image_data.get("resample_scale_factor")
+        if not isinstance(resample_factor, (int, float)) or resample_factor <= 0:
+            resample_factor = 1.0
         objective_lookup = self.load_objective_definitions()
         show_old_calibration_warning = False
 
+        resolved_key = resolve_objective_key(objective_name, objective_lookup)
+        if resolved_key and resolved_key != objective_name:
+            objective_name = resolved_key
+            calibration_id = CalibrationDB.get_active_calibration_id(resolved_key)
+            ImageDB.update_image(
+                image_data.get("id"),
+                objective_name=resolved_key,
+                calibration_id=calibration_id,
+            )
+
+        self.current_calibration_id = calibration_id
         self.suppress_scale_prompt = True
         if objective_name and objective_name in objective_lookup:
             objective = objective_lookup[objective_name]
+            objective_data = dict(objective)
+            objective_data["key"] = objective_name
             objective_scale = objective.get('microns_per_pixel', 0)
+            expected_scale = objective_scale
+            if resample_factor < 0.999 and objective_scale:
+                expected_scale = float(objective_scale) / float(resample_factor)
             if scale and objective_scale:
-                diff_ratio = abs(objective_scale - scale) / objective_scale
+                diff_ratio = abs(expected_scale - scale) / max(1e-9, float(expected_scale))
             else:
                 diff_ratio = 0 if scale is None else 1
-
-            if scale and diff_ratio > 0.01:
-                self.current_objective = objective
+            if scale and diff_ratio > 0.01 and resample_factor >= 0.999:
+                self.current_objective = objective_data
                 self.current_objective_name = objective_name
                 self.microns_per_pixel = scale
                 show_old_calibration_warning = True
 
-                mag = objective.get("magnification") or objective.get("name") or objective_name
+                mag = objective_display_name(objective, objective_name) or objective_name
+                tag_text = self._objective_tag_text(mag, objective_name)
                 calib_date = None
                 calib_obj_key = objective_name
                 if calibration_id:
@@ -2226,21 +3866,23 @@ class MainWindow(QMainWindow):
                 if calib_date and calibration_id:
                     self._calib_link_objective_key = calib_obj_key
                     self._calib_link_calibration_id = calibration_id
+                    self.current_calibration_id = calibration_id
                     self.calib_info_label.setText(
-                        self.tr("Older scale used: {scale:.2f} nm/px<br/>Calibration: <a href=\"calibration\">{date}</a>")
+                        self.tr("Scale: {scale:.2f} nm/px<br/>Calibration: <a href=\"calibration\">{date}</a>")
                         .format(scale=scale_nm, date=calib_date)
                     )
                 else:
                     self._calib_link_objective_key = None
                     self._calib_link_calibration_id = None
+                    self.current_calibration_id = calibration_id if calibration_id else None
                     self.calib_info_label.setText(
-                        self.tr("Older scale used: {scale:.2f} nm/px<br/>Calibration: --")
+                        self.tr("Scale: {scale:.2f} nm/px<br/>Calibration: --")
                         .format(scale=scale_nm)
                     )
 
                 if self.current_pixmap:
-                    self.image_label.set_objective_text(mag)
-                    self.image_label.set_objective_color(self._objective_color_for_name(mag))
+                    self.image_label.set_objective_text(tag_text)
+                    self.image_label.set_objective_color(self._objective_color_for_name(tag_text))
                 self.image_label.set_microns_per_pixel(self.microns_per_pixel)
 
                 self.measure_status_label.setText(self.tr("Warning: Older calibration standard used."))
@@ -2249,20 +3891,62 @@ class MainWindow(QMainWindow):
                 )
 
                 self._populate_scale_combo(objective_name)
+            elif scale and resample_factor < 0.999:
+                self.current_objective = objective_data
+                self.current_objective_name = objective_name
+                self.microns_per_pixel = scale
+
+                mag = objective_display_name(objective, objective_name) or objective_name
+                tag_text = self._objective_tag_text(mag, objective_name)
+                calib_date = None
+                calib_obj_key = objective_name
+                if calibration_id:
+                    cal = CalibrationDB.get_calibration(calibration_id)
+                    if cal:
+                        raw_date = cal.get("calibration_date", "")
+                        calib_date = raw_date[:10] if raw_date else None
+                        calib_obj_key = cal.get("objective_key", calib_obj_key)
+
+                scale_nm = self.microns_per_pixel * 1000.0
+                if calib_date and calibration_id:
+                    self._calib_link_objective_key = calib_obj_key
+                    self._calib_link_calibration_id = calibration_id
+                    self.current_calibration_id = calibration_id
+                    self.calib_info_label.setText(
+                        self.tr("Scale: {scale:.2f} nm/px<br/>Calibration: <a href=\"calibration\">{date}</a>")
+                        .format(scale=scale_nm, date=calib_date)
+                    )
+                else:
+                    self._calib_link_objective_key = None
+                    self._calib_link_calibration_id = None
+                    self.current_calibration_id = calibration_id if calibration_id else None
+                    self.calib_info_label.setText(
+                        self.tr("Scale: {scale:.2f} nm/px<br/>Calibration: --")
+                        .format(scale=scale_nm)
+                    )
+
+                if self.current_pixmap:
+                    self.image_label.set_objective_text(tag_text)
+                    self.image_label.set_objective_color(self._objective_color_for_name(tag_text))
+                self.image_label.set_microns_per_pixel(self.microns_per_pixel)
+
+                self._populate_scale_combo(objective_name)
             else:
-                self.apply_objective(objective)
+                self.apply_objective(objective_data)
                 if scale:
                     self.microns_per_pixel = scale
         elif scale:
             self.set_custom_scale(scale)
         elif objective_name:
             self.current_objective_name = objective_name
-            self.calib_info_label.setText(f"{objective_name}: -- nm/px")
+            self.calib_info_label.setText(self.tr("Scale: -- nm/px"))
             self._calib_link_objective_key = None
             self._calib_link_calibration_id = None
+            self.current_calibration_id = None
             if self.current_pixmap:
-                self.image_label.set_objective_text(objective_name)
-                self.image_label.set_objective_color(self._objective_color_for_name(objective_name))
+                tag_text = self._objective_tag_text(objective_name, objective_name)
+                self.image_label.set_objective_text(tag_text)
+                self.image_label.set_objective_color(self._objective_color_for_name(tag_text))
             self._populate_scale_combo(objective_name)
         else:
             self._populate_scale_combo()
@@ -2274,23 +3958,169 @@ class MainWindow(QMainWindow):
             self.measure_status_label.setText("")
             self.measure_status_label.setStyleSheet("")
         self.suppress_scale_prompt = False
+        self._update_scale_mismatch_warning()
+        if image_data.get("image_type") == "field" and (scale is None or scale <= 0):
+            self.microns_per_pixel = 0.0
+        self._update_field_scale_label()
+
+    def _format_megapixels(self, mp_value: float) -> str:
+        text = f"{mp_value:.1f}"
+        return text.rstrip("0").rstrip(".")
+
+    def _current_image_megapixels(self) -> float | None:
+        if not self.current_pixmap or self.current_pixmap.isNull():
+            return None
+        width = self.current_pixmap.width()
+        height = self.current_pixmap.height()
+        if width <= 0 or height <= 0:
+            return None
+        return (width * height) / 1_000_000.0
+
+    def _megapixels_from_path(self, path: str | None) -> float | None:
+        if not path:
+            return None
+        reader = QImageReader(path)
+        size = reader.size()
+        if not size.isValid():
+            return None
+        width = size.width()
+        height = size.height()
+        if width <= 0 or height <= 0:
+            return None
+        return (width * height) / 1_000_000.0
+
+    def _estimate_calibration_megapixels(self, cal: dict | None) -> float | None:
+        if not cal:
+            return None
+        values: list[float] = []
+        measurements_json = cal.get("measurements_json")
+        if measurements_json:
+            try:
+                loaded = json.loads(measurements_json)
+            except Exception:
+                loaded = None
+            if isinstance(loaded, dict):
+                for info in loaded.get("images") or []:
+                    mp = self._megapixels_from_path(info.get("path"))
+                    if mp:
+                        values.append(mp)
+        if not values:
+            mp = self._megapixels_from_path(cal.get("image_filepath"))
+            if mp:
+                values.append(mp)
+        if values:
+            return float(sum(values) / len(values))
+        return None
+
+    def _effective_calibration_megapixels(self, mp_value: float | None, cal: dict | None) -> float | None:
+        if not mp_value:
+            return mp_value
+        return float(mp_value)
+
+    def _current_calibration_megapixels(self) -> float | None:
+        calibration_id = getattr(self, "current_calibration_id", None) or getattr(
+            self, "_calib_link_calibration_id", None
+        )
+        if calibration_id:
+            cal = CalibrationDB.get_calibration(calibration_id)
+            mp_value = cal.get("megapixels") if cal else None
+            estimate = self._estimate_calibration_megapixels(cal)
+            if isinstance(mp_value, (int, float)) and mp_value > 0:
+                if estimate:
+                    diff_ratio = abs(float(mp_value) - float(estimate)) / max(1e-6, float(estimate))
+                    if diff_ratio > 0.01:
+                        return self._effective_calibration_megapixels(float(estimate), cal)
+                return self._effective_calibration_megapixels(float(mp_value), cal)
+            if estimate:
+                return self._effective_calibration_megapixels(float(estimate), cal)
+        if self.current_objective_name:
+            cal = CalibrationDB.get_active_calibration(self.current_objective_name)
+            mp_value = cal.get("megapixels") if cal else None
+            estimate = self._estimate_calibration_megapixels(cal)
+            if isinstance(mp_value, (int, float)) and mp_value > 0:
+                if estimate:
+                    diff_ratio = abs(float(mp_value) - float(estimate)) / max(1e-6, float(estimate))
+                    if diff_ratio > 0.01:
+                        return self._effective_calibration_megapixels(float(estimate), cal)
+                return self._effective_calibration_megapixels(float(mp_value), cal)
+            if estimate:
+                return self._effective_calibration_megapixels(float(estimate), cal)
+        return None
+
+    def _update_scale_mismatch_warning(self) -> None:
+        if not hasattr(self, "scale_warning_label"):
+            return
+        if not self.current_image_id or not self.current_pixmap:
+            self.scale_warning_label.setText("")
+            self.scale_warning_label.setToolTip("")
+            self.scale_warning_label.setVisible(False)
+            return
+        if self.current_image_type != "microscope":
+            self.scale_warning_label.setText("")
+            self.scale_warning_label.setToolTip("")
+            self.scale_warning_label.setVisible(False)
+            return
+        image_mp = self._current_image_megapixels()
+        calibration_mp = self._current_calibration_megapixels()
+        if not image_mp or not calibration_mp:
+            self.scale_warning_label.setText("")
+            self.scale_warning_label.setToolTip("")
+            self.scale_warning_label.setVisible(False)
+            return
+        effective_mp = float(image_mp)
+        image_data = ImageDB.get_image(self.current_image_id) if self.current_image_id else None
+        factor = image_data.get("resample_scale_factor") if image_data else None
+        if isinstance(factor, (int, float)) and factor > 0 and factor < 0.999:
+            effective_mp = float(image_mp) / (float(factor) * float(factor))
+        diff_ratio = abs(effective_mp - calibration_mp) / max(1e-6, calibration_mp)
+        if diff_ratio <= 0.01:
+            self.scale_warning_label.setText("")
+            self.scale_warning_label.setToolTip("")
+            self.scale_warning_label.setVisible(False)
+            return
+        ratio = max(effective_mp, calibration_mp) / max(1e-6, min(effective_mp, calibration_mp))
+        if ratio < 1.5:
+            self.scale_warning_label.setText("")
+            self.scale_warning_label.setToolTip("")
+            self.scale_warning_label.setVisible(False)
+            return
+        self.scale_warning_label.setText(self.tr("Warning: Image resolution mismatch!"))
+        self.scale_warning_label.setToolTip(
+            self.tr(
+                "Calibration image: {cal}MP. This image: {img}MP. "
+                "This is ok if you are working on a cropped image."
+            ).format(
+                cal=self._format_megapixels(calibration_mp),
+                img=self._format_megapixels(effective_mp),
+            )
+        )
+        self.scale_warning_label.setVisible(True)
 
     def update_controls_for_image_type(self, image_type):
         """Adjust calibration and category controls based on image type."""
         is_field = (image_type == "field")
         if hasattr(self, "scale_combo"):
-            self.scale_combo.setEnabled(not is_field)
+            self.scale_combo.setEnabled(True)
+            if is_field:
+                idx = self.scale_combo.findData("custom")
+                if idx >= 0 and self.scale_combo.currentData() != "custom":
+                    self.scale_combo.blockSignals(True)
+                    self.scale_combo.setCurrentIndex(idx)
+                    self.scale_combo.blockSignals(False)
+                    self._last_scale_combo_key = self.scale_combo.currentData()
+        if is_field and self.measurement_active:
+            self.stop_measurement()
         if hasattr(self, "measure_category_combo"):
-            self.measure_category_combo.setEnabled(not is_field)
+            self.measure_category_combo.setEnabled(True)
         if hasattr(self, "measure_button"):
-            self.measure_button.setEnabled(not is_field)
+            self.measure_button.setEnabled(True)
         if hasattr(self, "mode_lines"):
-            self.mode_lines.setEnabled(not is_field)
+            self.mode_lines.setEnabled(True)
         if hasattr(self, "mode_rect"):
-            self.mode_rect.setEnabled(not is_field)
+            self.mode_rect.setEnabled(True)
         if hasattr(self, "measure_category_combo"):
             if not self.measurements_table.selectedIndexes() and not self.measurement_active:
-                target = "other" if is_field else "spore"
+                target = "field" if is_field else "spores"
                 idx = self.measure_category_combo.findData(target)
                 if idx >= 0:
                     self.measure_category_combo.blockSignals(True)
@@ -2308,20 +4138,40 @@ class MainWindow(QMainWindow):
             if not has_scale:
                 self.current_objective_name = None
                 self.image_label.set_objective_text("")
-        if is_field:
-            if self.measurement_active:
-                self.stop_measurement()
-        else:
+        if not is_field:
             if not self.measurement_active and not self._auto_started_for_microscope:
                 self.start_measurement()
                 self._auto_started_for_microscope = True
-        if hasattr(self, "measure_status_label") and is_field:
-            self.measure_status_label.setText(self.tr("Field photo - no scale set"))
-            self.measure_status_label.setStyleSheet("color: #e67e22; font-weight: bold; font-size: 9pt;")
-        elif hasattr(self, "measure_status_label") and not is_field:
-            if self.measure_status_label.text() == self.tr("Field photo - no scale set"):
+        if hasattr(self, "measure_status_label"):
+            if is_field and not has_scale:
+                self.measure_status_label.setText(self.tr("Field photo - no scale set"))
+                self.measure_status_label.setStyleSheet("color: #e67e22; font-weight: bold; font-size: 9pt;")
+            elif self.measure_status_label.text() == self.tr("Field photo - no scale set"):
                 self.measure_status_label.setText("")
                 self.measure_status_label.setStyleSheet("")
+
+    def _ensure_field_measure_category(self):
+        if not hasattr(self, "measure_category_combo"):
+            return
+        idx = self.measure_category_combo.findData("field")
+        if idx >= 0 and self.measure_category_combo.currentIndex() != idx:
+            self.measure_category_combo.blockSignals(True)
+            self.measure_category_combo.setCurrentIndex(idx)
+            self.measure_category_combo.blockSignals(False)
+
+    def _update_field_scale_label(self):
+        if not hasattr(self, "calib_info_label"):
+            return
+        if self.current_image_type != "field":
+            return
+        scale_um = self.microns_per_pixel if self.microns_per_pixel and self.microns_per_pixel > 0 else None
+        if scale_um:
+            scale_mm = scale_um / 1000.0
+            self.calib_info_label.setText(self.tr("Scale: {scale:.3f} mm/px").format(scale=scale_mm))
+        else:
+            self.calib_info_label.setText(self.tr("Scale: -- mm/px"))
+        self._calib_link_objective_key = None
+        self._calib_link_calibration_id = None
 
     def load_image_record(self, image_data, display_name=None, refresh_table=True):
         """Load an image record into the viewer."""
@@ -2343,6 +4193,7 @@ class MainWindow(QMainWindow):
 
         self.current_image_path = image_data['filepath']
         self.current_image_id = image_data['id']
+        self.current_image_type = image_data.get("image_type")
         self.auto_gray_cache = None
         self.auto_gray_cache_id = None
 
@@ -2363,6 +4214,7 @@ class MainWindow(QMainWindow):
         self.apply_image_scale(image_data)
         self.image_label.set_microns_per_pixel(self.microns_per_pixel)
         self.update_controls_for_image_type(image_data.get("image_type"))
+        self._update_scale_mismatch_warning()
         if self.current_objective_name:
             self.image_label.set_objective_color(
                 self._objective_color_for_name(self.current_objective_name)
@@ -2516,6 +4368,53 @@ class MainWindow(QMainWindow):
                     self.measure_gallery.select_image(image_id)
                 return
 
+    def _on_measure_gallery_delete_requested(self, image_key):
+        image_id = None
+        if isinstance(image_key, int):
+            image_id = image_key
+        elif image_key:
+            for image in self.observation_images:
+                if image.get("filepath") == image_key:
+                    image_id = image.get("id")
+                    break
+        if not image_id:
+            return
+
+        measurements = MeasurementDB.get_measurements_for_image(image_id)
+        prompt = (
+            self.tr("Delete image and associated measurements?")
+            if measurements
+            else self.tr("Delete image?")
+        )
+        confirmed = self._question_yes_no(self.tr("Confirm Delete"), prompt, default_yes=False)
+        if not confirmed:
+            return
+
+        current_id = self.current_image_id
+        ids = [img.get("id") for img in self.observation_images if img.get("id") is not None]
+        next_id = None
+        if current_id and image_id != current_id and current_id in ids:
+            next_id = current_id
+        elif image_id in ids and len(ids) > 1:
+            idx = ids.index(image_id)
+            next_idx = idx + 1 if idx + 1 < len(ids) else idx - 1
+            next_id = ids[next_idx] if next_idx >= 0 else None
+
+        ImageDB.delete_image(image_id)
+
+        if next_id:
+            next_image = ImageDB.get_image(next_id)
+            if next_image:
+                self.load_image_record(next_image, display_name=self.active_observation_name, refresh_table=True)
+                return
+
+        self.clear_current_image_display()
+        self.refresh_observation_images()
+        self.update_measurements_table()
+        self.update_statistics()
+        if not self._suppress_gallery_update:
+            self.schedule_gallery_refresh()
+
     def goto_image_index(self, index):
         """Load an image by index from the active observation."""
         if index < 0 or index >= len(self.observation_images):
@@ -2527,8 +4426,12 @@ class MainWindow(QMainWindow):
         """Return the objective name to store with an image."""
         if self.current_objective_name:
             return self.current_objective_name
-        if self.current_objective and self.current_objective.get("magnification"):
-            return self.current_objective["magnification"]
+        if self.current_objective:
+            key = self.current_objective.get("key") or self.current_objective.get("objective_key")
+            if key:
+                return key
+            if self.current_objective.get("magnification"):
+                return self.current_objective["magnification"]
         if self.microns_per_pixel:
             return "Custom"
         return None
@@ -2558,6 +4461,7 @@ class MainWindow(QMainWindow):
         self.current_image_id = None
         self.current_image_path = None
         self.current_pixmap = None
+        self.current_image_type = None
         self.auto_gray_cache = None
         self.auto_gray_cache_id = None
         self.points = []
@@ -2570,6 +4474,7 @@ class MainWindow(QMainWindow):
         self.image_label.clear_preview_rectangle()
         self.spore_preview.clear()
         self.update_display_lines()
+        self._update_scale_mismatch_warning()
 
     def load_image(self):
         """Load a microscope image."""
@@ -2606,7 +4511,8 @@ class MainWindow(QMainWindow):
                     "contrast_default",
                     SettingsDB.get_list_setting("contrast_options", ["BF", "DF", "DIC", "Phase"])[0]
                 ),
-                calibration_id=calibration_id
+                calibration_id=calibration_id,
+                resample_scale_factor=1.0,
             )
 
             image_data = ImageDB.get_image(image_id)
@@ -2730,24 +4636,33 @@ class MainWindow(QMainWindow):
             self.start_measurement()
 
     def _check_scale_before_measure(self):
-        """Warn if measuring without a scale."""
+        """Ensure scale exists before measuring."""
         if not self.current_image_id:
             return True
         image_data = ImageDB.get_image(self.current_image_id)
-        if not image_data or image_data.get("image_type") != "field":
+        if not image_data:
             return True
+        image_type = (image_data.get("image_type") or "").strip().lower()
+        if image_type == "field":
+            self._ensure_field_measure_category()
         scale = image_data.get("scale_microns_per_pixel")
         if scale is not None and scale > 0:
             return True
 
-        dialog = QMessageBox(self)
-        dialog.setWindowTitle("No Scale Set")
-        dialog.setText("This is a field photo and no scale is set.")
-        set_btn = dialog.addButton("Set scale", QMessageBox.AcceptRole)
-        dialog.addButton("Cancel", QMessageBox.RejectRole)
-        dialog.exec()
-        if dialog.clickedButton() == set_btn:
-            self.open_calibration_dialog()
+        if image_type not in ("field", "microscope"):
+            return True
+        if image_type == "field":
+            dialog = ScaleBarCalibrationDialog(
+                self,
+                initial_value=100.0,
+                unit_label="mm",
+                unit_multiplier=1000.0,
+                previous_key=self._last_scale_combo_key,
+            )
+            dialog.show()
+            return False
+
+        self.open_calibration_dialog()
         return False
 
     def on_measure_category_changed(self):
@@ -2775,8 +4690,9 @@ class MainWindow(QMainWindow):
         conn.commit()
         conn.close()
         self.measurements_cache[row]["measurement_type"] = new_type
-        self.refresh_gallery_filter_options()
-        self.schedule_gallery_refresh()
+        self.update_measurements_table()
+        if measurement_id:
+            self.select_measurement_in_table(measurement_id)
 
     def abort_measurement(self, show_status=True):
         """Abort the current measurement."""
@@ -2807,7 +4723,7 @@ class MainWindow(QMainWindow):
                 self.measure_status_label.setText(self.tr("Rectangle: Click point 1"))
                 self.measure_status_label.setStyleSheet("color: #3498db; font-weight: bold; font-size: 9pt;")
             else:
-                self.measure_status_label.setText(self.tr("Ready - Click to start"))
+                self.measure_status_label.setText(self.tr("Line: Click start point"))
                 self.measure_status_label.setStyleSheet("color: #27ae60; font-weight: bold; font-size: 9pt;")
         else:
             self.measure_status_label.setText(self.tr("Start measuring to begin"))
@@ -2838,7 +4754,7 @@ class MainWindow(QMainWindow):
             # Automatically start a new measurement
             self.points = []
             self.temp_lines = []
-            self.measure_status_label.setText(self.tr("Click point 1"))
+            self.measure_status_label.setText(self.tr("Line: Click start point"))
             self.measure_status_label.setStyleSheet("color: #3498db; font-weight: bold; font-size: 9pt;")
 
         # Add point
@@ -2848,7 +4764,7 @@ class MainWindow(QMainWindow):
         if len(self.points) == 1:
             # Start preview line from point 1
             self.image_label.set_preview_line(self.points[0])
-            self.measure_status_label.setText(self.tr("Click point 2"))
+            self.measure_status_label.setText(self.tr("Line: Click end point"))
         elif len(self.points) == 2:
             # Complete first line, clear preview
             self.image_label.clear_preview_line()
@@ -2858,46 +4774,40 @@ class MainWindow(QMainWindow):
             ]
             self.temp_lines.append(line1)
             self.update_display_lines()
-            self.measure_status_label.setText(self.tr("Click point 3"))
-        elif len(self.points) == 3:
-            # Start preview line from point 3
-            self.image_label.set_preview_line(self.points[2])
-            self.measure_status_label.setText(self.tr("Click point 4"))
-        elif len(self.points) == 4:
-            # Complete second line, clear preview
-            self.image_label.clear_preview_line()
-            line2 = [
-                self.points[2].x(), self.points[2].y(),
-                self.points[3].x(), self.points[3].y()
-            ]
-            self.temp_lines.append(line2)
-            self.update_display_lines()
             self.complete_measurement()
 
     def complete_measurement(self):
-        """Complete the 4-point measurement and calculate Q."""
-        # Calculate first distance
-        dx1 = self.points[1].x() - self.points[0].x()
-        dy1 = self.points[1].y() - self.points[0].y()
-        dist1_pixels = np.sqrt(dx1**2 + dy1**2)
-        dist1_microns = dist1_pixels * self.microns_per_pixel
-
-        # Calculate second distance
-        dx2 = self.points[3].x() - self.points[2].x()
-        dy2 = self.points[3].y() - self.points[2].y()
-        dist2_pixels = np.sqrt(dx2**2 + dy2**2)
-        dist2_microns = dist2_pixels * self.microns_per_pixel
-
-        # Auto-detect length (longer) and width (shorter)
-        if dist1_microns >= dist2_microns:
-            length_microns = dist1_microns
-            width_microns = dist2_microns
+        """Complete a measurement and store it."""
+        if self.measure_mode == "lines" and len(self.points) >= 2:
+            dx = self.points[1].x() - self.points[0].x()
+            dy = self.points[1].y() - self.points[0].y()
+            dist_pixels = math.sqrt(dx**2 + dy**2)
+            length_microns = dist_pixels * self.microns_per_pixel
+            width_microns = None
+            q_value = None
         else:
-            length_microns = dist2_microns
-            width_microns = dist1_microns
+            # Calculate first distance
+            dx1 = self.points[1].x() - self.points[0].x()
+            dy1 = self.points[1].y() - self.points[0].y()
+            dist1_pixels = np.sqrt(dx1**2 + dy1**2)
+            dist1_microns = dist1_pixels * self.microns_per_pixel
 
-        # Calculate Q (length/width ratio)
-        q_value = length_microns / width_microns if width_microns > 0 else 0
+            # Calculate second distance
+            dx2 = self.points[3].x() - self.points[2].x()
+            dy2 = self.points[3].y() - self.points[2].y()
+            dist2_pixels = np.sqrt(dx2**2 + dy2**2)
+            dist2_microns = dist2_pixels * self.microns_per_pixel
+
+            # Auto-detect length (longer) and width (shorter)
+            if dist1_microns >= dist2_microns:
+                length_microns = dist1_microns
+                width_microns = dist2_microns
+            else:
+                length_microns = dist2_microns
+                width_microns = dist1_microns
+
+            # Calculate Q (length/width ratio)
+            q_value = length_microns / width_microns if width_microns > 0 else 0
 
         # Save to database with point coordinates and get measurement ID
         measurement_category = self.measure_category_combo.currentData()
@@ -2906,8 +4816,8 @@ class MainWindow(QMainWindow):
             length=length_microns,
             width=width_microns,
             measurement_type=measurement_category,
-            notes=f"Q={q_value:.1f}",
-            points=self.points
+            notes=f"Q={q_value:.1f}" if q_value is not None else None,
+            points=self.points[:2] if self.measure_mode == "lines" else self.points
         )
 
         ImageDB.update_image(
@@ -2917,7 +4827,11 @@ class MainWindow(QMainWindow):
         )
 
         # Save ML annotation with bounding box
-        if self.current_pixmap and measurement_category == "spore":
+        if (
+            self.current_pixmap
+            and self.normalize_measurement_category(measurement_category) == "spores"
+            and width_microns is not None
+        ):
             image_shape = (self.current_pixmap.height(), self.current_pixmap.width())
             try:
                 save_spore_annotation(
@@ -2934,7 +4848,7 @@ class MainWindow(QMainWindow):
         # Store the lines associated with this measurement
         saved_lines = self.temp_lines.copy()
         self.measurement_lines[measurement_id] = saved_lines
-        if len(saved_lines) >= 2:
+        if len(saved_lines) >= 2 and width_microns is not None:
             self.measurement_labels.append(
                 self._build_measurement_label(
                     measurement_id,
@@ -2942,6 +4856,14 @@ class MainWindow(QMainWindow):
                     saved_lines[1],
                     length_microns,
                     width_microns
+                )
+            )
+        elif len(saved_lines) == 1 and length_microns is not None:
+            self.measurement_labels.append(
+                self._build_line_measurement_label(
+                    measurement_id,
+                    saved_lines[0],
+                    length_microns,
                 )
             )
         self.temp_lines = []
@@ -3078,25 +5000,20 @@ class MainWindow(QMainWindow):
         show_saved = True
         if hasattr(self, "show_rectangles_checkbox"):
             show_saved = self.show_rectangles_checkbox.isChecked()
-        if self.measure_mode == "lines":
-            rectangles = []
-            all_lines = []
-            self._line_index_map = {}
-            if show_saved:
-                for measurement_id, lines_list in self.measurement_lines.items():
-                    for line in lines_list:
-                        idx = len(all_lines)
-                        all_lines.append(line)
-                        self._line_index_map.setdefault(measurement_id, []).append(idx)
-            all_lines.extend(self.temp_lines)
-            self.image_label.set_measurement_rectangles(rectangles)
-            self.image_label.set_measurement_lines(all_lines)
-            self._rect_index_map = {}
-        else:
-            rectangles, self._rect_index_map = self._build_measurement_rectangles_with_ids() if show_saved else ([], {})
-            self.image_label.set_measurement_rectangles(rectangles)
-            self.image_label.set_measurement_lines(self.temp_lines)
-            self._line_index_map = {}
+        rectangles, self._rect_index_map = self._build_measurement_rectangles_with_ids() if show_saved else ([], {})
+        all_lines = []
+        self._line_index_map = {}
+        if show_saved:
+            for measurement_id, lines_list in self.measurement_lines.items():
+                if len(lines_list) != 1:
+                    continue
+                line = lines_list[0]
+                idx = len(all_lines)
+                all_lines.append(line)
+                self._line_index_map.setdefault(measurement_id, []).append(idx)
+        all_lines.extend(self.temp_lines)
+        self.image_label.set_measurement_rectangles(rectangles)
+        self.image_label.set_measurement_lines(all_lines)
         self.image_label.set_measurement_labels(self.measurement_labels)
 
     def build_measurement_rectangles(self):
@@ -3187,30 +5104,30 @@ class MainWindow(QMainWindow):
         best_id = None
         best_dist = threshold
         for measurement_id, lines_list in self.measurement_lines.items():
-            if len(lines_list) < 2:
+            if not lines_list:
                 continue
             line1 = lines_list[0]
-            line2 = lines_list[1]
             p1 = QPointF(line1[0], line1[1])
             p2 = QPointF(line1[2], line1[3])
-            p3 = QPointF(line2[0], line2[1])
-            p4 = QPointF(line2[2], line2[3])
 
-            # Check distance to the two measurement lines
-            dist = min(
-                self._distance_point_to_segment(pos, p1, p2),
-                self._distance_point_to_segment(pos, p3, p4)
-            )
+            # Check distance to the measurement line(s)
+            dist = self._distance_point_to_segment(pos, p1, p2)
 
-            # Check rectangle edges for better selection on rectangle view
-            corners = self.build_measurement_rectangles_for_lines(line1, line2)
-            if corners:
-                for i in range(4):
-                    a = corners[i]
-                    b = corners[(i + 1) % 4]
-                    dist = min(dist, self._distance_point_to_segment(pos, a, b))
-                if self._point_in_polygon(pos, corners):
-                    dist = 0.0
+            if len(lines_list) >= 2:
+                line2 = lines_list[1]
+                p3 = QPointF(line2[0], line2[1])
+                p4 = QPointF(line2[2], line2[3])
+                dist = min(dist, self._distance_point_to_segment(pos, p3, p4))
+
+                # Check rectangle edges for better selection on rectangle view
+                corners = self.build_measurement_rectangles_for_lines(line1, line2)
+                if corners:
+                    for i in range(4):
+                        a = corners[i]
+                        b = corners[(i + 1) % 4]
+                        dist = min(dist, self._distance_point_to_segment(pos, a, b))
+                    if self._point_in_polygon(pos, corners):
+                        dist = 0.0
 
             if dist <= best_dist:
                 best_dist = dist
@@ -3269,6 +5186,11 @@ class MainWindow(QMainWindow):
         if mag in (6,):
             return QColor("#f39c12")
         return QColor("#3498db")
+
+    def _objective_tag_text(self, display_name: str | None, objective_key: str | None = None) -> str:
+        text = display_name or objective_key or ""
+        short = ImageGalleryWidget._short_objective_label(text, self.tr)
+        return short or text
 
     def _format_exposure_time(self, value):
         """Format exposure time for display."""
@@ -3791,6 +5713,22 @@ class MainWindow(QMainWindow):
                 self.on_measurement_selected()
                 return
 
+    def _get_default_export_dir(self) -> str:
+        settings = get_app_settings()
+        last_dir = settings.get("last_export_dir")
+        if last_dir and Path(last_dir).exists():
+            return last_dir
+        docs = QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
+        if docs:
+            return docs
+        return str(Path.home())
+
+    def _remember_export_dir(self, filepath: str | None) -> None:
+        if not filepath:
+            return
+        export_dir = str(Path(filepath).parent)
+        update_app_settings({"last_export_dir": export_dir})
+
     def export_annotated_image(self):
         """Export the current image view with annotations."""
         if not self.current_pixmap:
@@ -3827,16 +5765,18 @@ class MainWindow(QMainWindow):
         self.export_scale_percent = export_settings["scale_percent"]
 
         default_ext = ".jpg" if self.export_format == "jpg" else ".png"
+        default_path = str(Path(self._get_default_export_dir()) / f"{default_name}{default_ext}")
         filename, _ = QFileDialog.getSaveFileName(
             self,
             "Export Image",
-            f"{default_name}{default_ext}",
+            default_path,
             "PNG Images (*.png);;JPEG Images (*.jpg)"
         )
         if not filename:
             return
         if not re.search(r"\.(png|jpe?g)$", filename, re.IGNORECASE):
             filename += default_ext
+        self._remember_export_dir(filename)
 
         exported = self.image_label.export_annotated_pixmap()
         if exported:
@@ -3884,6 +5824,26 @@ class MainWindow(QMainWindow):
             "line2": line2
         }
 
+    def _build_line_measurement_label(self, measurement_id, line1, length_um):
+        """Build a label entry for line-only measurements."""
+        unit = "mm" if self.normalize_measurement_category(
+            self.measure_category_combo.currentData() if hasattr(self, "measure_category_combo") else ""
+        ) == "field" else "\u03bcm"
+        length_value = length_um / 1000.0 if unit == "mm" else length_um
+        center = QPointF(
+            (line1[0] + line1[2]) / 2,
+            (line1[1] + line1[3]) / 2,
+        )
+        return {
+            "id": measurement_id,
+            "kind": "line",
+            "center": center,
+            "length_um": length_um,
+            "length_value": length_value,
+            "unit": unit,
+            "line": line1,
+        }
+
     def load_measurement_lines(self):
         """Load measurement lines from database for current image.
 
@@ -3905,20 +5865,24 @@ class MainWindow(QMainWindow):
         measurements = MeasurementDB.get_measurements_for_image(self.current_image_id)
         for measurement in measurements:
             if not all(measurement.get(f'p{i}_{axis}') is not None
-                       for i in range(1, 5) for axis in ['x', 'y']):
+                       for i in range(1, 3) for axis in ['x', 'y']):
                 continue
             line1 = [
                 measurement['p1_x'], measurement['p1_y'],
                 measurement['p2_x'], measurement['p2_y']
             ]
-            line2 = [
-                measurement['p3_x'], measurement['p3_y'],
-                measurement['p4_x'], measurement['p4_y']
-            ]
-            self.measurement_lines[measurement['id']] = [line1, line2]
+            lines = [line1]
+            if all(measurement.get(f'p{i}_{axis}') is not None for i in range(3, 5) for axis in ['x', 'y']):
+                line2 = [
+                    measurement['p3_x'], measurement['p3_y'],
+                    measurement['p4_x'], measurement['p4_y']
+                ]
+                lines.append(line2)
+            self.measurement_lines[measurement['id']] = lines
             length_um = measurement.get('length_um')
             width_um = measurement.get('width_um')
-            if length_um is None or width_um is None:
+            if len(lines) >= 2 and (length_um is None or width_um is None):
+                line2 = lines[1]
                 dx1 = line1[2] - line1[0]
                 dy1 = line1[3] - line1[1]
                 dx2 = line2[2] - line2[0]
@@ -3927,9 +5891,33 @@ class MainWindow(QMainWindow):
                 dist2 = math.sqrt(dx2**2 + dy2**2) * self.microns_per_pixel
                 length_um = max(dist1, dist2)
                 width_um = min(dist1, dist2)
-            self.measurement_labels.append(
-                self._build_measurement_label(measurement['id'], line1, line2, length_um, width_um)
-            )
+            if len(lines) == 1 and length_um is None:
+                dx = line1[2] - line1[0]
+                dy = line1[3] - line1[1]
+                length_um = math.sqrt(dx**2 + dy**2) * self.microns_per_pixel
+            if len(lines) >= 2 and length_um is not None and width_um is not None:
+                self.measurement_labels.append(
+                    self._build_measurement_label(measurement['id'], line1, lines[1], length_um, width_um)
+                )
+            elif len(lines) == 1 and length_um is not None:
+                unit = "mm" if self.normalize_measurement_category(
+                    measurement.get("measurement_type")
+                ) == "field" else "\u03bcm"
+                length_value = length_um / 1000.0 if unit == "mm" else length_um
+                self.measurement_labels.append(
+                    {
+                        "id": measurement['id'],
+                        "kind": "line",
+                        "center": QPointF(
+                            (line1[0] + line1[2]) / 2,
+                            (line1[1] + line1[3]) / 2,
+                        ),
+                        "length_um": length_um,
+                        "length_value": length_value,
+                        "unit": unit,
+                        "line": line1,
+                    }
+                )
 
         self.update_display_lines()
 
@@ -3957,6 +5945,8 @@ class MainWindow(QMainWindow):
 
         conn.commit()
         conn.close()
+
+        self._invalidate_gallery_thumbnail_cache(measurement_id)
 
         # Update the UI
         self.update_measurements_table()
@@ -4029,7 +6019,7 @@ class MainWindow(QMainWindow):
         row = selected_rows[0].row()
         if row < len(self.measurements_cache):
             measurement = self.measurements_cache[row]
-            measurement_type = measurement.get("measurement_type") or "spore"
+            measurement_type = self.normalize_measurement_category(measurement.get("measurement_type") or "spores")
             if hasattr(self, "measure_category_combo"):
                 idx = self.measure_category_combo.findData(measurement_type)
                 if idx >= 0:
@@ -4096,14 +6086,19 @@ class MainWindow(QMainWindow):
 
     def normalize_measurement_category(self, category):
         """Normalize measurement categories for filtering."""
-        if not category or category == "manual":
-            return "spore"
-        return str(category).lower()
+        if not category:
+            return "spores"
+        value = str(category).strip().lower()
+        if value in ("manual", "spore", "spores"):
+            return "spores"
+        return value
 
     def format_measurement_category(self, category):
         """Format measurement categories for display."""
         labels = {
-            "spore": "Spore",
+            "spores": "Spores",
+            "spore": "Spores",
+            "field": "Field",
             "basidia": "Basidia",
             "pleurocystidia": "Pleurocystidia",
             "cheilocystidia": "Cheilocystidia",
@@ -4130,7 +6125,7 @@ class MainWindow(QMainWindow):
                 if category not in normalized:
                     normalized.append(category)
 
-            order = ["spore", "basidia", "pleurocystidia", "cheilocystidia", "caulocystidia", "other"]
+            order = ["spores", "field", "pleurocystidia", "cheilocystidia", "caulocystidia", "other", "basidia"]
             ordered = [cat for cat in order if cat in normalized]
             for category in normalized:
                 if category not in ordered:
@@ -4148,10 +6143,12 @@ class MainWindow(QMainWindow):
             desired = self._load_gallery_settings().get("measurement_type")
         if not desired:
             desired = current
+        if str(desired).strip().lower() == "spore":
+            desired = "spores"
         if desired and self.gallery_filter_combo.findData(desired) >= 0:
             self.gallery_filter_combo.setCurrentIndex(self.gallery_filter_combo.findData(desired))
         else:
-            idx = self.gallery_filter_combo.findData("spore")
+            idx = self.gallery_filter_combo.findData("spores")
             if idx >= 0:
                 self.gallery_filter_combo.setCurrentIndex(idx)
         self._pending_gallery_category = None
@@ -4176,6 +6173,7 @@ class MainWindow(QMainWindow):
         if index == 2:
             self.apply_gallery_settings()
             self.refresh_gallery_filter_options()
+            self._refresh_reference_species_availability()
             self.schedule_gallery_refresh()
 
     def schedule_gallery_refresh(self):
@@ -4236,223 +6234,308 @@ class MainWindow(QMainWindow):
 
     def update_gallery(self):
         """Update the gallery grid with all measured items."""
-        from PySide6.QtWidgets import QLabel as QLabel2, QFrame, QVBoxLayout, QToolButton
-        from PySide6.QtCore import QPointF
-
         if not self.is_analysis_visible():
             return
         if self._gallery_refresh_in_progress:
             return
 
+        self._cancel_gallery_render()
         self._gallery_refresh_in_progress = True
-        t0 = time.perf_counter()
-        t_fetch = t0
-        t_fetch_done = t0
-        t_plot = t0
-        t_loop_start = t0
-        total = 0
 
-        progress = QProgressDialog("Updating gallery...", None, 0, 0, self)
-        progress.setWindowTitle("Gallery")
-        progress.setCancelButton(None)
-        progress.setMinimumDuration(0)
-        progress.setAutoClose(False)
-        progress.setAutoReset(False)
-        progress.setWindowModality(Qt.ApplicationModal)
-        progress.show()
+        category = self.gallery_filter_combo.currentData() if hasattr(self, "gallery_filter_combo") else None
+        if category != self._last_gallery_category:
+            self.gallery_filter_mode = None
+            self.gallery_filter_value = None
+            self.gallery_filter_ids = set()
+            self._last_gallery_category = category
+
+        image_labels = {}
+        if self.active_observation_id:
+            images = ImageDB.get_images_for_observation(self.active_observation_id)
+            image_labels = {img['id']: f"Image {idx + 1}" for idx, img in enumerate(images)}
+        self.gallery_image_labels = image_labels
+
+        all_measurements = self.get_gallery_measurements()
+        self.update_graph_plots(all_measurements)
+
+        if self._gallery_collapsed:
+            self._complete_gallery_refresh()
+            return
+
+        # Clear existing gallery items
+        while self.gallery_grid.count():
+            item = self.gallery_grid.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._update_gallery_container_size(0)
+
+        measurements = self._filter_gallery_measurements(all_measurements)
+        if not measurements:
+            self._complete_gallery_refresh()
+            return
+
+        self._reset_gallery_cache_if_needed()
+
+        orient = hasattr(self, 'orient_checkbox') and self.orient_checkbox.isChecked()
+        uniform_scale = hasattr(self, 'uniform_scale_checkbox') and self.uniform_scale_checkbox.isChecked()
+        thumbnail_size = self._gallery_thumbnail_size()
+        total = len(measurements)
+        items_per_row = max(1, total)
+
+        uniform_length_um = None
+        if uniform_scale:
+            for measurement in all_measurements:
+                length_um = measurement.get("length_um")
+                if length_um is None:
+                    continue
+                if uniform_length_um is None or length_um > uniform_length_um:
+                    uniform_length_um = length_um
+
+        render_state = {
+            "items_per_row": items_per_row,
+            "thumbnail_size": thumbnail_size,
+            "image_labels": image_labels,
+            "orient": orient,
+            "uniform_scale": uniform_scale,
+            "uniform_length_um": uniform_length_um,
+            "image_color_cache": {},
+            "display_index": 1,
+        }
+
+        immediate_count = min(7, total)
+        for measurement in measurements[:immediate_count]:
+            self._add_gallery_item(measurement, render_state)
+
+        if total > immediate_count:
+            self._gallery_render_queue = list(measurements[immediate_count:])
+            self._gallery_render_state = render_state
+            self._gallery_render_timer = QTimer(self)
+            self._gallery_render_timer.timeout.connect(self._render_gallery_batch)
+            self._gallery_render_timer.start(10)
+        else:
+            self._complete_gallery_refresh()
+
+    def _cancel_gallery_render(self):
+        if self._gallery_render_timer is not None:
+            self._gallery_render_timer.stop()
+            self._gallery_render_timer.deleteLater()
+            self._gallery_render_timer = None
+        self._gallery_render_queue = []
+        self._gallery_render_state = None
+
+    def _render_gallery_batch(self):
+        if not self._gallery_render_queue or not self._gallery_render_state:
+            self._finish_gallery_render()
+            return
+        batch_size = 4
+        for _ in range(min(batch_size, len(self._gallery_render_queue))):
+            measurement = self._gallery_render_queue.pop(0)
+            self._add_gallery_item(measurement, self._gallery_render_state)
         QApplication.processEvents()
+        if not self._gallery_render_queue:
+            self._finish_gallery_render()
 
-        try:
-            t_fetch = time.perf_counter()
-            category = self.gallery_filter_combo.currentData() if hasattr(self, "gallery_filter_combo") else None
-            if category != self._last_gallery_category:
-                self.gallery_filter_mode = None
-                self.gallery_filter_value = None
-                self.gallery_filter_ids = set()
-                self._last_gallery_category = category
+    def _finish_gallery_render(self):
+        self._cancel_gallery_render()
+        self._complete_gallery_refresh()
 
-            image_labels = {}
-            if self.active_observation_id:
-                images = ImageDB.get_images_for_observation(self.active_observation_id)
-                image_labels = {img['id']: f"Image {idx + 1}" for idx, img in enumerate(images)}
-            self.gallery_image_labels = image_labels
+    def _complete_gallery_refresh(self):
+        self._gallery_last_refresh_time = time.perf_counter()
+        self._gallery_refresh_in_progress = False
+        if self._gallery_refresh_pending:
+            self.schedule_gallery_refresh()
 
-            # Clear existing gallery items
-            while self.gallery_grid.count():
-                item = self.gallery_grid.takeAt(0)
-                if item.widget():
-                    item.widget().deleteLater()
+    def _reset_gallery_cache_if_needed(self):
+        if self._gallery_thumb_cache_observation_id != self.active_observation_id:
+            self._gallery_thumb_cache_observation_id = self.active_observation_id
+            self._gallery_thumb_cache = {}
+            self._gallery_pixmap_cache = {}
 
-            all_measurements = self.get_gallery_measurements()
-            t_fetch_done = time.perf_counter()
-            self.update_graph_plots(all_measurements)
-            t_plot = time.perf_counter()
-            measurements = self._filter_gallery_measurements(all_measurements)
-            if not measurements:
-                return
+    def _invalidate_gallery_thumbnail_cache(self, measurement_id):
+        if not self._gallery_thumb_cache:
+            return
+        keys_to_remove = [key for key in self._gallery_thumb_cache if key[0] == measurement_id]
+        for key in keys_to_remove:
+            self._gallery_thumb_cache.pop(key, None)
 
-            total = len(measurements)
-            progress.setRange(0, total)
+    def _gallery_thumbnail_cache_key(self, measurement_id, orient, uniform_scale,
+                                     uniform_length_um, thumbnail_size, extra_rotation, color_key):
+        if uniform_scale:
+            uniform_key = round(float(uniform_length_um or 0.0), 6)
+        else:
+            uniform_key = None
+        return (measurement_id, orient, uniform_scale, uniform_key, thumbnail_size, extra_rotation, color_key)
 
-            # Get orient checkbox state
-            orient = hasattr(self, 'orient_checkbox') and self.orient_checkbox.isChecked()
-            uniform_scale = hasattr(self, 'uniform_scale_checkbox') and self.uniform_scale_checkbox.isChecked()
+    def _add_gallery_item(self, measurement, render_state):
+        from PySide6.QtWidgets import QLabel as QLabel2, QFrame, QVBoxLayout, QToolButton
+        from PySide6.QtCore import QPointF
 
-            # Grid parameters
-            items_per_row = self.gallery_columns_spin.value() if hasattr(self, "gallery_columns_spin") else 4
-            thumbnail_size = 200
-            pixmap_cache = {}
-            image_color_cache = {}
-            display_index = 1
+        if not all(measurement.get(f'p{i}_{axis}') is not None
+                   for i in range(1, 5) for axis in ['x', 'y']):
+            return
 
-            uniform_length_um = None
-            if uniform_scale:
-                for measurement in measurements:
-                    length_um = measurement.get("length_um")
-                    if length_um is None:
-                        continue
-                    if uniform_length_um is None or length_um > uniform_length_um:
-                        uniform_length_um = length_um
-            t_loop_start = time.perf_counter()
-            for idx, measurement in enumerate(measurements, start=1):
-                # Check if we have point coordinates
-                if not all(measurement.get(f'p{i}_{axis}') is not None
-                          for i in range(1, 5) for axis in ['x', 'y']):
-                    continue
+        thumbnail = self._get_gallery_thumbnail(measurement, render_state)
+        if thumbnail is None:
+            return
 
-                pixmap = self.get_measurement_pixmap(measurement, pixmap_cache)
-                if not pixmap or pixmap.isNull():
-                    continue
+        thumbnail_size = render_state["thumbnail_size"]
+        orient = render_state["orient"]
+        image_labels = render_state["image_labels"]
+        image_id = measurement.get('image_id')
+        measurement_id = measurement.get('id')
 
-                measurement_id = measurement['id']
+        container = QFrame()
+        container.setFixedSize(thumbnail_size, thumbnail_size)
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(0)
 
-                # Reconstruct points
-                points = [
-                    QPointF(measurement['p1_x'], measurement['p1_y']),
-                    QPointF(measurement['p2_x'], measurement['p2_y']),
-                    QPointF(measurement['p3_x'], measurement['p3_y']),
-                    QPointF(measurement['p4_x'], measurement['p4_y'])
-                ]
+        label = QLabel2()
+        label.setPixmap(thumbnail)
+        label.setFixedSize(thumbnail_size, thumbnail_size)
+        label.setStyleSheet("border: 2px solid #3498db; background: white;")
+        label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        container_layout.addWidget(label)
 
-                # Get extra rotation for this measurement
-                extra_rotation = measurement.get("gallery_rotation") or self.gallery_rotations.get(measurement_id, 0)
-                image_id = measurement.get('image_id')
-                stored_color = None
-                mpp = None
-                if image_id:
-                    if image_id not in image_color_cache:
-                        image_data = ImageDB.get_image(image_id)
-                        image_color_cache[image_id] = (
-                            {
-                                "measure_color": image_data.get('measure_color') if image_data else None,
-                                "mpp": image_data.get('scale_microns_per_pixel') if image_data else None
-                            }
-                        )
-                    cached = image_color_cache[image_id]
-                    stored_color = cached.get("measure_color") if cached else None
-                    mpp = cached.get("mpp") if cached else None
-                measure_color = QColor(stored_color) if stored_color else self.default_measure_color
-                uniform_length_px = None
-                if uniform_scale and uniform_length_um:
-                    if not mpp or mpp <= 0:
-                        p1 = QPointF(measurement['p1_x'], measurement['p1_y'])
-                        p2 = QPointF(measurement['p2_x'], measurement['p2_y'])
-                        p3 = QPointF(measurement['p3_x'], measurement['p3_y'])
-                        p4 = QPointF(measurement['p4_x'], measurement['p4_y'])
-                        line1_len = math.hypot(p2.x() - p1.x(), p2.y() - p1.y())
-                        line2_len = math.hypot(p4.x() - p3.x(), p4.y() - p3.y())
-                        length_px = max(line1_len, line2_len)
-                        length_um = measurement.get("length_um")
-                        if length_px > 0 and length_um:
-                            mpp = float(length_um) / float(length_px)
-                    if mpp and mpp > 0:
-                        uniform_length_px = float(uniform_length_um) / float(mpp)
+        if orient:
+            rotate_btn = QToolButton(container)
+            rotate_btn.setIcon(QIcon(str(Path(__file__).parent.parent / "assets" / "icons" / "rotate.svg")))
+            rotate_btn.setToolTip("Rotate 180")
+            rotate_btn.setProperty("instant_tooltip", True)
+            rotate_btn.installEventFilter(self)
+            rotate_btn.setFixedSize(24, 24)
+            rotate_btn.setIconSize(QSize(22, 22))
+            rotate_btn.setStyleSheet(
+                "QToolButton { background: transparent; border: none; }"
+                "QToolButton:hover { background-color: rgba(0, 0, 0, 0.08); }"
+            )
+            rotate_btn.move(thumbnail_size - 28, thumbnail_size - 28)
+            rotate_btn.show()
+            rotate_btn.clicked.connect(
+                lambda checked, mid=measurement_id: self.rotate_gallery_thumbnail(mid)
+            )
+            rotate_btn.raise_()
 
-                # Create thumbnail
-                thumbnail = self.create_spore_thumbnail(
-                    pixmap,
-                    points,
-                    measurement['length_um'],
-                    measurement['width_um'] or 0,
-                    thumbnail_size,
-                    display_index,
-                    orient=orient,
-                    extra_rotation=extra_rotation,
-                    uniform_length_px=uniform_length_px,
-                    color=measure_color
+        link_btn = QToolButton(container)
+        link_btn.setIcon(QIcon(str(Path(__file__).parent.parent / "assets" / "icons" / "link.svg")))
+        link_label = image_labels.get(image_id, "Image ?")
+        link_btn.setToolTip(link_label)
+        link_btn.setProperty("instant_tooltip", True)
+        link_btn.installEventFilter(self)
+        link_btn.setFixedSize(24, 24)
+        link_btn.setIconSize(QSize(22, 22))
+        link_btn.setStyleSheet(
+            "QToolButton { background: transparent; border: none; }"
+            "QToolButton:hover { background-color: rgba(0, 0, 0, 0.08); }"
+        )
+        link_btn.move(4, 4)
+        link_btn.show()
+        link_btn.clicked.connect(
+            lambda checked, mid=measurement_id: self.open_measurement_from_gallery(mid)
+        )
+        link_btn.raise_()
+
+        display_index = render_state["display_index"]
+        items_per_row = render_state["items_per_row"]
+        row = (display_index - 1) // items_per_row
+        col = (display_index - 1) % items_per_row
+        self.gallery_grid.addWidget(container, row, col)
+        render_state["display_index"] = display_index + 1
+        self._update_gallery_container_size(render_state["display_index"] - 1)
+
+    def _get_gallery_thumbnail(self, measurement, render_state):
+        from PySide6.QtCore import QPointF
+
+        pixmap = self.get_measurement_pixmap(measurement, self._gallery_pixmap_cache)
+        if not pixmap or pixmap.isNull():
+            return None
+
+        measurement_id = measurement['id']
+        extra_rotation = measurement.get("gallery_rotation") or self.gallery_rotations.get(measurement_id, 0)
+        image_id = measurement.get('image_id')
+
+        image_color_cache = render_state["image_color_cache"]
+        stored_color = None
+        mpp = None
+        if image_id:
+            if image_id not in image_color_cache:
+                image_data = ImageDB.get_image(image_id)
+                image_color_cache[image_id] = (
+                    {
+                        "measure_color": image_data.get('measure_color') if image_data else None,
+                        "mpp": image_data.get('scale_microns_per_pixel') if image_data else None
+                    }
                 )
+            cached = image_color_cache[image_id]
+            stored_color = cached.get("measure_color") if cached else None
+            mpp = cached.get("mpp") if cached else None
 
-                if thumbnail:
-                    # Create container frame for thumbnail + rotate button
-                    container = QFrame()
-                    container.setFixedSize(thumbnail_size, thumbnail_size)
-                    container_layout = QVBoxLayout(container)
-                    container_layout.setContentsMargins(0, 0, 0, 0)
-                    container_layout.setSpacing(0)
+        measure_color = QColor(stored_color) if stored_color else self.default_measure_color
+        color_key = measure_color.name()
+        cache_key = self._gallery_thumbnail_cache_key(
+            measurement_id,
+            render_state["orient"],
+            render_state["uniform_scale"],
+            render_state["uniform_length_um"],
+            render_state["thumbnail_size"],
+            extra_rotation,
+            color_key
+        )
+        if cache_key in self._gallery_thumb_cache:
+            return self._gallery_thumb_cache[cache_key]
 
-                    # Create label for thumbnail
-                    label = QLabel2()
-                    label.setPixmap(thumbnail)
-                    label.setFixedSize(thumbnail_size, thumbnail_size)
-                    label.setStyleSheet("border: 2px solid #3498db; background: white;")
-                    label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-                    container_layout.addWidget(label)
+        points = [
+            QPointF(measurement['p1_x'], measurement['p1_y']),
+            QPointF(measurement['p2_x'], measurement['p2_y']),
+            QPointF(measurement['p3_x'], measurement['p3_y']),
+            QPointF(measurement['p4_x'], measurement['p4_y'])
+        ]
 
-                    if orient:
-                        # Add rotate button overlay in bottom-right corner
-                        rotate_btn = QToolButton(container)
-                        rotate_btn.setIcon(QIcon(str(Path(__file__).parent.parent / "assets" / "icons" / "rotate.svg")))
-                        rotate_btn.setToolTip("Rotate 180")
-                        rotate_btn.setProperty("instant_tooltip", True)
-                        rotate_btn.installEventFilter(self)
-                        rotate_btn.setFixedSize(24, 24)
-                        rotate_btn.setIconSize(QSize(22, 22))
-                        rotate_btn.setStyleSheet(
-                            "QToolButton { background: transparent; border: none; }"
-                            "QToolButton:hover { background-color: rgba(0, 0, 0, 0.08); }"
-                        )
-                        rotate_btn.move(thumbnail_size - 28, thumbnail_size - 28)
-                        rotate_btn.show()
-                        rotate_btn.clicked.connect(
-                            lambda checked, mid=measurement_id: self.rotate_gallery_thumbnail(mid)
-                        )
-                        rotate_btn.raise_()
+        uniform_length_px = None
+        if render_state["uniform_scale"] and render_state["uniform_length_um"]:
+            if not mpp or mpp <= 0:
+                p1 = points[0]
+                p2 = points[1]
+                p3 = points[2]
+                p4 = points[3]
+                line1_len = math.hypot(p2.x() - p1.x(), p2.y() - p1.y())
+                line2_len = math.hypot(p4.x() - p3.x(), p4.y() - p3.y())
+                length_px = max(line1_len, line2_len)
+                length_um = measurement.get("length_um")
+                if length_px > 0 and length_um:
+                    mpp = float(length_um) / float(length_px)
+            if mpp and mpp > 0:
+                uniform_length_px = float(render_state["uniform_length_um"]) / float(mpp)
 
-                    link_btn = QToolButton(container)
-                    link_btn.setIcon(QIcon(str(Path(__file__).parent.parent / "assets" / "icons" / "link.svg")))
-                    link_label = image_labels.get(image_id, "Image ?")
-                    link_btn.setToolTip(link_label)
-                    link_btn.setProperty("instant_tooltip", True)
-                    link_btn.installEventFilter(self)
-                    link_btn.setFixedSize(24, 24)
-                    link_btn.setIconSize(QSize(22, 22))
-                    link_btn.setStyleSheet(
-                        "QToolButton { background: transparent; border: none; }"
-                        "QToolButton:hover { background-color: rgba(0, 0, 0, 0.08); }"
-                    )
-                    link_btn.move(4, 4)
-                    link_btn.show()
-                    link_btn.clicked.connect(
-                        lambda checked, mid=measurement_id: self.open_measurement_from_gallery(mid)
-                    )
-                    link_btn.raise_()
+        thumbnail = self.create_spore_thumbnail(
+            pixmap,
+            points,
+            measurement['length_um'],
+            measurement['width_um'] or 0,
+            render_state["thumbnail_size"],
+            0,
+            orient=render_state["orient"],
+            extra_rotation=extra_rotation,
+            uniform_length_px=uniform_length_px,
+            color=measure_color
+        )
+        if thumbnail:
+            self._gallery_thumb_cache[cache_key] = thumbnail
+        return thumbnail
 
-                # Add to grid
-                row = (display_index - 1) // items_per_row
-                col = (display_index - 1) % items_per_row
-                self.gallery_grid.addWidget(container, row, col)
-                display_index += 1
-                if idx % 10 == 0 or idx == total:
-                    progress.setLabelText(f"Updating gallery... ({idx}/{total})")
-                    progress.setValue(idx)
-                    QApplication.processEvents()
-        finally:
-            progress.hide()
-            t_end = time.perf_counter()
-            self._gallery_last_refresh_time = t_end
-            self._gallery_refresh_in_progress = False
-            if self._gallery_refresh_pending:
-                self.schedule_gallery_refresh()
+    def _update_gallery_container_size(self, count):
+        if not hasattr(self, "gallery_container") or not hasattr(self, "gallery_grid"):
+            return
+        if count <= 0:
+            self.gallery_container.setMinimumWidth(0)
+            return
+        spacing = self.gallery_grid.spacing()
+        margins = self.gallery_grid.contentsMargins()
+        thumb = self._gallery_thumbnail_size()
+        width = count * thumb + max(0, count - 1) * spacing + margins.left() + margins.right()
+        height = thumb + margins.top() + margins.bottom()
+        self.gallery_container.setMinimumWidth(width)
+        self.gallery_container.setMinimumHeight(height)
 
     def _filter_gallery_measurements(self, measurements):
         """Apply gallery selection filter to measurements."""
@@ -4494,6 +6577,7 @@ class MainWindow(QMainWindow):
 
         plot_settings = getattr(self, "gallery_plot_settings", {}) or {}
         bins = int(plot_settings.get("bins", 8))
+        show_hist = bool(plot_settings.get("histogram", True))
         show_ci = bool(plot_settings.get("ci", True))
         show_legend = bool(plot_settings.get("legend", False))
         show_avg_q = bool(plot_settings.get("avg_q", True))
@@ -4514,34 +6598,33 @@ class MainWindow(QMainWindow):
             measurement_image_ids.append(m.get("image_id"))
 
         self.gallery_plot_figure.clear()
-        gs = self.gallery_plot_figure.add_gridspec(2, 3, height_ratios=[3, 1], hspace=0.3, wspace=0.3)
-        ax_scatter = self.gallery_plot_figure.add_subplot(gs[0, :])
-        ax_len = self.gallery_plot_figure.add_subplot(gs[1, 0])
-        ax_wid = self.gallery_plot_figure.add_subplot(gs[1, 1])
-        ax_q = self.gallery_plot_figure.add_subplot(gs[1, 2])
+        if show_hist:
+            gs = self.gallery_plot_figure.add_gridspec(
+                3, 2, width_ratios=[3.2, 1.0], hspace=0.4, wspace=0.3
+            )
+            ax_scatter = self.gallery_plot_figure.add_subplot(gs[:, 0])
+            ax_len = self.gallery_plot_figure.add_subplot(gs[0, 1])
+            ax_wid = self.gallery_plot_figure.add_subplot(gs[1, 1])
+            ax_q = self.gallery_plot_figure.add_subplot(gs[2, 1])
+        else:
+            gs = self.gallery_plot_figure.add_gridspec(1, 1)
+            ax_scatter = self.gallery_plot_figure.add_subplot(gs[0, 0])
+            ax_len = None
+            ax_wid = None
+            ax_q = None
         self.gallery_plot_figure.subplots_adjust(top=0.98, bottom=0.1)
 
         stats = self._stats_from_measurements(lengths, widths)
-        spore_stats = None
-        if self.active_observation_id:
-            spore_stats = MeasurementDB.get_statistics_for_observation(
-                self.active_observation_id,
-                measurement_category="spore"
-            )
-        if hasattr(self, "gallery_stats_label"):
-            if spore_stats:
-                self.gallery_stats_label.setText(self.format_literature_string(spore_stats))
-            else:
-                self.gallery_stats_label.setText("")
 
         if not lengths:
             self.gallery_scatter_id_map = {}
             self.gallery_hist_patches = {}
             ax_scatter.text(0.5, 0.5, "No measurements", ha="center", va="center")
             ax_scatter.set_axis_off()
-            ax_len.set_axis_off()
-            ax_wid.set_axis_off()
-            ax_q.set_axis_off()
+            if show_hist and ax_len and ax_wid and ax_q:
+                ax_len.set_axis_off()
+                ax_wid.set_axis_off()
+                ax_q.set_axis_off()
             self.gallery_plot_canvas.draw()
             return
 
@@ -4549,14 +6632,9 @@ class MainWindow(QMainWindow):
         W = np.asarray(widths)
         category = self.gallery_filter_combo.currentData() if hasattr(self, "gallery_filter_combo") else None
         normalized = self.normalize_measurement_category(category) if category else None
-        show_q = normalized == "spore"
+        show_q = normalized == "spores"
         Q = L / W
-        if category and category != "all":
-            category_label = self.format_measurement_category(category)
-        elif category == "all":
-            category_label = "All measurements"
-        else:
-            category_label = "Measurements"
+        category_label = self._format_observation_legend_label()
 
         self.gallery_hist_patches = {}
         self.gallery_scatter = None
@@ -4609,9 +6687,9 @@ class MainWindow(QMainWindow):
         max_len = float(np.max(L))
         min_len = float(np.min(L))
         min_w = float(np.min(W))
+        max_w = float(np.max(W))
         if show_q and show_avg_q:
             avg_q = float(np.mean(Q))
-            max_w = float(np.max(W))
             line_w = np.array([min_w, max_w])
             line_l = avg_q * line_w
             ax_scatter.plot(line_l, line_w, linestyle="--", color="#7f8c8d", label=f"Avg Q={avg_q:.1f}")
@@ -4622,47 +6700,23 @@ class MainWindow(QMainWindow):
             if q_min > 0:
                 start_x = max(min_len, min_w * q_min)
                 if start_x < max_len:
-                    ax_scatter.plot([start_x, max_len], [start_x / q_min, max_len / q_min],
+                    end_y = min(max_w, max_len / q_min)
+                    end_x = min(max_len, end_y * q_min)
+                    ax_scatter.plot([start_x, end_x], [start_x / q_min, end_x / q_min],
                                     color="black", linewidth=1.0, label="Q min/max")
             if q_max > 0:
                 start_x = max(min_len, min_w * q_max)
                 if start_x < max_len:
-                    ax_scatter.plot([start_x, max_len], [start_x / q_max, max_len / q_max],
+                    end_y = min(max_w, max_len / q_max)
+                    end_x = min(max_len, end_y * q_max)
+                    ax_scatter.plot([start_x, end_x], [start_x / q_max, end_x / q_max],
                                     color="black", linewidth=1.0)
 
         if show_ci and len(L) >= 3:
             ellipse = self._confidence_ellipse_points(L, W, confidence=0.95)
             if ellipse is not None:
                 ex, ey = ellipse
-                ax_scatter.plot(ex, ey, color="#e74c3c", linewidth=1.5, label="95% ellipse")
-
-        ref_l_min = self.reference_values.get("length_min")
-        ref_l_max = self.reference_values.get("length_max")
-        ref_l_avg = self.reference_values.get("length_p50")
-        ref_l_p05 = self.reference_values.get("length_p05")
-        ref_l_p50 = self.reference_values.get("length_p50")
-        ref_l_p95 = self.reference_values.get("length_p95")
-        ref_w_min = self.reference_values.get("width_min")
-        ref_w_max = self.reference_values.get("width_max")
-        ref_w_avg = self.reference_values.get("width_p50")
-        ref_w_p05 = self.reference_values.get("width_p05")
-        ref_w_p50 = self.reference_values.get("width_p50")
-        ref_w_p95 = self.reference_values.get("width_p95")
-        ref_q_min = self.reference_values.get("q_min")
-        ref_q_max = self.reference_values.get("q_max")
-        ref_q_avg = self.reference_values.get("q_p50")
-
-        def _fallback(low, mid_low, mid_high, high):
-            left = low if low is not None else mid_low
-            right = high if high is not None else mid_high
-            if left is None and right is not None:
-                left = right
-            if right is None and left is not None:
-                right = left
-            return left, right
-
-        l_left, l_right = _fallback(ref_l_min, ref_l_p05, ref_l_p95, ref_l_max)
-        w_bottom, w_top = _fallback(ref_w_min, ref_w_p05, ref_w_p95, ref_w_max)
+                ax_scatter.plot(ex, ey, color=hist_color, linewidth=1.5, label="95% ellipse")
 
         x_min = plot_settings.get("x_min")
         x_max = plot_settings.get("x_max")
@@ -4673,159 +6727,255 @@ class MainWindow(QMainWindow):
         if y_min is not None or y_max is not None:
             ax_scatter.set_ylim(bottom=y_min, top=y_max)
 
-        if l_left is not None and l_right is not None and w_bottom is not None and w_top is not None:
-            rect = Rectangle(
-                (l_left, w_bottom),
-                max(0.0, l_right - l_left),
-                max(0.0, w_top - w_bottom),
+        reference_series = []
+        if self.reference_series:
+            for entry in self.reference_series:
+                data = entry.get("data", entry) if isinstance(entry, dict) else entry
+                if isinstance(data, dict) and data:
+                    reference_series.append(data)
+        elif isinstance(self.reference_values, dict) and self.reference_values:
+            reference_series.append(self.reference_values)
+
+        def _fallback(low, mid_low, mid_high, high):
+            left = low if low is not None else mid_low
+            right = high if high is not None else mid_high
+            if left is None and right is not None:
+                left = right
+            if right is None and left is not None:
+                right = left
+            return left, right
+
+        def _add_range_ellipse(x_left, x_right, y_bottom, y_top, edge_color, linestyle):
+            if x_left is None or x_right is None or y_bottom is None or y_top is None:
+                return
+            width = abs(x_right - x_left)
+            height = abs(y_top - y_bottom)
+            if width <= 0 or height <= 0:
+                return
+            center = ((x_left + x_right) / 2.0, (y_bottom + y_top) / 2.0)
+            ellipse = Ellipse(
+                center,
+                width=width,
+                height=height,
                 fill=False,
-                edgecolor="#2c3e50",
+                edgecolor=edge_color,
                 linewidth=1.5,
-                linestyle=":"
+                linestyle=linestyle,
             )
-            ax_scatter.add_patch(rect)
-            ax_scatter.plot([], [], color="#2c3e50", linestyle=":", label="Ref min/max")
+            ax_scatter.add_patch(ellipse)
 
-        y0 = w_bottom if w_bottom is not None else min_w
-        y1 = w_top if w_top is not None else float(np.max(W))
-        x0 = l_left if l_left is not None else min_len
-        x1 = l_right if l_right is not None else float(np.max(L))
+        ref_palette = ["#e67e22", "#2ecc71", "#9b59b6", "#e74c3c", "#16a085", "#f39c12", "#34495e"]
+        ref_color_index = 0
+        reference_hist_overlays = []
+        reference_point_hist = []
 
-        def _vline(x, color, linestyle, label=None):
-            if x is None:
-                return
-            ax_scatter.plot([x, x], [y0, y1], color=color, linestyle=linestyle, linewidth=1.0, label=label)
+        for data in reference_series:
+            if not isinstance(data, dict) or not data:
+                continue
+            kind = data.get("source_kind") or ("points" if data.get("points") else "reference")
+            if kind == "points" and not self._reference_allow_points():
+                continue
+            color = ref_palette[ref_color_index % len(ref_palette)]
+            ref_color_index += 1
+            if color == hist_color:
+                color = ref_palette[ref_color_index % len(ref_palette)]
+                ref_color_index += 1
+            label = self._format_reference_series_label(data)
 
-        def _hline(y, color, linestyle, label=None):
-            if y is None:
-                return
-            ax_scatter.plot([x0, x1], [y, y], color=color, linestyle=linestyle, linewidth=1.0, label=label)
+            if kind == "points":
+                points = data.get("points") or []
+                ref_L = np.array([p.get("length_um") for p in points if p.get("length_um") is not None], dtype=float)
+                ref_W = np.array([p.get("width_um") for p in points if p.get("width_um") is not None], dtype=float)
+                if ref_L.size and ref_W.size:
+                    ax_scatter.scatter(ref_L, ref_W, s=18, alpha=0.7, color=color, label=label)
+                    if show_ci and ref_L.size >= 3:
+                        ref_ellipse = self._confidence_ellipse_points(ref_L, ref_W, confidence=0.95)
+                        if ref_ellipse is not None:
+                            ex, ey = ref_ellipse
+                            ax_scatter.plot(ex, ey, color=color, linewidth=1.5)
+                    if show_hist:
+                        ref_Q = ref_L / ref_W if show_q else None
+                        reference_point_hist.append({
+                            "L": ref_L,
+                            "W": ref_W,
+                            "Q": ref_Q,
+                            "color": color,
+                        })
+                continue
 
-        _vline(ref_l_min, "#2c3e50", ":", label="Ref min/max")
-        _vline(ref_l_max, "#2c3e50", ":")
-        _hline(ref_w_min, "#2c3e50", ":")
-        _hline(ref_w_max, "#2c3e50", ":")
-        _vline(ref_l_p05, "#e74c3c", ":")
-        if ref_l_p95 is not None:
-            y95 = y1
-            if ref_l_max is not None and ref_w_p95 is not None:
-                y95 = ref_w_p95
-            ax_scatter.plot([ref_l_p95, ref_l_p95], [y0, y95],
-                            color="#e74c3c", linestyle=":", linewidth=1.0)
-        _hline(ref_w_p05, "#e74c3c", ":")
-        if ref_w_p95 is not None:
-            x95 = x1
-            if ref_w_max is not None and ref_l_p95 is not None:
-                x95 = ref_l_p95
-            ax_scatter.plot([x0, x95], [ref_w_p95, ref_w_p95],
-                            color="#e74c3c", linestyle=":", linewidth=1.0)
+            ref_l_min = data.get("length_min")
+            ref_l_max = data.get("length_max")
+            ref_l_avg = data.get("length_p50")
+            ref_l_p05 = data.get("length_p05")
+            ref_l_p50 = data.get("length_p50")
+            ref_l_p95 = data.get("length_p95")
+            ref_w_min = data.get("width_min")
+            ref_w_max = data.get("width_max")
+            ref_w_avg = data.get("width_p50")
+            ref_w_p05 = data.get("width_p05")
+            ref_w_p50 = data.get("width_p50")
+            ref_w_p95 = data.get("width_p95")
+            ref_q_min = data.get("q_min")
+            ref_q_max = data.get("q_max")
+            ref_q_avg = data.get("q_p50")
 
-        if ref_l_avg is not None and ref_w_avg is not None:
-            ref_radius = 0.03 * max(float(np.max(L)), float(np.max(W)), ref_l_avg, ref_w_avg)
-            circ = Circle((ref_l_avg, ref_w_avg), ref_radius, fill=False, edgecolor="#27ae60", linewidth=1.5)
-            ax_scatter.add_patch(circ)
-            ax_scatter.plot([], [], color="#27ae60", label="Ref avg")
+            l_left, l_right = _fallback(ref_l_min, ref_l_p05, ref_l_p95, ref_l_max)
+            w_bottom, w_top = _fallback(ref_w_min, ref_w_p05, ref_w_p95, ref_w_max)
 
-        if show_q:
-            ref_line_max = ref_l_max if ref_l_max is not None else float(np.max(L))
-            if show_q_minmax:
-                if ref_q_min is not None and ref_q_min > 0:
-                    start_x = max(min_len, min_w * ref_q_min)
+            any_reference = any(
+                value is not None
+                for value in (l_left, l_right, w_bottom, w_top, ref_l_p05, ref_l_p95, ref_w_p05, ref_w_p95)
+            )
+
+            if l_left is not None and l_right is not None and w_bottom is not None and w_top is not None:
+                _add_range_ellipse(l_left, l_right, w_bottom, w_top, color, ":")
+            if show_ci and ref_l_p05 is not None and ref_l_p95 is not None and ref_w_p05 is not None and ref_w_p95 is not None:
+                _add_range_ellipse(ref_l_p05, ref_l_p95, ref_w_p05, ref_w_p95, color, "--")
+
+            if any_reference:
+                ax_scatter.plot([], [], color=color, linestyle=":", label=label)
+
+            if ref_l_avg is not None and ref_w_avg is not None:
+                ref_radius = 0.03 * max(float(np.max(L)), float(np.max(W)), ref_l_avg, ref_w_avg)
+                circ = Circle((ref_l_avg, ref_w_avg), ref_radius, fill=False, edgecolor=color, linewidth=1.5)
+                ax_scatter.add_patch(circ)
+
+            if show_q:
+                ref_line_max = ref_l_max if ref_l_max is not None else float(np.max(L))
+                if show_q_minmax:
+                    if ref_q_min is not None and ref_q_min > 0:
+                        start_x = max(min_len, min_w * ref_q_min)
+                        if start_x < ref_line_max:
+                            end_y = min(max_w, ref_line_max / ref_q_min)
+                            end_x = min(ref_line_max, end_y * ref_q_min)
+                            ax_scatter.plot([start_x, end_x], [start_x / ref_q_min, end_x / ref_q_min],
+                                            color=color, linestyle=":", linewidth=1.0)
+                    if ref_q_max is not None and ref_q_max > 0:
+                        start_x = max(min_len, min_w * ref_q_max)
+                        if start_x < ref_line_max:
+                            end_y = min(max_w, ref_line_max / ref_q_max)
+                            end_x = min(ref_line_max, end_y * ref_q_max)
+                            ax_scatter.plot([start_x, end_x], [start_x / ref_q_max, end_x / ref_q_max],
+                                            color=color, linestyle=":", linewidth=1.0)
+                if show_avg_q and ref_q_avg is not None and ref_q_avg > 0:
+                    start_x = max(min_len, min_w * ref_q_avg)
                     if start_x < ref_line_max:
-                        ax_scatter.plot([start_x, ref_line_max], [start_x / ref_q_min, ref_line_max / ref_q_min],
-                                        color="#2c3e50", linestyle=":")
-                if ref_q_max is not None and ref_q_max > 0:
-                    start_x = max(min_len, min_w * ref_q_max)
-                    if start_x < ref_line_max:
-                        ax_scatter.plot([start_x, ref_line_max], [start_x / ref_q_max, ref_line_max / ref_q_max],
-                                        color="#2c3e50", linestyle=":")
-            if show_avg_q and ref_q_avg is not None and ref_q_avg > 0:
-                start_x = max(min_len, min_w * ref_q_avg)
-                if start_x < ref_line_max:
-                    ax_scatter.plot([start_x, ref_line_max], [start_x / ref_q_avg, ref_line_max / ref_q_avg],
-                                    color="#8e44ad", linestyle="-.", label=f"Ref Q={ref_q_avg:.1f}")
+                        ax_scatter.plot([start_x, ref_line_max], [start_x / ref_q_avg, ref_line_max / ref_q_avg],
+                                        color=color, linestyle="-.", linewidth=1.0)
 
+            reference_hist_overlays.append({
+                "color": color,
+                "length_min": ref_l_min,
+                "length_max": ref_l_max,
+                "length_p05": ref_l_p05,
+                "length_p95": ref_l_p95,
+                "width_min": ref_w_min,
+                "width_max": ref_w_max,
+                "width_p05": ref_w_p05,
+                "width_p95": ref_w_p95,
+            })
         handles, labels = ax_scatter.get_legend_handles_labels()
         if labels:
             ax_scatter.legend(loc="best", fontsize=8)
 
-        l_bins = np.histogram_bin_edges(L, bins=bins)
-        w_bins = np.histogram_bin_edges(W, bins=bins)
-        q_bins = np.histogram_bin_edges(Q, bins=bins) if show_q else None
+        if show_hist:
+            l_bins = np.histogram_bin_edges(L, bins=bins)
+            w_bins = np.histogram_bin_edges(W, bins=bins)
+            q_bins = np.histogram_bin_edges(Q, bins=bins) if show_q else None
 
-        if show_legend and image_labels:
-            grouped = {}
-            for length, width, measurement_id, image_id in zip(
-                L, W, measurement_ids, measurement_image_ids
-            ):
-                grouped.setdefault(image_id, {"L": [], "W": [], "Q": []})
-                grouped[image_id]["L"].append(length)
-                grouped[image_id]["W"].append(width)
-            if show_q:
-                for length, width, image_id in zip(L, W, measurement_image_ids):
+            if show_legend and image_labels:
+                grouped = {}
+                for length, width, measurement_id, image_id in zip(
+                    L, W, measurement_ids, measurement_image_ids
+                ):
                     grouped.setdefault(image_id, {"L": [], "W": [], "Q": []})
-                    grouped[image_id]["Q"].append(length / width)
-
-            for image_id in image_labels.keys():
-                if image_id not in grouped:
-                    continue
-                color = image_color_map.get(image_id) or ax_scatter._get_lines.get_next_color()
-                image_color_map[image_id] = color
-                data = grouped[image_id]
-                _, l_bins, l_patches = ax_len.hist(data["L"], bins=l_bins, color=color, alpha=0.35)
-                _, w_bins, w_patches = ax_wid.hist(data["W"], bins=w_bins, color=color, alpha=0.35)
+                    grouped[image_id]["L"].append(length)
+                    grouped[image_id]["W"].append(width)
                 if show_q:
-                    _, q_bins, q_patches = ax_q.hist(data["Q"], bins=q_bins, color=color, alpha=0.35)
+                    for length, width, image_id in zip(L, W, measurement_image_ids):
+                        grouped.setdefault(image_id, {"L": [], "W": [], "Q": []})
+                        grouped[image_id]["Q"].append(length / width)
+
+                for image_id in image_labels.keys():
+                    if image_id not in grouped:
+                        continue
+                    color = image_color_map.get(image_id) or ax_scatter._get_lines.get_next_color()
+                    image_color_map[image_id] = color
+                    data = grouped[image_id]
+                    _, l_bins, l_patches = ax_len.hist(data["L"], bins=l_bins, color=color, alpha=0.35)
+                    _, w_bins, w_patches = ax_wid.hist(data["W"], bins=w_bins, color=color, alpha=0.35)
+                    if show_q:
+                        _, q_bins, q_patches = ax_q.hist(data["Q"], bins=q_bins, color=color, alpha=0.35)
+                    for i, patch in enumerate(l_patches):
+                        patch.set_picker(True)
+                        self.gallery_hist_patches[patch] = ("L", l_bins[i], l_bins[i + 1])
+                    for i, patch in enumerate(w_patches):
+                        patch.set_picker(True)
+                        self.gallery_hist_patches[patch] = ("W", w_bins[i], w_bins[i + 1])
+                    if show_q:
+                        for i, patch in enumerate(q_patches):
+                            patch.set_picker(True)
+                            self.gallery_hist_patches[patch] = ("Q", q_bins[i], q_bins[i + 1])
+            else:
+                _, l_bins, l_patches = ax_len.hist(L, bins=l_bins, color=hist_color)
+                ax_len.set_ylabel("Count")
                 for i, patch in enumerate(l_patches):
                     patch.set_picker(True)
                     self.gallery_hist_patches[patch] = ("L", l_bins[i], l_bins[i + 1])
+
+                _, w_bins, w_patches = ax_wid.hist(W, bins=w_bins, color=hist_color)
                 for i, patch in enumerate(w_patches):
                     patch.set_picker(True)
                     self.gallery_hist_patches[patch] = ("W", w_bins[i], w_bins[i + 1])
+
                 if show_q:
+                    _, q_bins, q_patches = ax_q.hist(Q, bins=q_bins, color=hist_color)
                     for i, patch in enumerate(q_patches):
                         patch.set_picker(True)
                         self.gallery_hist_patches[patch] = ("Q", q_bins[i], q_bins[i + 1])
-        else:
-            _, l_bins, l_patches = ax_len.hist(L, bins=l_bins, color=hist_color)
+            for entry in reference_point_hist:
+                ref_L = entry.get("L")
+                ref_W = entry.get("W")
+                ref_Q = entry.get("Q") if show_q else None
+                color = entry.get("color") or "#95a5a6"
+                if ref_L is not None and len(ref_L):
+                    ax_len.hist(ref_L, bins=l_bins, color=color, alpha=0.25)
+                if ref_W is not None and len(ref_W):
+                    ax_wid.hist(ref_W, bins=w_bins, color=color, alpha=0.25)
+                if show_q and ref_Q is not None and len(ref_Q):
+                    ax_q.hist(ref_Q, bins=q_bins, color=color, alpha=0.25)
+            for overlay in reference_hist_overlays:
+                color = overlay.get("color") or "#2c3e50"
+                if overlay.get("length_p05") is not None:
+                    ax_len.axvline(overlay["length_p05"], color=color, linestyle="--", linewidth=1.2)
+                if overlay.get("length_p95") is not None:
+                    ax_len.axvline(overlay["length_p95"], color=color, linestyle="--", linewidth=1.2)
+                if overlay.get("width_p05") is not None:
+                    ax_wid.axvline(overlay["width_p05"], color=color, linestyle="--", linewidth=1.2)
+                if overlay.get("width_p95") is not None:
+                    ax_wid.axvline(overlay["width_p95"], color=color, linestyle="--", linewidth=1.2)
+                if overlay.get("length_min") is not None:
+                    ax_len.axvline(overlay["length_min"], color=color, linestyle=":", linewidth=1.0)
+                if overlay.get("length_max") is not None:
+                    ax_len.axvline(overlay["length_max"], color=color, linestyle=":", linewidth=1.0)
+                if overlay.get("width_min") is not None:
+                    ax_wid.axvline(overlay["width_min"], color=color, linestyle=":", linewidth=1.0)
+                if overlay.get("width_max") is not None:
+                    ax_wid.axvline(overlay["width_max"], color=color, linestyle=":", linewidth=1.0)
+            ax_len.set_xlabel(self.tr("Length (μm)"))
             ax_len.set_ylabel("Count")
-            for i, patch in enumerate(l_patches):
-                patch.set_picker(True)
-                self.gallery_hist_patches[patch] = ("L", l_bins[i], l_bins[i + 1])
-
-            _, w_bins, w_patches = ax_wid.hist(W, bins=w_bins, color=hist_color)
-            for i, patch in enumerate(w_patches):
-                patch.set_picker(True)
-                self.gallery_hist_patches[patch] = ("W", w_bins[i], w_bins[i + 1])
-
+            ax_wid.set_xlabel(self.tr("Width (μm)"))
             if show_q:
-                _, q_bins, q_patches = ax_q.hist(Q, bins=q_bins, color=hist_color)
-                for i, patch in enumerate(q_patches):
-                    patch.set_picker(True)
-                    self.gallery_hist_patches[patch] = ("Q", q_bins[i], q_bins[i + 1])
-        if ref_l_p05 is not None:
-            ax_len.axvline(ref_l_p05, color="#e74c3c", linestyle=":", linewidth=1.2)
-        if ref_l_p95 is not None:
-            ax_len.axvline(ref_l_p95, color="#e74c3c", linestyle=":", linewidth=1.2)
-        if ref_w_p05 is not None:
-            ax_wid.axvline(ref_w_p05, color="#e74c3c", linestyle=":", linewidth=1.2)
-        if ref_w_p95 is not None:
-            ax_wid.axvline(ref_w_p95, color="#e74c3c", linestyle=":", linewidth=1.2)
-        if ref_l_min is not None:
-            ax_len.axvline(ref_l_min, color="#2c3e50", linestyle=":", linewidth=1.0)
-        if ref_l_max is not None:
-            ax_len.axvline(ref_l_max, color="#2c3e50", linestyle=":", linewidth=1.0)
-        if ref_w_min is not None:
-            ax_wid.axvline(ref_w_min, color="#2c3e50", linestyle=":", linewidth=1.0)
-        if ref_w_max is not None:
-            ax_wid.axvline(ref_w_max, color="#2c3e50", linestyle=":", linewidth=1.0)
-        ax_len.set_xlabel(self.tr("Length (μm)"))
-        ax_len.set_ylabel("Count")
-        ax_wid.set_xlabel(self.tr("Width (μm)"))
-        if show_q:
-            ax_q.set_xlabel("Q (L/W)")
+                ax_q.set_xlabel("Q (L/W)")
+            else:
+                ax_q.set_axis_off()
         else:
-            ax_q.set_axis_off()
+            if ax_len:
+                ax_len.set_axis_off()
+            if ax_wid:
+                ax_wid.set_axis_off()
+            if ax_q:
+                ax_q.set_axis_off()
 
         self.gallery_plot_canvas.draw()
 
@@ -4833,16 +6983,18 @@ class MainWindow(QMainWindow):
         """Export analysis graphs to an SVG file."""
         if not hasattr(self, "gallery_plot_figure"):
             return
+        default_path = str(Path(self._get_default_export_dir()) / "plot.svg")
         filename, _ = QFileDialog.getSaveFileName(
             self,
             "Export Plot",
-            "",
+            default_path,
             "SVG Files (*.svg)"
         )
         if not filename:
             return
         if not filename.lower().endswith(".svg"):
             filename = f"{filename}.svg"
+        self._remember_export_dir(filename)
         try:
             self.gallery_plot_figure.savefig(filename, format="svg")
             self.measure_status_label.setText(f"✓ Plot exported to {Path(filename).name}")
@@ -4889,6 +7041,89 @@ class MainWindow(QMainWindow):
             label = f"{name}: {min_val:.2f} - {max_val:.2f}"
         self.gallery_filter_label.setText(label)
 
+    def _build_stats_text(self):
+        if not self.active_observation_id:
+            return None, None, None
+        obs = ObservationDB.get_observation(self.active_observation_id)
+        if not obs:
+            return None, None, None
+        genus = obs.get("genus") or ""
+        species = obs.get("species") or obs.get("species_guess") or ""
+        display_name = f"{genus} {species}".strip()
+        if not display_name:
+            display_name = obs.get("display_name") or obs.get("name") or self.tr("Observation")
+        date_value = obs.get("date") or ""
+        first_line = f"{display_name}\t{date_value}".rstrip()
+
+        category = self.gallery_filter_combo.currentData() if hasattr(self, "gallery_filter_combo") else None
+        normalized = self.normalize_measurement_category(category) if category else None
+        if normalized == "spores":
+            spore_stats = MeasurementDB.get_statistics_for_observation(
+                self.active_observation_id,
+                measurement_category="spores"
+            )
+            stats_line = self.format_literature_string(spore_stats) if spore_stats else self.tr("Spores: -")
+        else:
+            if category and category != "all":
+                stats_line = self.format_measurement_category(category)
+            else:
+                stats_line = self.tr("All measurements")
+
+        measurements = MeasurementDB.get_measurements_for_observation(self.active_observation_id)
+        rows = ["Width\tLength\tQ"]
+        for measurement in measurements or []:
+            if category and category != "all":
+                m_category = self.normalize_measurement_category(measurement.get("measurement_type"))
+                if m_category != normalized:
+                    continue
+            length = measurement.get("length_um")
+            width = measurement.get("width_um")
+            if length is None or width is None or width <= 0:
+                continue
+            q = length / width if width > 0 else 0
+            rows.append(f"{width:.2f}\t{length:.2f}\t{q:.2f}")
+
+        text = "\n".join([first_line, stats_line] + rows)
+        return text, display_name, date_value
+
+    def copy_spore_stats(self):
+        """Copy stats + table to clipboard."""
+        text, _name, _date = self._build_stats_text()
+        if not text:
+            QMessageBox.warning(self, self.tr("No Observation"), self.tr("Select an observation first."))
+            return
+        QApplication.clipboard().setText(text)
+
+    def save_spore_stats(self):
+        """Save stats + table to a text file."""
+        text, name, date_value = self._build_stats_text()
+        if not text:
+            QMessageBox.warning(self, self.tr("No Observation"), self.tr("Select an observation first."))
+            return
+        default_name = name or "stats"
+        safe_name = re.sub(r'[<>:"/\\\\|?*]', "_", str(default_name))
+        safe_date = re.sub(r'[<>:"/\\\\|?*]', "_", str(date_value)).strip()
+        if safe_date:
+            suggested = f"{safe_name} {safe_date} stats.txt"
+        else:
+            suggested = f"{safe_name} stats.txt"
+        default_path = str(Path(self._get_default_export_dir()) / suggested)
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            self.tr("Save stats"),
+            default_path,
+            "Text Files (*.txt)"
+        )
+        if not filename:
+            return
+        if not filename.lower().endswith(".txt"):
+            filename = f"{filename}.txt"
+        self._remember_export_dir(filename)
+        try:
+            Path(filename).write_text(text, encoding="utf-8")
+        except Exception as exc:
+            QMessageBox.warning(self, self.tr("Save Failed"), str(exc))
+
     def _get_measurement_by_id(self, measurement_id):
         """Load a measurement record by id."""
         conn = get_connection()
@@ -4928,6 +7163,12 @@ class MainWindow(QMainWindow):
         measurement_id = measurement.get("id")
         if not measurement_id:
             self._clear_measurement_highlight()
+            return
+        lines_list = self.measurement_lines.get(measurement_id, [])
+        if len(lines_list) == 1:
+            indices = getattr(self, "_line_index_map", {}).get(measurement_id, [])
+            self.image_label.set_selected_line_indices(indices)
+            self.image_label.set_selected_rect_index(-1)
             return
         if self.measure_mode == "lines":
             indices = getattr(self, "_line_index_map", {}).get(measurement_id, [])
@@ -5249,19 +7490,20 @@ class MainWindow(QMainWindow):
                 if name:
                     default_name = f"{name} - gallery"
 
+        default_path = str(Path(self._get_default_export_dir()) / f"{default_name}.png")
         filename, _ = QFileDialog.getSaveFileName(
             self,
             "Export Gallery Composite",
-            f"{default_name}.png",
+            default_path,
             "PNG Images (*.png);;JPEG Images (*.jpg)"
         )
 
         if not filename:
             return
+        self._remember_export_dir(filename)
 
         # Create composite
-        items_per_row = self.gallery_columns_spin.value() if hasattr(self, "gallery_columns_spin") else 4
-        thumbnail_size = 200
+        thumbnail_size = self._gallery_thumbnail_size()
         thumbnails = []
         image_color_cache = {}
         pixmap_cache = {}
@@ -5272,6 +7514,7 @@ class MainWindow(QMainWindow):
         filtered_measurements = self._filter_gallery_measurements(valid_measurements)
         if not filtered_measurements:
             return
+        items_per_row = max(1, int(math.ceil(math.sqrt(len(filtered_measurements)))))
 
         uniform_length_um = None
         if uniform_scale:
@@ -5426,6 +7669,13 @@ class MainWindow(QMainWindow):
     def apply_vernacular_language_change(self):
         if hasattr(self, "observations_tab"):
             self.observations_tab.apply_vernacular_language_change()
+        if hasattr(self, "ref_vernacular_label"):
+            self.ref_vernacular_label.setText(self._reference_vernacular_label())
+        if hasattr(self, "ref_vernacular_input"):
+            lang = normalize_vernacular_language(SettingsDB.get_setting("vernacular_language", "no"))
+            db_path = resolve_vernacular_db_path(lang)
+            if db_path:
+                self.ref_vernacular_db = VernacularDB(db_path, language_code=lang)
         for widget in QApplication.topLevelWidgets():
             if widget is self:
                 continue
@@ -5448,8 +7698,15 @@ class MainWindow(QMainWindow):
     def _populate_measure_categories(self):
         categories = SettingsDB.get_list_setting(
             "measure_categories",
-            ["Spore", "Basidia", "Pleurocystidia", "Cheilocystidia", "Caulocystidia", "Other"]
+            ["Spores", "Field", "Pleurocystidia", "Cheilocystidia", "Caulocystidia", "Other"]
         )
+        categories = [
+            "Spores" if str(c).strip().lower() == "spore" else c
+            for c in categories
+            if str(c).strip().lower() != "basidia"
+        ]
+        if not any(str(c).strip().lower() == "field" for c in categories):
+            categories.insert(1, "Field")
         if not hasattr(self, "measure_category_combo"):
             return
         current = self.measure_category_combo.currentData()
@@ -5467,11 +7724,26 @@ class MainWindow(QMainWindow):
 
     def on_gallery_thumbnail_setting_changed(self):
         """Persist gallery settings and refresh thumbnails."""
+        if hasattr(self, "ref_source_input"):
+            self._populate_reference_panel_sources()
         self._save_gallery_settings()
         self.schedule_gallery_refresh()
 
     def on_gallery_plot_setting_changed(self):
         """Persist gallery settings and refresh plots only."""
+        self.gallery_plot_settings = {
+            "bins": int(self.gallery_bins_spin.value()) if hasattr(self, "gallery_bins_spin") else 8,
+            "histogram": bool(self.gallery_hist_checkbox.isChecked()) if hasattr(self, "gallery_hist_checkbox") else True,
+            "ci": bool(self.gallery_ci_checkbox.isChecked()) if hasattr(self, "gallery_ci_checkbox") else True,
+            "legend": bool(getattr(self, "gallery_plot_settings", {}).get("legend", False)),
+            "avg_q": bool(self.gallery_avg_q_checkbox.isChecked()) if hasattr(self, "gallery_avg_q_checkbox") else False,
+            "q_minmax": bool(self.gallery_q_minmax_checkbox.isChecked()) if hasattr(self, "gallery_q_minmax_checkbox") else False,
+            "x_min": None,
+            "x_max": None,
+            "y_min": None,
+            "y_max": None,
+        }
+        self._sync_gallery_histogram_controls()
         self._save_gallery_settings()
         self.update_graph_plots_only()
 
@@ -5495,45 +7767,13 @@ class MainWindow(QMainWindow):
         ci_checkbox.setChecked(bool(settings.get("ci", True)))
         layout.addRow("", ci_checkbox)
 
-        legend_checkbox = QCheckBox(self.tr("Image legend"))
-        legend_checkbox.setChecked(bool(settings.get("legend", False)))
-        layout.addRow("", legend_checkbox)
-
         avg_q_checkbox = QCheckBox(self.tr("Plot Avg Q"))
-        avg_q_checkbox.setChecked(bool(settings.get("avg_q", True)))
+        avg_q_checkbox.setChecked(bool(settings.get("avg_q", False)))
         layout.addRow("", avg_q_checkbox)
 
         q_minmax_checkbox = QCheckBox(self.tr("Plot Q min/max"))
-        q_minmax_checkbox.setChecked(bool(settings.get("q_minmax", True)))
+        q_minmax_checkbox.setChecked(bool(settings.get("q_minmax", False)))
         layout.addRow("", q_minmax_checkbox)
-
-        def _build_limit_spin():
-            spin = QDoubleSpinBox()
-            spin.setRange(-1e9, 1e9)
-            spin.setDecimals(4)
-            spin.setSpecialValueText("Auto")
-            return spin
-
-        x_min_spin = _build_limit_spin()
-        x_max_spin = _build_limit_spin()
-        y_min_spin = _build_limit_spin()
-        y_max_spin = _build_limit_spin()
-
-        def _apply_limit_value(spin, value):
-            if value is None:
-                spin.setValue(spin.minimum())
-            else:
-                spin.setValue(float(value))
-
-        _apply_limit_value(x_min_spin, settings.get("x_min"))
-        _apply_limit_value(x_max_spin, settings.get("x_max"))
-        _apply_limit_value(y_min_spin, settings.get("y_min"))
-        _apply_limit_value(y_max_spin, settings.get("y_max"))
-
-        layout.addRow("X min:", x_min_spin)
-        layout.addRow("X max:", x_max_spin)
-        layout.addRow("Y min:", y_min_spin)
-        layout.addRow("Y max:", y_max_spin)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(dialog.accept)
@@ -5543,19 +7783,16 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.Accepted:
             return
 
-        def _read_limit_value(spin):
-            return None if spin.value() == spin.minimum() else float(spin.value())
-
         self.gallery_plot_settings = {
             "bins": int(bins_spin.value()),
             "ci": bool(ci_checkbox.isChecked()),
-            "legend": bool(legend_checkbox.isChecked()),
+            "legend": bool(settings.get("legend", False)),
             "avg_q": bool(avg_q_checkbox.isChecked()),
             "q_minmax": bool(q_minmax_checkbox.isChecked()),
-            "x_min": _read_limit_value(x_min_spin),
-            "x_max": _read_limit_value(x_max_spin),
-            "y_min": _read_limit_value(y_min_spin),
-            "y_max": _read_limit_value(y_max_spin),
+            "x_min": None,
+            "x_max": None,
+            "y_min": None,
+            "y_max": None,
         }
 
         self._save_gallery_settings()
@@ -5584,15 +7821,15 @@ class MainWindow(QMainWindow):
         return {
             "measurement_type": self.gallery_filter_combo.currentData() if hasattr(self, "gallery_filter_combo") else None,
             "bins": int(plot_settings.get("bins", 8)),
+            "histogram": bool(plot_settings.get("histogram", True)),
             "ci": bool(plot_settings.get("ci", True)),
             "legend": bool(plot_settings.get("legend", False)),
             "avg_q": bool(plot_settings.get("avg_q", True)),
             "q_minmax": bool(plot_settings.get("q_minmax", True)),
-            "x_min": plot_settings.get("x_min"),
-            "x_max": plot_settings.get("x_max"),
-            "y_min": plot_settings.get("y_min"),
-            "y_max": plot_settings.get("y_max"),
-            "columns": self.gallery_columns_spin.value() if hasattr(self, "gallery_columns_spin") else 4,
+            "x_min": None,
+            "x_max": None,
+            "y_min": None,
+            "y_max": None,
             "orient": bool(self.orient_checkbox.isChecked()) if hasattr(self, "orient_checkbox") else False,
             "uniform_scale": bool(self.uniform_scale_checkbox.isChecked()) if hasattr(self, "uniform_scale_checkbox") else False,
         }
@@ -5610,19 +7847,37 @@ class MainWindow(QMainWindow):
             return
         self.gallery_plot_settings = {
             "bins": int(settings.get("bins", self.gallery_plot_settings.get("bins", 8))),
+            "histogram": bool(settings.get("histogram", self.gallery_plot_settings.get("histogram", True))),
             "ci": bool(settings.get("ci", self.gallery_plot_settings.get("ci", True))),
             "legend": bool(settings.get("legend", self.gallery_plot_settings.get("legend", False))),
-            "avg_q": bool(settings.get("avg_q", self.gallery_plot_settings.get("avg_q", True))),
-            "q_minmax": bool(settings.get("q_minmax", self.gallery_plot_settings.get("q_minmax", True))),
-            "x_min": settings.get("x_min"),
-            "x_max": settings.get("x_max"),
-            "y_min": settings.get("y_min"),
-            "y_max": settings.get("y_max"),
+            "avg_q": bool(settings.get("avg_q", self.gallery_plot_settings.get("avg_q", False))),
+            "q_minmax": bool(settings.get("q_minmax", self.gallery_plot_settings.get("q_minmax", False))),
+            "x_min": None,
+            "x_max": None,
+            "y_min": None,
+            "y_max": None,
         }
-        if hasattr(self, "gallery_columns_spin"):
-            self.gallery_columns_spin.blockSignals(True)
-            self.gallery_columns_spin.setValue(int(settings.get("columns", self.gallery_columns_spin.value())))
-            self.gallery_columns_spin.blockSignals(False)
+        if hasattr(self, "gallery_bins_spin"):
+            self.gallery_bins_spin.blockSignals(True)
+            self.gallery_bins_spin.setValue(int(self.gallery_plot_settings.get("bins", 8)))
+            self.gallery_bins_spin.blockSignals(False)
+        if hasattr(self, "gallery_hist_checkbox"):
+            self.gallery_hist_checkbox.blockSignals(True)
+            self.gallery_hist_checkbox.setChecked(bool(self.gallery_plot_settings.get("histogram", True)))
+            self.gallery_hist_checkbox.blockSignals(False)
+        if hasattr(self, "gallery_ci_checkbox"):
+            self.gallery_ci_checkbox.blockSignals(True)
+            self.gallery_ci_checkbox.setChecked(bool(self.gallery_plot_settings.get("ci", True)))
+            self.gallery_ci_checkbox.blockSignals(False)
+        if hasattr(self, "gallery_avg_q_checkbox"):
+            self.gallery_avg_q_checkbox.blockSignals(True)
+            self.gallery_avg_q_checkbox.setChecked(bool(self.gallery_plot_settings.get("avg_q", False)))
+            self.gallery_avg_q_checkbox.blockSignals(False)
+        if hasattr(self, "gallery_q_minmax_checkbox"):
+            self.gallery_q_minmax_checkbox.blockSignals(True)
+            self.gallery_q_minmax_checkbox.setChecked(bool(self.gallery_plot_settings.get("q_minmax", False)))
+            self.gallery_q_minmax_checkbox.blockSignals(False)
+        self._sync_gallery_histogram_controls()
         if hasattr(self, "orient_checkbox"):
             self.orient_checkbox.blockSignals(True)
             self.orient_checkbox.setChecked(bool(settings.get("orient", False)))
@@ -5633,6 +7888,7 @@ class MainWindow(QMainWindow):
             self.uniform_scale_checkbox.blockSignals(False)
         if settings.get("measurement_type"):
             self._pending_gallery_category = settings.get("measurement_type")
+        self._set_gallery_strip_height()
 
     def update_graph_plots_only(self):
         """Update analysis graphs without rebuilding thumbnails."""
@@ -5642,16 +7898,18 @@ class MainWindow(QMainWindow):
         self.update_graph_plots(all_measurements)
     def export_database_bundle(self):
         """Export DB and data folders as a zip file."""
+        default_path = str(Path(self._get_default_export_dir()) / "MycoLog_DB.zip")
         filename, _ = QFileDialog.getSaveFileName(
             self,
             "Export Database",
-            "MycoLog_DB.zip",
+            default_path,
             "Zip Files (*.zip)"
         )
         if not filename:
             return
         if not filename.lower().endswith(".zip"):
             filename += ".zip"
+        self._remember_export_dir(filename)
         try:
             export_db_bundle(filename)
             QMessageBox.information(self, "Export Complete", f"Saved to {filename}")
@@ -5709,12 +7967,12 @@ class MainWindow(QMainWindow):
         if self.current_image_id:
             stats = MeasurementDB.get_statistics_for_image(
                 self.current_image_id,
-                measurement_category='spore'
+                measurement_category='spores'
             )
         elif self.active_observation_id:
             stats = MeasurementDB.get_statistics_for_observation(
                 self.active_observation_id,
-                measurement_category='spore'
+                measurement_category='spores'
             )
 
         if hasattr(self, "stats_table"):
@@ -5723,7 +7981,7 @@ class MainWindow(QMainWindow):
         if self.active_observation_id:
             obs_stats = MeasurementDB.get_statistics_for_observation(
                 self.active_observation_id,
-                measurement_category='spore'
+                measurement_category='spores'
             )
             if obs_stats:
                 ObservationDB.update_spore_statistics(
@@ -5856,8 +8114,11 @@ class MainWindow(QMainWindow):
 
     def _handle_reference_plot(self, data):
         """Plot reference values without saving."""
-        self.reference_values = data
-        self.update_graph_plots_only()
+        self.reference_values = data or {}
+        if data:
+            self._set_reference_series([data])
+        else:
+            self._set_reference_series([])
 
     def _handle_reference_save(self, data):
         """Save reference values and update plot."""
@@ -5865,7 +8126,18 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing Species", "Please enter genus and species to save.")
             return
         ReferenceDB.set_reference(data)
+        self._refresh_reference_species_availability()
         return
+
+    def _refresh_reference_species_availability(self, force_refresh: bool = True) -> None:
+        if not hasattr(self, "species_availability"):
+            return
+        self.species_availability.get_cache(force_refresh=force_refresh)
+        if hasattr(self, "ref_genus_input") and hasattr(self, "ref_species_input"):
+            genus = self.ref_genus_input.text().strip()
+            species_text = self.ref_species_input.text().strip()
+            if genus:
+                self._update_ref_species_suggestions(genus, species_text)
 
     def load_reference_values(self):
         """Load reference values for the active observation."""
@@ -5878,10 +8150,38 @@ class MainWindow(QMainWindow):
         genus = obs.get("genus")
         species = obs.get("species")
         if not (genus and species):
+            if hasattr(self, "ref_genus_input"):
+                self.ref_genus_input.setText("")
+            if hasattr(self, "ref_species_input"):
+                self.ref_species_input.setText("")
+            if hasattr(self, "ref_source_input"):
+                self.ref_source_input.setCurrentText("")
+            if hasattr(self, "ref_vernacular_input"):
+                self.ref_vernacular_input.setText("")
+            self._apply_reference_panel_values({})
             return
         ref = ReferenceDB.get_reference(genus, species)
         if ref:
             self.reference_values = ref
+        if hasattr(self, "ref_genus_input"):
+            self.ref_genus_input.setText(genus or "")
+        if hasattr(self, "ref_species_input"):
+            self.ref_species_input.setText(species or "")
+        if hasattr(self, "ref_source_input"):
+            self._populate_reference_panel_sources()
+            source = self.reference_values.get("source") if self.reference_values else None
+            if source:
+                idx = self.ref_source_input.findText(source)
+                if idx >= 0:
+                    self.ref_source_input.setCurrentIndex(idx)
+                else:
+                    self.ref_source_input.setCurrentText(source)
+        self._apply_reference_panel_values(self.reference_values)
+        self._maybe_set_ref_vernacular_from_taxon()
+        if self.reference_values:
+            self._set_reference_series([self.reference_values])
+        else:
+            self._set_reference_series([])
 
     def open_reference_values_dialog(self):
         """Open the reference values dialog and save data."""
@@ -5980,7 +8280,8 @@ class MainWindow(QMainWindow):
                     "contrast_default",
                     SettingsDB.get_list_setting("contrast_options", ["BF", "DF", "DIC", "Phase"])[0]
                 ),
-                calibration_id=calibration_id
+                calibration_id=calibration_id,
+                resample_scale_factor=1.0,
             )
 
             image_data = ImageDB.get_image(image_id)

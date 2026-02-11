@@ -242,6 +242,18 @@ def measure(rot_gray: np.ndarray, axis: Axis, band: tuple[int, int]) -> dict:
     inv_sm = gauss_smooth(prof.max() - prof, 2.5)
     peaks = find_peaks(inv_sm, min_height=inv_sm.max()*0.25,
                       min_distance=15, min_prominence=inv_sm.max()*0.15)
+
+    spacing_est = None
+    if len(peaks) >= 2:
+        diffs = np.diff(peaks.astype(np.float64))
+        if diffs.size:
+            spacing_est = float(np.median(diffs))
+    edge_search = 25
+    if spacing_est and np.isfinite(spacing_est) and spacing_est > 0:
+        edge_search = max(25, int(0.45 * spacing_est))
+        limit = int(0.49 * spacing_est)
+        if limit > 0:
+            edge_search = min(edge_search, limit)
     
     centers_raw = np.array([parabola_refine(prof, int(p)) for p in peaks])
     
@@ -254,19 +266,22 @@ def measure(rot_gray: np.ndarray, axis: Axis, band: tuple[int, int]) -> dict:
     
     # Edge-midpoint detection (using parabola as guide)
     edge_mids = []
+    edges = []
     for cx in centers:
-        top, bot = half_max_edges(prof, cx, search=25)
+        top, bot = half_max_edges(prof, cx, search=edge_search)
         if top is not None and bot is not None:
             edge_mids.append((top + bot) / 2.0)
+            edges.append((float(top), float(bot)))
         else:
             edge_mids.append(cx)  # Fallback to parabola
+            edges.append((float(cx), float(cx)))
     
     edge_mids = np.array(edge_mids)
     
     # Line widths
     widths = []
     for cx in centers:
-        top, bot = half_max_edges(prof, cx, search=25)
+        top, bot = half_max_edges(prof, cx, search=edge_search)
         if top is not None and bot is not None:
             widths.append(abs(bot - top))
     
@@ -282,6 +297,7 @@ def measure(rot_gray: np.ndarray, axis: Axis, band: tuple[int, int]) -> dict:
         'diffs_parab': diffs_parab,
         'diffs_edges': diffs_edges,
         'widths': widths,
+        'edges': np.array(edges, dtype=np.float64),
         'profile': prof,
         'smoothed': inv_sm,
         'band_inner': (lo_m, hi_m),
@@ -293,64 +309,9 @@ def measure(rot_gray: np.ndarray, axis: Axis, band: tuple[int, int]) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def measure_residual_slope(rot_gray: np.ndarray, axis: Axis, band: tuple[int, int]) -> float:
-    """Measure residual tilt within the measurement band.
-    Returns angle in degrees (should be near 0 if rotation was correct)."""
-    lo, hi = band
-    band_size = hi - lo
-
-    # Only validate if band is wide enough (>200px)
-    if hi - lo < 200:
-        return 0.0
-
-    h, w = rot_gray.shape
-
-    if axis == 'horizontal':
-        # Sample two x-positions within band
-        x_a = lo + int(band_size * 0.25)
-        x_b = lo + int(band_size * 0.75)
-        
-        def find_lines(x: int) -> np.ndarray:
-            col = rot_gray[:, x]
-            inv = col.max() - col
-            inv_sm = gauss_smooth(inv, 2.5)
-            peaks = find_peaks(inv_sm, min_height=inv_sm.max()*0.25,
-                              min_distance=15, min_prominence=inv_sm.max()*0.15)
-            return peaks
-        
-        lines_a = find_lines(x_a)
-        lines_b = find_lines(x_b)
-        n = min(len(lines_a), len(lines_b))
-        
-        if n < 3:
-            return 0.0
-        
-        shifts = [lines_b[i] - lines_a[i] for i in range(n)]
-        med_shift = float(np.median(shifts))
-        return float(np.degrees(np.arctan(med_shift / (x_b - x_a))))
-    
-    else:  # vertical
-        # Sample two y-positions within band
-        y_a = lo + int(band_size * 0.25)
-        y_b = lo + int(band_size * 0.75)
-        
-        def find_lines(y: int) -> np.ndarray:
-            row = rot_gray[y, :]
-            inv = row.max() - row
-            inv_sm = gauss_smooth(inv, 2.5)
-            peaks = find_peaks(inv_sm, min_height=inv_sm.max()*0.25,
-                              min_distance=15, min_prominence=inv_sm.max()*0.15)
-            return peaks
-        
-        lines_a = find_lines(y_a)
-        lines_b = find_lines(y_b)
-        n = min(len(lines_a), len(lines_b))
-        
-        if n < 3:
-            return 0.0
-        
-        shifts = [lines_b[i] - lines_a[i] for i in range(n)]
-        med_shift = float(np.median(shifts))
-        return float(np.degrees(np.arctan(med_shift / (y_b - y_a))))
+    """Measure residual tilt within the measurement band (post-rotation).
+    Uses the same multi-slice tracking logic as refine_angle()."""
+    return refine_angle(rot_gray, axis, band)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -364,6 +325,7 @@ class CalibrationResult:
     angle_deg: float
     centers_px: np.ndarray
     centers_edges_px: np.ndarray
+    edges_px: np.ndarray
     spacing_median_px: float
     spacing_median_edges_px: float
     nm_per_px: float
@@ -428,6 +390,8 @@ def calibrate_from_image(
     image_or_path: str | Image.Image,
     division_um: float,
     axis_override: Optional[Axis] = None,
+    use_large_angles: bool = False,
+    use_edges: bool = True,
     progress_cb: Optional[Callable[[str, float], None]] = None,
 ) -> CalibrationResult:
     """
@@ -527,6 +491,7 @@ def calibrate_from_image(
         angle_deg=rot_angle,
         centers_px=res["centers"],
         centers_edges_px=res["centers_edges"],
+        edges_px=res["edges"],
         spacing_median_px=med_p,
         spacing_median_edges_px=med_e,
         nm_per_px=nm_per_px_p,
@@ -547,6 +512,8 @@ def calibrate_image(
     img_or_path: str | Image.Image,
     spacing_um: float,
     axis_hint: Optional[Axis] = None,
+    use_large_angles: bool = False,
+    use_edges: bool = True,
     band_frac: Tuple[float, float] = (0.25, 0.75),
     smooth_sigma: float = 3.2,
     min_distance_px: Optional[int] = None,
@@ -560,6 +527,8 @@ def calibrate_image(
         img_or_path,
         division_um=spacing_um,
         axis_override=axis_hint,
+        use_large_angles=use_large_angles,
+        use_edges=use_edges,
         progress_cb=progress_cb,
     )
 
@@ -594,6 +563,44 @@ def build_overlay_lines(
             float(pts_orig[1, 0] + ox),
             float(pts_orig[1, 1] + oy),
         ])
+    return lines
+
+
+def build_overlay_edge_lines(
+    result: CalibrationResult,
+    image_size: Tuple[int, int],
+    origin_offset: Tuple[float, float] = (0.0, 0.0),
+) -> list[list[float]]:
+    """Return line coordinates for 50% intensity edges for overlay rendering."""
+    edges = result.edges_px if hasattr(result, "edges_px") else None
+    if edges is None or len(edges) == 0:
+        return []
+
+    w, h = image_size
+    ox, oy = origin_offset
+    M_fwd = rotation_matrix(result.angle_deg, (w / 2.0, h / 2.0))
+    M_back = np.linalg.inv(np.vstack([M_fwd, [0.0, 0.0, 1.0]]))[:2, :]
+
+    band = result.band
+    if band is None:
+        band = (0, h if result.axis == "vertical" else w)
+
+    lines: list[list[float]] = []
+    for edge_pair in edges:
+        if len(edge_pair) < 2:
+            continue
+        for c in (edge_pair[0], edge_pair[1]):
+            if result.axis == "vertical":
+                pts_rot = np.array([[c, float(band[0]), 1.0], [c, float(band[1]), 1.0]])
+            else:
+                pts_rot = np.array([[float(band[0]), c, 1.0], [float(band[1]), c, 1.0]])
+            pts_orig = (M_back @ pts_rot.T).T
+            lines.append([
+                float(pts_orig[0, 0] + ox),
+                float(pts_orig[0, 1] + oy),
+                float(pts_orig[1, 0] + ox),
+                float(pts_orig[1, 1] + oy),
+            ])
     return lines
 
 
