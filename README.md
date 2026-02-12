@@ -12,7 +12,7 @@ MycoLog is a desktop app for field observations, microscopy calibration, and spo
 - [Database structure](docs/database-structure.md)
 - [Changelog](CHANGELOG.md)
 
-## Highlights (recent)
+## Highlights
 
 - Objective database uses Magnification + NA, with sampling assessment in calibration and import.
 - Calibration history shows camera, megapixels, and exportable overlay images.
