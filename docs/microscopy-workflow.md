@@ -5,11 +5,13 @@
 Objectives are defined by:
 - Magnification (integer)
 - Numerical Aperture (NA)
-- Objective name
+- Objective name/camera setup
+
+You can add a note about your setup, what camera or phone adapters you're using etc.
 
 Display name is built as `<Magnification>X/<NA> <Objective name>` in the UI.
 
-## Calibration
+## Calibration of image scales
 
 MycoLog supports manual and auto calibration.
 
@@ -95,6 +97,7 @@ You can also trigger this dialog from the **No Scale Set** prompt when you start
 
 ## See also
 
-- [Getting started](getting-started.md)
-- [Spore measurements](spore-measurements.md)
-- [Database structure](database-structure.md)
+- [Field photography](docs/field-photography.md)
+- [Spore measurements](docs/spore-measurements.md)
+- [Taxonomy integration](docs/taxonomy-integration.md)
+- [Database structure](docs/database-structure.md)

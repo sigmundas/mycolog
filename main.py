@@ -8,11 +8,11 @@ from database.schema import init_database, get_app_settings, update_app_settings
 from database.models import SettingsDB
 from ui.main_window import MainWindow
 
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.5.2"
 
 
 def _create_splash(app: QApplication, version: str) -> QSplashScreen | None:
-    logo_path = Path(__file__).parent / "assets" / "mycolog-logo.png"
+    logo_path = Path(__file__).parent / "docs" / "images" / "mycolog-logo.png"
     if not logo_path.exists():
         return None
     logo = QPixmap(str(logo_path))

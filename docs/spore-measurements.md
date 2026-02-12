@@ -39,5 +39,7 @@ These actions live in the **Output** section of the Analysis tab and use the cur
 
 ## See also
 
-- [Microscopy workflow](microscopy-workflow.md)
-- [Taxonomy integration](taxonomy-integration.md)
+- [Field photography](docs/field-photography.md)
+- [Microscopy workflow](docs/microscopy-workflow.md)
+- [Taxonomy integration](docs/taxonomy-integration.md)
+- [Database structure](docs/database-structure.md)

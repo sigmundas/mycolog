@@ -358,12 +358,6 @@ class DatabaseSettingsDialog(QDialog):
         img_row.addWidget(img_browse)
         form.addRow(self.tr("Images folder:"), img_row)
 
-        self.sampling_pct_input = QDoubleSpinBox()
-        self.sampling_pct_input.setRange(50.0, 300.0)
-        self.sampling_pct_input.setDecimals(0)
-        self.sampling_pct_input.setSuffix("%")
-        form.addRow(self.tr("Ideal sampling (% Nyquist):"), self.sampling_pct_input)
-
         self.contrast_input = QLineEdit()
         form.addRow(self.tr("Contrast values:"), self.contrast_input)
         self.mount_input = QLineEdit()
@@ -372,14 +366,21 @@ class DatabaseSettingsDialog(QDialog):
         form.addRow(self.tr("Sample values:"), self.sample_input)
         self.measure_input = QLineEdit()
         form.addRow(self.tr("Measure categories:"), self.measure_input)
+        self.resize_quality_input = QSpinBox()
+        self.resize_quality_input.setRange(1, 100)
+        self.resize_quality_input.setValue(80)
+        self.resize_quality_input.setSuffix("%")
+        fit_width = self.resize_quality_input.fontMetrics().horizontalAdvance("100%") + 24
+        self.resize_quality_input.setMaximumWidth(fit_width)
+        form.addRow(self.tr("Resize JPEG quality:"), self.resize_quality_input)
 
         originals_group = QGroupBox(self.tr("Original images"))
         originals_layout = QVBoxLayout(originals_group)
         self.originals_button_group = QButtonGroup(self)
 
         self.originals_none_radio = QRadioButton(self.tr("Don't store originals"))
-        self.originals_obs_radio = QRadioButton(self.tr("Observation folder / originals"))
-        self.originals_global_radio = QRadioButton(self.tr("Appdata original images"))
+        self.originals_obs_radio = QRadioButton(self.tr("Observation folder"))
+        self.originals_global_radio = QRadioButton(self.tr("Unique folder"))
         self.originals_button_group.addButton(self.originals_none_radio)
         self.originals_button_group.addButton(self.originals_obs_radio)
         self.originals_button_group.addButton(self.originals_global_radio)
@@ -398,11 +399,16 @@ class DatabaseSettingsDialog(QDialog):
         global_row.addWidget(self.originals_global_input)
         global_row.addWidget(self.originals_global_browse)
         originals_layout.addLayout(global_row)
+        self.originals_global_hint = QLineEdit()
+        self.originals_global_hint.setReadOnly(True)
+        self.originals_global_hint.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
+        originals_layout.addWidget(self.originals_global_hint)
 
         self.originals_none_radio.toggled.connect(self._update_originals_controls)
         self.originals_obs_radio.toggled.connect(self._update_originals_controls)
         self.originals_global_radio.toggled.connect(self._update_originals_controls)
         self.images_dir_input.textChanged.connect(self._update_originals_path_hints)
+        self.originals_global_input.textChanged.connect(self._update_originals_path_hints)
 
         hint = QLabel(
             self.tr(
@@ -429,6 +435,7 @@ class DatabaseSettingsDialog(QDialog):
 
         self._load_settings()
 
+
     def _load_settings(self):
         settings = get_app_settings()
         db_folder = settings.get("database_folder")
@@ -438,8 +445,6 @@ class DatabaseSettingsDialog(QDialog):
             db_folder = str(get_database_path().parent)
         self.db_path_input.setText(db_folder)
         self.images_dir_input.setText(str(settings.get("images_dir") or get_images_dir()))
-        self.sampling_pct_input.setValue(float(SettingsDB.get_setting("target_sampling_pct", 120.0)))
-
         storage_mode = SettingsDB.get_setting("original_storage_mode")
         if not storage_mode:
             storage_mode = "observation" if SettingsDB.get_setting("store_original_images", False) else "none"
@@ -452,7 +457,7 @@ class DatabaseSettingsDialog(QDialog):
 
         global_dir = SettingsDB.get_setting("originals_dir") or ""
         if not global_dir:
-            global_dir = str(Path(self.images_dir_input.text()) / "originals")
+            global_dir = str(get_database_path().parent / "originals")
         self.originals_global_input.setText(global_dir)
         self._update_originals_path_hints()
         self._update_originals_controls()
@@ -489,6 +494,13 @@ class DatabaseSettingsDialog(QDialog):
         self.mount_input.setText(self._format_list_with_default(mount, mount_default))
         self.sample_input.setText(self._format_list_with_default(sample, sample_default))
         self.measure_input.setText(self._format_list_with_default(categories, category_default))
+        resize_quality = SettingsDB.get_setting("resize_jpeg_quality", 80)
+        try:
+            resize_quality = int(resize_quality)
+        except (TypeError, ValueError):
+            resize_quality = 80
+        resize_quality = max(1, min(100, resize_quality))
+        self.resize_quality_input.setValue(resize_quality)
 
     def _browse_db_folder(self):
         path = QFileDialog.getExistingDirectory(self, "Select Database Folder", self.db_path_input.text())
@@ -510,11 +522,17 @@ class DatabaseSettingsDialog(QDialog):
         if base:
             obs_path = str(Path(base) / "<observation>" / "originals")
         else:
-            obs_path = self.tr("Observation folder / originals")
+            obs_path = self.tr("Observation folder")
         self.originals_obs_path.setText(obs_path)
-        if not self.originals_global_input.text().strip():
-            default_global = str(Path(base) / "originals") if base else ""
-            self.originals_global_input.setText(default_global)
+        global_base = self.originals_global_input.text().strip()
+        if not global_base:
+            global_base = str(get_database_path().parent / "originals")
+            self.originals_global_input.setText(global_base)
+        if hasattr(self, "originals_global_hint"):
+            if global_base:
+                self.originals_global_hint.setText(str(Path(global_base) / "<observation>"))
+            else:
+                self.originals_global_hint.setText(self.tr("Unique folder / <observation>"))
 
     def _update_originals_controls(self):
         use_global = self.originals_global_radio.isChecked()
@@ -639,8 +657,7 @@ class DatabaseSettingsDialog(QDialog):
         SettingsDB.set_setting("mount_default", mount_default)
         SettingsDB.set_setting("sample_default", sample_default)
         SettingsDB.set_setting("measure_default", category_default)
-        SettingsDB.set_setting("target_sampling_pct", float(self.sampling_pct_input.value()))
-
+        SettingsDB.set_setting("resize_jpeg_quality", int(self.resize_quality_input.value()))
         if self.originals_none_radio.isChecked():
             SettingsDB.set_setting("original_storage_mode", "none")
         elif self.originals_global_radio.isChecked():
@@ -650,6 +667,88 @@ class DatabaseSettingsDialog(QDialog):
         SettingsDB.set_setting("originals_dir", self.originals_global_input.text().strip())
 
         self.accept()
+
+
+class DatabaseBundleOptionsDialog(QDialog):
+    """Dialog for choosing which database content to export/import."""
+
+    def __init__(self, title: str, defaults: dict | None = None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(True)
+        self.setMinimumWidth(420)
+
+        defaults = defaults or {}
+
+        layout = QVBoxLayout(self)
+        prompt = QLabel(self.tr("Select what you want to include:"))
+        layout.addWidget(prompt)
+
+        self.observations_check = QCheckBox(
+            self.tr("Observations (field and taxonomy metadata)")
+        )
+        self.images_check = QCheckBox(
+            self.tr("Images of observations and calibration images")
+        )
+        self.measurements_check = QCheckBox(self.tr("Spore measurements"))
+        self.calibrations_check = QCheckBox(self.tr("Calibrations"))
+        self.references_check = QCheckBox(self.tr("Reference values"))
+
+        self.observations_check.setChecked(defaults.get("observations", True))
+        self.images_check.setChecked(defaults.get("images", True))
+        self.measurements_check.setChecked(defaults.get("measurements", True))
+        self.calibrations_check.setChecked(defaults.get("calibrations", True))
+        self.references_check.setChecked(defaults.get("reference_values", True))
+
+        layout.addWidget(self.observations_check)
+        layout.addWidget(self.images_check)
+        layout.addWidget(self.measurements_check)
+        layout.addWidget(self.calibrations_check)
+        layout.addWidget(self.references_check)
+
+        hint = QLabel(self.tr("Thumbnails are not included; they will be regenerated by the app."))
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
+        layout.addWidget(hint)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self._on_accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self.measurements_check.toggled.connect(self._sync_measurement_dependencies)
+        self._sync_measurement_dependencies(self.measurements_check.isChecked())
+
+    def _sync_measurement_dependencies(self, checked: bool) -> None:
+        if checked:
+            self.observations_check.setChecked(True)
+            self.images_check.setChecked(True)
+            self.observations_check.setEnabled(False)
+            self.images_check.setEnabled(False)
+        else:
+            self.observations_check.setEnabled(True)
+            self.images_check.setEnabled(True)
+
+    def _on_accept(self) -> None:
+        if not any([
+            self.observations_check.isChecked(),
+            self.images_check.isChecked(),
+            self.measurements_check.isChecked(),
+            self.calibrations_check.isChecked(),
+            self.references_check.isChecked(),
+        ]):
+            QMessageBox.warning(self, self.tr("Nothing Selected"), self.tr("Select at least one item."))
+            return
+        self.accept()
+
+    def get_options(self) -> dict:
+        return {
+            "observations": self.observations_check.isChecked(),
+            "images": self.images_check.isChecked(),
+            "measurements": self.measurements_check.isChecked(),
+            "calibrations": self.calibrations_check.isChecked(),
+            "reference_values": self.references_check.isChecked(),
+        }
 
 
 class LanguageSettingsDialog(QDialog):
@@ -4855,7 +4954,8 @@ class MainWindow(QMainWindow):
                     saved_lines[0],
                     saved_lines[1],
                     length_microns,
-                    width_microns
+                    width_microns,
+                    measurement_category,
                 )
             )
         elif len(saved_lines) == 1 and length_microns is not None:
@@ -4864,6 +4964,7 @@ class MainWindow(QMainWindow):
                     measurement_id,
                     saved_lines[0],
                     length_microns,
+                    measurement_category,
                 )
             )
         self.temp_lines = []
@@ -5275,6 +5376,20 @@ class MainWindow(QMainWindow):
         if not lines:
             self.exif_info_label.setText("No image loaded")
             return
+        mp_value = self._megapixels_from_path(image_path) or self._current_image_megapixels()
+        if mp_value:
+            mp_text = f"Image resolution: {self._format_megapixels(float(mp_value))}MP"
+        else:
+            mp_text = "Image resolution: --"
+        scale_factor = None
+        if self.current_image_id:
+            image_data = ImageDB.get_image(self.current_image_id)
+            if image_data:
+                scale_factor = image_data.get("resample_scale_factor")
+        if not isinstance(scale_factor, (int, float)) or scale_factor <= 0:
+            scale_factor = 1.0
+        lines.append(mp_text)
+        lines.append(f"Resize scale factor: {float(scale_factor):.2f}")
         folder_path = Path(image_path).resolve().parent
         folder_uri = folder_path.as_uri()
         html_lines = [html.escape(line) for line in lines]
@@ -5812,24 +5927,39 @@ class MainWindow(QMainWindow):
             (line1_mid.y() + line2_mid.y()) / 2
         )
 
-    def _build_measurement_label(self, measurement_id, line1, line2, length_um, width_um):
+    def _measurement_unit_for_display(self, measurement_type: str | None = None) -> tuple[str, float]:
+        """Return (unit, divisor) for displaying measurements based on image type."""
+        image_type = (self.current_image_type or "").strip().lower()
+        if image_type == "field":
+            return "mm", 1000.0
+        if image_type == "microscope":
+            return "\u03bcm", 1.0
+        if measurement_type and self.normalize_measurement_category(measurement_type) == "field":
+            return "mm", 1000.0
+        return "\u03bcm", 1.0
+
+    def _build_measurement_label(self, measurement_id, line1, line2, length_um, width_um, measurement_type=None):
         """Build a label entry for measurement overlays."""
         center = self._compute_measurement_center(line1, line2)
+        unit, divisor = self._measurement_unit_for_display(measurement_type)
+        length_value = (length_um / divisor) if length_um is not None else None
+        width_value = (width_um / divisor) if width_um is not None else None
         return {
             "id": measurement_id,
             "center": center,
             "length_um": length_um,
             "width_um": width_um,
+            "length_value": length_value,
+            "width_value": width_value,
+            "unit": unit,
             "line1": line1,
             "line2": line2
         }
 
-    def _build_line_measurement_label(self, measurement_id, line1, length_um):
+    def _build_line_measurement_label(self, measurement_id, line1, length_um, measurement_type=None):
         """Build a label entry for line-only measurements."""
-        unit = "mm" if self.normalize_measurement_category(
-            self.measure_category_combo.currentData() if hasattr(self, "measure_category_combo") else ""
-        ) == "field" else "\u03bcm"
-        length_value = length_um / 1000.0 if unit == "mm" else length_um
+        unit, divisor = self._measurement_unit_for_display(measurement_type)
+        length_value = (length_um / divisor) if length_um is not None else None
         center = QPointF(
             (line1[0] + line1[2]) / 2,
             (line1[1] + line1[3]) / 2,
@@ -5897,26 +6027,23 @@ class MainWindow(QMainWindow):
                 length_um = math.sqrt(dx**2 + dy**2) * self.microns_per_pixel
             if len(lines) >= 2 and length_um is not None and width_um is not None:
                 self.measurement_labels.append(
-                    self._build_measurement_label(measurement['id'], line1, lines[1], length_um, width_um)
+                    self._build_measurement_label(
+                        measurement['id'],
+                        line1,
+                        lines[1],
+                        length_um,
+                        width_um,
+                        measurement.get("measurement_type"),
+                    )
                 )
             elif len(lines) == 1 and length_um is not None:
-                unit = "mm" if self.normalize_measurement_category(
-                    measurement.get("measurement_type")
-                ) == "field" else "\u03bcm"
-                length_value = length_um / 1000.0 if unit == "mm" else length_um
                 self.measurement_labels.append(
-                    {
-                        "id": measurement['id'],
-                        "kind": "line",
-                        "center": QPointF(
-                            (line1[0] + line1[2]) / 2,
-                            (line1[1] + line1[3]) / 2,
-                        ),
-                        "length_um": length_um,
-                        "length_value": length_value,
-                        "unit": unit,
-                        "line": line1,
-                    }
+                    self._build_line_measurement_label(
+                        measurement['id'],
+                        line1,
+                        length_um,
+                        measurement.get("measurement_type"),
+                    )
                 )
 
         self.update_display_lines()
@@ -5957,15 +6084,27 @@ class MainWindow(QMainWindow):
         line1 = [new_points[0].x(), new_points[0].y(), new_points[1].x(), new_points[1].y()]
         line2 = [new_points[2].x(), new_points[2].y(), new_points[3].x(), new_points[3].y()]
         self.measurement_lines[measurement_id] = [line1, line2]
+        measurement_type = None
+        for cached in self.measurements_cache:
+            if cached.get("id") == measurement_id:
+                measurement_type = cached.get("measurement_type")
+                break
+        if measurement_type is None:
+            record = self._get_measurement_by_id(measurement_id)
+            if record:
+                measurement_type = record.get("measurement_type")
+
         for idx, label in enumerate(self.measurement_labels):
             if label.get("id") == measurement_id:
                 self.measurement_labels[idx] = self._build_measurement_label(
-                    measurement_id, line1, line2, new_length_um, new_width_um
+                    measurement_id, line1, line2, new_length_um, new_width_um, measurement_type
                 )
                 break
         else:
             self.measurement_labels.append(
-                self._build_measurement_label(measurement_id, line1, line2, new_length_um, new_width_um)
+                self._build_measurement_label(
+                    measurement_id, line1, line2, new_length_um, new_width_um, measurement_type
+                )
             )
         self.update_display_lines()
 
@@ -7898,6 +8037,10 @@ class MainWindow(QMainWindow):
         self.update_graph_plots(all_measurements)
     def export_database_bundle(self):
         """Export DB and data folders as a zip file."""
+        options_dialog = DatabaseBundleOptionsDialog(self.tr("Export Options"), parent=self)
+        if options_dialog.exec() != QDialog.Accepted:
+            return
+        options = options_dialog.get_options()
         default_path = str(Path(self._get_default_export_dir()) / "MycoLog_DB.zip")
         filename, _ = QFileDialog.getSaveFileName(
             self,
@@ -7911,7 +8054,14 @@ class MainWindow(QMainWindow):
             filename += ".zip"
         self._remember_export_dir(filename)
         try:
-            export_db_bundle(filename)
+            export_db_bundle(
+                filename,
+                include_observations=options["observations"],
+                include_images=options["images"],
+                include_measurements=options["measurements"],
+                include_calibrations=options["calibrations"],
+                include_reference_values=options["reference_values"],
+            )
             QMessageBox.information(self, "Export Complete", f"Saved to {filename}")
         except Exception as exc:
             QMessageBox.warning(self, "Export Failed", str(exc))
@@ -7926,15 +8076,32 @@ class MainWindow(QMainWindow):
         )
         if not filename:
             return
+        options_dialog = DatabaseBundleOptionsDialog(self.tr("Import Options"), parent=self)
+        if options_dialog.exec() != QDialog.Accepted:
+            return
+        options = options_dialog.get_options()
         try:
-            summary = import_db_bundle(filename)
-            QMessageBox.information(
-                self,
-                "Import Complete",
-                f"Imported {summary.get('observations', 0)} observations, "
-                f"{summary.get('images', 0)} images, "
-                f"{summary.get('measurements', 0)} measurements."
+            summary = import_db_bundle(
+                filename,
+                include_observations=options["observations"],
+                include_images=options["images"],
+                include_measurements=options["measurements"],
+                include_calibrations=options["calibrations"],
+                include_reference_values=options["reference_values"],
             )
+            lines = []
+            if options["observations"]:
+                lines.append(f"Observations: {summary.get('observations', 0)}")
+            if options["images"]:
+                lines.append(f"Images: {summary.get('images', 0)}")
+            if options["measurements"]:
+                lines.append(f"Spore measurements: {summary.get('measurements', 0)}")
+            if options["calibrations"]:
+                lines.append(f"Calibrations: {summary.get('calibrations', 0)}")
+            if options["reference_values"]:
+                lines.append(f"Reference values: {summary.get('reference_values', 0)}")
+            message = "Imported:\n" + "\n".join(lines) if lines else "No data imported."
+            QMessageBox.information(self, "Import Complete", message)
             if hasattr(self, "observations_tab"):
                 self.observations_tab.refresh_observations()
         except Exception as exc:

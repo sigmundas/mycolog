@@ -46,5 +46,7 @@ These are available in the **File** menu as **Export DB** and **Import DB**.
 
 ## See also
 
-- [Getting started](getting-started.md)
-- [Microscopy workflow](microscopy-workflow.md)
+- [Field photography](docs/field-photography.md)
+- [Microscopy workflow](docs/microscopy-workflow.md)
+- [Spore measurements](docs/spore-measurements.md)
+- [Taxonomy integration](docs/taxonomy-integration.md)

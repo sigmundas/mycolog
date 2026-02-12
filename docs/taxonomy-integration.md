@@ -17,6 +17,7 @@ MycoLog can query Artsdatabanken (Artsorakelet) to suggest species based on imag
 Reference values can be linked to specific species and sources, and plotted alongside your observations.
 
 ## See also
-
-- [Getting started](getting-started.md)
-- [Spore measurements](spore-measurements.md)
+- [Field photography](docs/field-photography.md)
+- [Microscopy workflow](docs/microscopy-workflow.md)
+- [Spore measurements](docs/spore-measurements.md)
+- [Database structure](docs/database-structure.md)

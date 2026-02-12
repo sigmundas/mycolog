@@ -307,13 +307,20 @@ def get_connection():
     """Get a connection to the main observation database."""
     db_path = get_database_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    return sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=10)
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    return conn
 
 def get_reference_connection():
     """Get a connection to the reference values database."""
     ref_path = get_reference_database_path()
     ref_path.parent.mkdir(parents=True, exist_ok=True)
-    return sqlite3.connect(ref_path)
+    conn = sqlite3.connect(ref_path, timeout=10)
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA journal_mode = WAL")
+    return conn
 
 def init_reference_database():
     """Initialize the reference values database."""

@@ -123,117 +123,123 @@ class ObservationDB:
 
     @staticmethod
     def update_observation(observation_id: int, genus: str = None, species: str = None,
-                          common_name: str = None, location: str = None, habitat: str = None,
-                          notes: str = None, uncertain: bool = None,
-                          species_guess: str = None, date: str = None,
-                          gps_latitude: float = None, gps_longitude: float = None,
-                          allow_nulls: bool = False) -> Optional[str]:
+                           common_name: str = None, location: str = None, habitat: str = None,
+                           notes: str = None, uncertain: bool = None,
+                           species_guess: str = None, date: str = None,
+                           gps_latitude: float = None, gps_longitude: float = None,
+                           allow_nulls: bool = False) -> Optional[str]:
         """Update an observation. Returns new folder path if genus/species changed."""
         conn = get_connection()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
+        try:
+            # Get current observation
+            cursor.execute('SELECT * FROM observations WHERE id = ?', (observation_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
 
-        # Get current observation
-        cursor.execute('SELECT * FROM observations WHERE id = ?', (observation_id,))
-        row = cursor.fetchone()
-        if not row:
+            current = dict(row)
+            old_folder_path = current.get('folder_path')
+
+            # Check if genus/species changed
+            new_folder_path = None
+            genus_changed = genus is not None and genus != current.get('genus')
+            species_changed = species is not None and species != current.get('species')
+
+            if genus_changed or species_changed:
+                # Build new folder path
+                new_genus = genus if genus is not None else current.get('genus')
+                new_species = species if species is not None else current.get('species')
+
+                genus_folder = sanitize_folder_name(new_genus) if new_genus else "unknown"
+                species_name = sanitize_folder_name(new_species) if new_species else "sp"
+                date_part = current['date'].replace(':', '-') if current['date'] else 'unknown'
+                folder_name = f"{species_name} - {date_part}"
+                new_folder_path = str(_images_dir() / genus_folder / folder_name)
+
+            # Rename folder if it exists (or infer it from image paths)
+            inferred_folder = None
+            if not old_folder_path or not Path(old_folder_path).exists():
+                inferred_folder = ObservationDB._infer_image_folder(cursor, observation_id)
+            folder_to_move = old_folder_path if old_folder_path and Path(old_folder_path).exists() else inferred_folder
+
+            if new_folder_path and folder_to_move and folder_to_move != new_folder_path:
+                try:
+                    ObservationDB._move_observation_folder(cursor, observation_id, folder_to_move, new_folder_path)
+                except Exception as e:
+                    print(f"Warning: Could not rename folder: {e}")
+                    new_folder_path = old_folder_path or folder_to_move  # Keep old path on error
+
+            # Build update query
+            updates = []
+            values = []
+
+            if allow_nulls or genus is not None:
+                updates.append('genus = ?')
+                values.append(genus)
+            if allow_nulls or species is not None:
+                updates.append('species = ?')
+                values.append(species)
+            if allow_nulls or common_name is not None:
+                updates.append('common_name = ?')
+                values.append(common_name)
+            if allow_nulls or location is not None:
+                updates.append('location = ?')
+                values.append(location)
+            if allow_nulls or habitat is not None:
+                updates.append('habitat = ?')
+                values.append(habitat)
+            if allow_nulls or date is not None:
+                date_value = date
+                if date_value is None and allow_nulls:
+                    date_value = current.get('date') or datetime.now().strftime("%Y-%m-%d %H:%M")
+                updates.append('date = ?')
+                values.append(date_value)
+            if allow_nulls or notes is not None:
+                updates.append('notes = ?')
+                values.append(notes)
+            if allow_nulls or uncertain is not None:
+                updates.append('uncertain = ?')
+                values.append(1 if uncertain else 0)
+            if allow_nulls or gps_latitude is not None:
+                updates.append('gps_latitude = ?')
+                values.append(gps_latitude)
+            if allow_nulls or gps_longitude is not None:
+                updates.append('gps_longitude = ?')
+                values.append(gps_longitude)
+            if allow_nulls or species_guess is not None:
+                updates.append('species_guess = ?')
+                values.append(species_guess)
+            if new_folder_path:
+                updates.append('folder_path = ?')
+                values.append(new_folder_path)
+
+            # Update species_guess based on new genus/species if not explicitly provided
+            if not allow_nulls and species_guess is None and (genus is not None or species is not None):
+                new_genus = genus if genus is not None else current.get('genus')
+                new_species = species if species is not None else current.get('species')
+                parts = []
+                if new_genus:
+                    parts.append(new_genus)
+                if new_species:
+                    parts.append(new_species)
+                updates.append('species_guess = ?')
+                values.append(' '.join(parts) if parts else 'Unknown')
+
+            if updates:
+                values.append(observation_id)
+                cursor.execute(f'''
+                    UPDATE observations SET {', '.join(updates)} WHERE id = ?
+                ''', values)
+
+            conn.commit()
+            return new_folder_path
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
             conn.close()
-            return None
-
-        current = dict(row)
-        old_folder_path = current.get('folder_path')
-
-        # Check if genus/species changed
-        new_folder_path = None
-        genus_changed = genus is not None and genus != current.get('genus')
-        species_changed = species is not None and species != current.get('species')
-
-        if genus_changed or species_changed:
-            # Build new folder path
-            new_genus = genus if genus is not None else current.get('genus')
-            new_species = species if species is not None else current.get('species')
-
-            genus_folder = sanitize_folder_name(new_genus) if new_genus else "unknown"
-            species_name = sanitize_folder_name(new_species) if new_species else "sp"
-            date_part = current['date'].replace(':', '-') if current['date'] else 'unknown'
-            folder_name = f"{species_name} - {date_part}"
-            new_folder_path = str(_images_dir() / genus_folder / folder_name)
-
-        # Rename folder if it exists (or infer it from image paths)
-        inferred_folder = None
-        if not old_folder_path or not Path(old_folder_path).exists():
-            inferred_folder = ObservationDB._infer_image_folder(cursor, observation_id)
-        folder_to_move = old_folder_path if old_folder_path and Path(old_folder_path).exists() else inferred_folder
-
-        if new_folder_path and folder_to_move and folder_to_move != new_folder_path:
-            try:
-                ObservationDB._move_observation_folder(cursor, observation_id, folder_to_move, new_folder_path)
-            except Exception as e:
-                print(f"Warning: Could not rename folder: {e}")
-                new_folder_path = old_folder_path or folder_to_move  # Keep old path on error
-
-        # Build update query
-        updates = []
-        values = []
-
-        if allow_nulls or genus is not None:
-            updates.append('genus = ?')
-            values.append(genus)
-        if allow_nulls or species is not None:
-            updates.append('species = ?')
-            values.append(species)
-        if allow_nulls or common_name is not None:
-            updates.append('common_name = ?')
-            values.append(common_name)
-        if allow_nulls or location is not None:
-            updates.append('location = ?')
-            values.append(location)
-        if allow_nulls or habitat is not None:
-            updates.append('habitat = ?')
-            values.append(habitat)
-        if allow_nulls or date is not None:
-            updates.append('date = ?')
-            values.append(date)
-        if allow_nulls or notes is not None:
-            updates.append('notes = ?')
-            values.append(notes)
-        if allow_nulls or uncertain is not None:
-            updates.append('uncertain = ?')
-            values.append(1 if uncertain else 0)
-        if allow_nulls or gps_latitude is not None:
-            updates.append('gps_latitude = ?')
-            values.append(gps_latitude)
-        if allow_nulls or gps_longitude is not None:
-            updates.append('gps_longitude = ?')
-            values.append(gps_longitude)
-        if allow_nulls or species_guess is not None:
-            updates.append('species_guess = ?')
-            values.append(species_guess)
-        if new_folder_path:
-            updates.append('folder_path = ?')
-            values.append(new_folder_path)
-
-        # Update species_guess based on new genus/species if not explicitly provided
-        if not allow_nulls and species_guess is None and (genus is not None or species is not None):
-            new_genus = genus if genus is not None else current.get('genus')
-            new_species = species if species is not None else current.get('species')
-            parts = []
-            if new_genus:
-                parts.append(new_genus)
-            if new_species:
-                parts.append(new_species)
-            updates.append('species_guess = ?')
-            values.append(' '.join(parts) if parts else 'Unknown')
-
-        if updates:
-            values.append(observation_id)
-            cursor.execute(f'''
-                UPDATE observations SET {', '.join(updates)} WHERE id = ?
-            ''', values)
-
-        conn.commit()
-        conn.close()
-        return new_folder_path
 
     @staticmethod
     def _update_image_paths(cursor, observation_id: int, old_folder: str, new_folder: str):
@@ -308,50 +314,74 @@ class ObservationDB:
         """Delete an observation and all associated images/measurements"""
         conn = get_connection()
         cursor = conn.cursor()
-
-        # Collect image filepaths and observation folder before deleting rows
-        cursor.execute('SELECT folder_path FROM observations WHERE id = ?', (observation_id,))
-        obs_row = cursor.fetchone()
         folder_path = None
-        if obs_row and obs_row[0]:
-            folder_path = obs_row[0]
+        image_rows = []
+        try:
+            # Collect image filepaths and observation folder before deleting rows
+            cursor.execute('SELECT folder_path FROM observations WHERE id = ?', (observation_id,))
+            obs_row = cursor.fetchone()
+            if obs_row and obs_row[0]:
+                folder_path = obs_row[0]
 
-        cursor.execute('SELECT id, filepath FROM images WHERE observation_id = ?', (observation_id,))
-        image_rows = cursor.fetchall()
+            cursor.execute(
+                'SELECT id, filepath, original_filepath FROM images WHERE observation_id = ?',
+                (observation_id,),
+            )
+            image_rows = cursor.fetchall()
 
-        # First delete all measurements for images of this observation
-        cursor.execute('''
-            DELETE FROM spore_measurements
-            WHERE image_id IN (SELECT id FROM images WHERE observation_id = ?)
-        ''', (observation_id,))
+            # Delete dependent rows first (annotations -> measurements -> thumbnails -> images)
+            cursor.execute('''
+                DELETE FROM spore_annotations
+                WHERE image_id IN (SELECT id FROM images WHERE observation_id = ?)
+            ''', (observation_id,))
+            cursor.execute('''
+                DELETE FROM spore_annotations
+                WHERE measurement_id IN (
+                    SELECT id FROM spore_measurements
+                    WHERE image_id IN (SELECT id FROM images WHERE observation_id = ?)
+                )
+            ''', (observation_id,))
+            cursor.execute('''
+                DELETE FROM spore_measurements
+                WHERE image_id IN (SELECT id FROM images WHERE observation_id = ?)
+            ''', (observation_id,))
+            cursor.execute('''
+                DELETE FROM thumbnails
+                WHERE image_id IN (SELECT id FROM images WHERE observation_id = ?)
+            ''', (observation_id,))
 
-        # Delete all images for this observation
-        cursor.execute('DELETE FROM images WHERE observation_id = ?', (observation_id,))
+            # Delete all images for this observation
+            cursor.execute('DELETE FROM images WHERE observation_id = ?', (observation_id,))
 
-        # Delete the observation itself
-        cursor.execute('DELETE FROM observations WHERE id = ?', (observation_id,))
+            # Delete the observation itself
+            cursor.execute('DELETE FROM observations WHERE id = ?', (observation_id,))
 
-        conn.commit()
-        conn.close()
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
         # Remove thumbnails and image files from disk
         images_root = _images_dir()
-        for image_id, filepath in image_rows:
+        for image_id, filepath, original_filepath in image_rows:
             try:
                 from utils.thumbnail_generator import delete_thumbnails
                 delete_thumbnails(image_id)
             except Exception as e:
                 print(f"Warning: Could not delete thumbnails for image {image_id}: {e}")
 
-            if not filepath:
-                continue
-            try:
-                path = Path(filepath).resolve()
-                root = images_root.resolve()
-                if path.exists() and path.is_relative_to(root):
-                    path.unlink()
-            except Exception as e:
-                print(f"Warning: Could not delete image file {filepath}: {e}")
+            for candidate in (filepath, original_filepath):
+                if not candidate:
+                    continue
+                try:
+                    path = Path(candidate).resolve()
+                    root = images_root.resolve()
+                    if path.exists() and path.is_relative_to(root):
+                        path.unlink()
+                except Exception as e:
+                    print(f"Warning: Could not delete image file {candidate}: {e}")
 
         # Remove observation folder if it lives under images root
         if folder_path:
@@ -445,8 +475,20 @@ class ImageDB:
             if original_path.exists():
                 target_dir = None
                 if storage_mode == "global":
-                    global_dir = SettingsDB.get_setting("originals_dir") or str(_images_dir() / "originals")
+                    global_dir = SettingsDB.get_setting("originals_dir") or str(get_database_path().parent / "originals")
                     target_dir = Path(global_dir)
+                    if observation_id:
+                        cursor.execute('SELECT folder_path FROM observations WHERE id = ?', (observation_id,))
+                        row = cursor.fetchone()
+                        if row and row['folder_path']:
+                            obs_folder = Path(row['folder_path'])
+                            try:
+                                rel = obs_folder.resolve().relative_to(_images_dir().resolve())
+                                target_dir = target_dir / rel
+                            except Exception:
+                                target_dir = target_dir / obs_folder.name
+                        else:
+                            target_dir = target_dir / f"observation_{observation_id}"
                 else:
                     if copy_to_folder and observation_id:
                         cursor.execute('SELECT folder_path FROM observations WHERE id = ?', (observation_id,))
@@ -1623,12 +1665,47 @@ class CalibrationDB:
     def delete_calibration(calibration_id: int) -> None:
         """Delete a calibration by ID."""
         conn = get_connection()
+        conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-
+        cursor.execute(
+            "SELECT image_filepath, measurements_json FROM calibrations WHERE id = ?",
+            (calibration_id,),
+        )
+        row = cursor.fetchone()
         cursor.execute("DELETE FROM calibrations WHERE id = ?", (calibration_id,))
-
         conn.commit()
         conn.close()
+
+        image_paths: set[Path] = set()
+        if row:
+            image_filepath = row["image_filepath"]
+            if image_filepath:
+                image_paths.add(Path(image_filepath))
+            measurements_json = row["measurements_json"]
+            if measurements_json:
+                try:
+                    loaded = json.loads(measurements_json)
+                except Exception:
+                    loaded = None
+                if isinstance(loaded, dict):
+                    for entry in loaded.get("images", []):
+                        if isinstance(entry, dict):
+                            path = entry.get("path")
+                            if path:
+                                image_paths.add(Path(path))
+
+        if image_paths:
+            images_root = get_images_dir().resolve()
+            for path in image_paths:
+                try:
+                    target = path
+                    if not target.is_absolute():
+                        target = images_root / target
+                    target = target.resolve()
+                    if images_root in target.parents and target.exists():
+                        target.unlink()
+                except Exception:
+                    continue
 
     @staticmethod
     def clear_calibration_usage(calibration_id: int, clear_objective: bool = True) -> None:

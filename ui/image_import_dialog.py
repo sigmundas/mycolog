@@ -7,8 +7,19 @@ from typing import Optional
 import math
 import json
 
-from PySide6.QtCore import Qt, QDateTime, QDate, QTime, Signal, QPointF, QCoreApplication, QThread, QTimer
-from PySide6.QtGui import QPixmap, QKeySequence, QShortcut, QImageReader
+from PySide6.QtCore import (
+    Qt,
+    QDateTime,
+    QDate,
+    QTime,
+    Signal,
+    QPointF,
+    QCoreApplication,
+    QThread,
+    QTimer,
+    QEvent,
+)
+from PySide6.QtGui import QPixmap, QKeySequence, QShortcut, QImageReader, QColor
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -78,7 +89,7 @@ class ImageImportResult:
     ai_crop_source_size: Optional[tuple[int, int]] = None
     gps_source: bool = False
     resample_scale_factor: Optional[float] = None
-    resize_to_optimal: bool = True
+    resize_to_optimal: bool = False
     store_original: bool = False
     original_filepath: Optional[str] = None
 
@@ -227,6 +238,12 @@ class AIGuessWorker(QThread):
             self.resultReady.emit(self.indices, predictions, None, warnings, temp_paths)
         except Exception as exc:
             self.error.emit(self.indices, str(exc))
+        finally:
+            for path in send_paths:
+                try:
+                    path.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
 
 class ScaleBarImportDialog(QDialog):
@@ -379,14 +396,18 @@ class ImageImportDialog(QDialog):
             self.sample_options[0] if self.sample_options else "Not set"
         )
         self.resize_to_optimal_default = bool(
-            SettingsDB.get_setting("resize_to_optimal_sampling", True)
+            SettingsDB.get_setting("resize_to_optimal_sampling", False)
         )
-        self.store_original_default = bool(
-            SettingsDB.get_setting("store_original_images", False)
-        )
+        storage_mode = SettingsDB.get_setting("original_storage_mode")
+        if not storage_mode:
+            storage_mode = (
+                "observation" if SettingsDB.get_setting("store_original_images", False) else "none"
+            )
+        self.store_original_default = storage_mode != "none"
         self.target_sampling_pct = float(
             SettingsDB.get_setting("target_sampling_pct", 120.0)
         )
+        self._resize_preview_enabled = False
 
         self.image_paths: list[str] = []
         self.import_results: list[ImageImportResult] = []
@@ -467,6 +488,12 @@ class ImageImportDialog(QDialog):
         self.delete_shortcut = QShortcut(QKeySequence.Delete, self)
         self.delete_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
         self.delete_shortcut.activated.connect(self._on_remove_selected)
+        self.resize_preview_shortcut = QShortcut(QKeySequence("P"), self)
+        self.resize_preview_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self.resize_preview_shortcut.activated.connect(self._toggle_resize_preview)
+        self.ai_crop_shortcut = QShortcut(QKeySequence("C"), self)
+        self.ai_crop_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self.ai_crop_shortcut.activated.connect(self._on_ai_crop_clicked)
 
         center_splitter = QSplitter(Qt.Vertical)
         center_splitter.setChildrenCollapsible(False)
@@ -718,10 +745,10 @@ class ImageImportDialog(QDialog):
         self.resize_optimal_checkbox.setChecked(self.resize_to_optimal_default)
         self.resize_optimal_checkbox.toggled.connect(self._on_resize_settings_changed)
         resize_layout.addWidget(self.resize_optimal_checkbox)
-        self.store_original_checkbox = QCheckBox(self.tr("Store original"))
-        self.store_original_checkbox.setChecked(self.store_original_default)
-        self.store_original_checkbox.toggled.connect(self._on_resize_settings_changed)
-        resize_layout.addWidget(self.store_original_checkbox)
+        self.resize_preview_hint = QLabel(self.tr("Keyboard shortcut P to toggle preview of resize"))
+        self.resize_preview_hint.setWordWrap(True)
+        self.resize_preview_hint.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
+        resize_layout.addWidget(self.resize_preview_hint)
 
         resize_info = QFormLayout()
         self.target_sampling_input = QDoubleSpinBox()
@@ -730,6 +757,7 @@ class ImageImportDialog(QDialog):
         self.target_sampling_input.setSuffix("%")
         self.target_sampling_input.setValue(float(self.target_sampling_pct))
         self.target_sampling_input.valueChanged.connect(self._on_target_sampling_changed)
+        self.target_sampling_input.installEventFilter(self)
         self.current_resolution_label = QLabel("--")
         self.target_resolution_label = QLabel("--")
         resize_info.addRow(
@@ -746,6 +774,12 @@ class ImageImportDialog(QDialog):
         ai_crop_group = QGroupBox(self.tr("AI crop"))
         ai_crop_layout = QVBoxLayout(ai_crop_group)
         ai_crop_layout.setContentsMargins(6, 6, 6, 6)
+        self.ai_crop_info_label = QLabel(
+            self.tr("Draw a square around the species you want to identify. Keyboard: C.")
+        )
+        self.ai_crop_info_label.setWordWrap(True)
+        self.ai_crop_info_label.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
+        ai_crop_layout.addWidget(self.ai_crop_info_label)
         self.ai_crop_btn = QPushButton(self.tr("Crop"))
         self.ai_crop_btn.setToolTip(self.tr("Draw a crop area for Artsorakelet"))
         self.ai_crop_btn.clicked.connect(self._on_ai_crop_clicked)
@@ -845,14 +879,14 @@ class ImageImportDialog(QDialog):
     def _is_resized_image(self, result: ImageImportResult | None) -> bool:
         if not result:
             return False
-        factor = getattr(result, "resample_scale_factor", None)
-        if not isinstance(factor, (int, float)) or factor <= 0 or factor >= 0.999:
-            return False
-        if result.image_id:
-            return True
         orig = getattr(result, "original_filepath", None)
         path = getattr(result, "filepath", None)
-        return bool(orig and path and orig != path)
+        if orig and path and orig != path:
+            return True
+        factor = getattr(result, "resample_scale_factor", None)
+        if result.image_id and isinstance(factor, (int, float)) and factor > 0 and factor < 0.999:
+            return True
+        return False
 
     def _update_scale_group_state(self) -> None:
         if not hasattr(self, "scale_group"):
@@ -897,14 +931,9 @@ class ImageImportDialog(QDialog):
         self._sync_resize_controls()
 
     def _sync_resize_controls(self) -> None:
-        if not hasattr(self, "resize_optimal_checkbox") or not hasattr(self, "store_original_checkbox"):
+        if not hasattr(self, "resize_optimal_checkbox"):
             return
-        resize_enabled = bool(self.resize_optimal_checkbox.isChecked())
-        if not resize_enabled and self.store_original_checkbox.isChecked():
-            self.store_original_checkbox.blockSignals(True)
-            self.store_original_checkbox.setChecked(False)
-            self.store_original_checkbox.blockSignals(False)
-        self.store_original_checkbox.setEnabled(resize_enabled)
+        return
 
     def _update_micro_settings_state(self, enable: bool | None = None) -> None:
         if not hasattr(self, "contrast_combo"):
@@ -935,23 +964,42 @@ class ImageImportDialog(QDialog):
         indices = self._current_selection_indices()
         if len(indices) != 1:
             self.set_from_image_btn.setEnabled(False)
+            self.set_from_image_btn.setStyleSheet(
+                "background-color: #bdc3c7; color: #7f8c8d;"
+            )
             return
         idx = indices[0]
         if idx < 0 or idx >= len(self.import_results):
             self.set_from_image_btn.setEnabled(False)
+            self.set_from_image_btn.setStyleSheet(
+                "background-color: #bdc3c7; color: #7f8c8d;"
+            )
             return
         if self.import_results[idx].image_type == "microscope":
             self.set_from_image_btn.setEnabled(False)
+            self.set_from_image_btn.setStyleSheet(
+                "background-color: #bdc3c7; color: #7f8c8d;"
+            )
             return
         has_exif_data = (
             self._current_exif_datetime is not None
             or self._current_exif_lat is not None
             or self._current_exif_lon is not None
         )
-        enable = has_exif_data
-        if enable and self._matches_observation_datetime(self._current_exif_datetime):
-            enable = False
+        enable = bool(has_exif_data)
         self.set_from_image_btn.setEnabled(enable)
+        if not enable:
+            self.set_from_image_btn.setStyleSheet(
+                "background-color: #bdc3c7; color: #7f8c8d;"
+            )
+            return
+        is_source = self._observation_source_index == idx
+        if is_source:
+            self.set_from_image_btn.setStyleSheet(
+                "background-color: #27ae60; color: white; font-weight: bold;"
+            )
+        else:
+            self.set_from_image_btn.setStyleSheet("")
 
     def _current_single_index(self) -> int | None:
         indices = self._current_selection_indices()
@@ -999,6 +1047,7 @@ class ImageImportDialog(QDialog):
             self.ai_crop_btn.setEnabled(enable)
             if not enable and self._ai_crop_active:
                 self._set_ai_crop_active(False)
+            self._set_ai_crop_button_style(enable)
         if hasattr(self, "ai_guess_btn"):
             indices = self._current_selection_indices()
             enable_guess = False
@@ -1084,6 +1133,10 @@ class ImageImportDialog(QDialog):
                     return value
         if not isinstance(taxon, dict):
             return None
+        for key in ("infoURL", "infoUrl", "info_url"):
+            value = taxon.get(key)
+            if isinstance(value, str) and value.startswith("http"):
+                return value
         for key in ("url", "link", "href", "uri"):
             value = taxon.get(key)
             if isinstance(value, str) and value.startswith("http"):
@@ -1095,7 +1148,7 @@ class ImageImportDialog(QDialog):
             or taxon.get("id")
         )
         if taxon_id:
-            return f"https://artsdatabanken.no/Taxon/{taxon_id}"
+            return f"https://artsdatabanken.no/arter/takson/{taxon_id}"
         return "https://artsdatabanken.no"
 
     def _build_adb_link_widget(self, url: str | None) -> QLabel | None:
@@ -1150,15 +1203,26 @@ class ImageImportDialog(QDialog):
         if hasattr(self, "preview"):
             self.preview.set_crop_mode(self._ai_crop_active)
             self.preview.set_crop_aspect_ratio(1.0 if self._ai_crop_active else None)
-        if hasattr(self, "ai_crop_btn"):
-            if self._ai_crop_active:
-                self.ai_crop_btn.setStyleSheet(
-                    "background-color: #e74c3c; color: white; font-weight: bold;"
-                )
-            else:
-                self.ai_crop_btn.setStyleSheet(
-                    "background-color: #3498db; color: white; font-weight: bold;"
-                )
+        self._set_ai_crop_button_style()
+
+    def _set_ai_crop_button_style(self, enabled: bool | None = None) -> None:
+        if not hasattr(self, "ai_crop_btn"):
+            return
+        if enabled is None:
+            enabled = self.ai_crop_btn.isEnabled()
+        if not enabled:
+            self.ai_crop_btn.setStyleSheet(
+                "background-color: #bdc3c7; color: #7f8c8d; font-weight: bold;"
+            )
+            return
+        if self._ai_crop_active:
+            self.ai_crop_btn.setStyleSheet(
+                "background-color: #e74c3c; color: white; font-weight: bold;"
+            )
+        else:
+            self.ai_crop_btn.setStyleSheet(
+                "background-color: #3498db; color: white; font-weight: bold;"
+            )
 
     def _on_ai_crop_clicked(self) -> None:
         index = self._current_single_index()
@@ -1296,7 +1360,11 @@ class ImageImportDialog(QDialog):
         temp_paths: list,
     ) -> None:
         for temp_path in temp_paths or []:
-            if temp_path:
+            if not temp_path:
+                continue
+            try:
+                Path(temp_path).unlink(missing_ok=True)
+            except Exception:
                 self._temp_preview_paths.add(temp_path)
         for index in indices or []:
             self._ai_predictions_by_index[index] = predictions or []
@@ -1425,14 +1493,22 @@ class ImageImportDialog(QDialog):
             dt = meta.get("datetime")
             if dt:
                 captured_at = QDateTime(dt)
+            lat = meta.get("latitude")
+            lon = meta.get("longitude")
+            if (lat is None or lon is None) and path:
+                lat2, lon2 = get_gps_coordinates(path)
+                if lat is None:
+                    lat = lat2
+                if lon is None:
+                    lon = lon2
             preview_path = path
-            has_exif_gps = meta.get("latitude") is not None or meta.get("longitude") is not None
+            has_exif_gps = lat is not None or lon is not None
             result = ImageImportResult(
                 filepath=path,
                 preview_path=preview_path or path,
                 captured_at=captured_at,
-                gps_latitude=None,
-                gps_longitude=None,
+                gps_latitude=lat,
+                gps_longitude=lon,
                 gps_source=False,
                 exif_has_gps=has_exif_gps,
                 resize_to_optimal=self.resize_to_optimal_default,
@@ -1472,9 +1548,30 @@ class ImageImportDialog(QDialog):
                 result.resize_to_optimal = self.resize_to_optimal_default
             if not hasattr(result, "store_original"):
                 result.store_original = self.store_original_default
-            if result.filepath and (not getattr(result, "exif_has_gps", False) or not result.captured_at):
+            if result.filepath and (
+                not getattr(result, "exif_has_gps", False)
+                or not result.captured_at
+                or result.gps_latitude is None
+                or result.gps_longitude is None
+            ):
                 meta = get_image_metadata(result.filepath)
-                result.exif_has_gps = meta.get("latitude") is not None or meta.get("longitude") is not None
+                lat = meta.get("latitude")
+                lon = meta.get("longitude")
+                if (lat is None or lon is None):
+                    lat2, lon2 = get_gps_coordinates(result.filepath)
+                    if lat is None:
+                        lat = lat2
+                    if lon is None:
+                        lon = lon2
+                if result.gps_latitude is None:
+                    result.gps_latitude = lat
+                if result.gps_longitude is None:
+                    result.gps_longitude = lon
+                result.exif_has_gps = (
+                    bool(getattr(result, "exif_has_gps", False))
+                    or lat is not None
+                    or lon is not None
+                )
                 if not result.captured_at:
                     dt = meta.get("datetime")
                     if dt:
@@ -1531,18 +1628,8 @@ class ImageImportDialog(QDialog):
             self._update_ai_table()
             self._update_ai_overlay()
 
-    def _select_image(self, index: int, sync_gallery: bool = True) -> None:
-        if index < 0 or index >= len(self.image_paths):
-            return
-        if self._ai_crop_active:
-            self._set_ai_crop_active(False)
-        self._set_ai_status(None)
-        self.selected_index = index
-        self.primary_index = index
-        result = self.import_results[index]
+    def _resolve_preview_pixmap(self, result: ImageImportResult) -> tuple[QPixmap | None, bool]:
         preview_path = result.preview_path or result.filepath
-        if sync_gallery:
-            self.gallery.select_paths([result.filepath])
         pixmap = self._get_cached_pixmap(preview_path) if preview_path else None
         preview_scaled = self._pixmap_cache_is_preview.get(preview_path or "", False)
         if (pixmap is None or pixmap.isNull()) and result.filepath and preview_path != result.filepath:
@@ -1558,11 +1645,132 @@ class ImageImportDialog(QDialog):
                 preview_path = converted_path
                 pixmap = self._get_cached_pixmap(preview_path)
                 preview_scaled = self._pixmap_cache_is_preview.get(preview_path or "", False)
+        return pixmap, preview_scaled
+
+    def _apply_resize_preview(self, pixmap: QPixmap, result: ImageImportResult) -> tuple[QPixmap, bool]:
+        if not self._resize_preview_enabled:
+            return pixmap, False
+        if getattr(self, "_calibration_mode", False):
+            return pixmap, False
+        factor = self._compute_resample_scale_factor(result, respect_toggle=False)
+        if factor >= 0.999:
+            return pixmap, False
+        target_w = max(1, int(round(pixmap.width() * factor)))
+        target_h = max(1, int(round(pixmap.height() * factor)))
+        resized = pixmap.scaled(
+            target_w,
+            target_h,
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation,
+        )
+        return resized, True
+
+    def _update_resize_preview_tag(
+        self,
+        result: ImageImportResult | None,
+        preview_resized: bool,
+        preview_pixmap: QPixmap | None = None,
+    ) -> None:
+        if not hasattr(self, "preview"):
+            return
+        if result is None:
+            self.preview.set_corner_tag("")
+            return
+        if preview_resized:
+            mp_value = None
+            size = self._get_image_size(result.original_filepath or result.filepath or result.preview_path)
+            if size:
+                width, height = size
+                factor = getattr(result, "resample_scale_factor", None)
+                if not isinstance(factor, (int, float)) or factor <= 0:
+                    factor = self._compute_resample_scale_factor(result, respect_toggle=False)
+                target_w = max(1, int(round(width * factor)))
+                target_h = max(1, int(round(height * factor)))
+                mp_value = (target_w * target_h) / 1_000_000.0
+            elif preview_pixmap is not None:
+                mp_value = (preview_pixmap.width() * preview_pixmap.height()) / 1_000_000.0
+            mp_text = self._format_megapixels(mp_value) if mp_value is not None else "--"
+            self.preview.set_corner_tag(
+                self.tr("Resize {mp}MP").format(mp=mp_text),
+                QColor(39, 174, 96),
+            )
+        else:
+            self.preview.set_corner_tag(self.tr("Original image"), QColor(149, 165, 166))
+
+    def _set_preview_for_result(self, result: ImageImportResult, preserve_view: bool = False) -> None:
+        old_state = None
+        if preserve_view and hasattr(self, "preview"):
+            old_state = self.preview.get_view_state()
+        pixmap, preview_scaled = self._resolve_preview_pixmap(result)
+        preview_resized = False
         if pixmap and not pixmap.isNull():
-            self.preview.set_image_sources(pixmap, result.filepath, preview_scaled)
+            pixmap, preview_resized = self._apply_resize_preview(pixmap, result)
+            preview_scaled_for_view = preview_scaled if not preview_resized else False
+            self.preview.set_image_sources(pixmap, result.filepath, preview_scaled_for_view)
         else:
             self.preview.set_image(None)
         self.preview_stack.setCurrentWidget(self.preview)
+        if (
+            old_state
+            and pixmap
+            and not pixmap.isNull()
+            and old_state.get("size")
+        ):
+            old_w, old_h = old_state["size"]
+            new_w, new_h = pixmap.width(), pixmap.height()
+            if old_w and old_h:
+                ratio_x = float(new_w) / float(old_w)
+                ratio_y = float(new_h) / float(old_h)
+                center = old_state["center"]
+                new_center = QPointF(center.x() * ratio_x, center.y() * ratio_y)
+                zoom_ratio = ratio_x if ratio_x > 0 else 1.0
+                new_zoom = float(old_state["zoom"]) / zoom_ratio
+                self.preview.set_view_state(new_center, new_zoom)
+        if pixmap and not pixmap.isNull():
+            self._update_resize_preview_tag(result, preview_resized, pixmap)
+        else:
+            self._update_resize_preview_tag(None, False)
+
+    def _refresh_resize_preview(self, force: bool = False, preserve_view: bool = False) -> None:
+        if not self._resize_preview_enabled and not force:
+            return
+        index = self._current_single_index()
+        if index is None:
+            if hasattr(self, "preview"):
+                self.preview.set_corner_tag("")
+            return
+        if index < 0 or index >= len(self.import_results):
+            return
+        self._set_preview_for_result(self.import_results[index], preserve_view=preserve_view)
+        self._update_ai_overlay()
+
+    def _toggle_resize_preview(self) -> None:
+        self._resize_preview_enabled = not self._resize_preview_enabled
+        self._refresh_resize_preview(force=True, preserve_view=True)
+
+    def eventFilter(self, obj, event):
+        if (
+            obj is getattr(self, "target_sampling_input", None)
+            and event.type() == QEvent.KeyPress
+            and event.key() == Qt.Key_P
+            and event.modifiers() in (Qt.NoModifier, Qt.ShiftModifier)
+        ):
+            self._toggle_resize_preview()
+            return True
+        return super().eventFilter(obj, event)
+
+    def _select_image(self, index: int, sync_gallery: bool = True) -> None:
+        if index < 0 or index >= len(self.image_paths):
+            return
+        if self._ai_crop_active:
+            self._set_ai_crop_active(False)
+        self._set_ai_status(None)
+        self.selected_index = index
+        self.primary_index = index
+        result = self.import_results[index]
+        if sync_gallery:
+            self.gallery.select_paths([result.filepath])
+        self._set_preview_for_result(result)
         self._load_result_into_form(result)
         self._update_current_image_exif(result)
         self._update_scale_group_state()
@@ -1661,6 +1869,14 @@ class ImageImportDialog(QDialog):
             if img:
                 old_scale = img.get("scale_microns_per_pixel")
             new_scale = self._resolve_selected_scale_value(selected_objective)
+            factor = getattr(result, "resample_scale_factor", None)
+            if (
+                new_scale is not None
+                and isinstance(factor, (int, float))
+                and factor > 0
+                and factor < 0.999
+            ):
+                new_scale = float(new_scale) / float(factor)
             if (
                 old_scale is not None
                 and new_scale is not None
@@ -1694,13 +1910,14 @@ class ImageImportDialog(QDialog):
         )
         if hasattr(self, "resize_optimal_checkbox"):
             result.resize_to_optimal = bool(self.resize_optimal_checkbox.isChecked())
-        if hasattr(self, "store_original_checkbox"):
-            result.store_original = bool(self.store_original_checkbox.isChecked())
-        result.resample_scale_factor = self._compute_resample_scale_factor(result)
+        result.store_original = self._store_originals_enabled()
+        if not result.image_id:
+            result.resample_scale_factor = self._compute_resample_scale_factor(result)
         self._refresh_gallery()
         self._update_summary()
         if index == self.selected_index and len(self.selected_indices) <= 1:
             self._update_current_image_sampling(result)
+            self._refresh_resize_preview(preserve_view=True)
         return True
 
     def _apply_settings_to_indices(
@@ -1787,7 +2004,18 @@ class ImageImportDialog(QDialog):
             old_scale = img.get("scale_microns_per_pixel")
             if old_scale is None:
                 continue
-            if abs(float(new_scale) - float(old_scale)) <= 1e-6:
+            factor = getattr(result, "resample_scale_factor", None)
+            effective_new_scale = new_scale
+            if (
+                effective_new_scale is not None
+                and isinstance(factor, (int, float))
+                and factor > 0
+                and factor < 0.999
+            ):
+                effective_new_scale = float(effective_new_scale) / float(factor)
+            if effective_new_scale is None:
+                continue
+            if abs(float(effective_new_scale) - float(old_scale)) <= 1e-6:
                 continue
             measurements = MeasurementDB.get_measurements_for_image(result.image_id)
             if not measurements:
@@ -1798,7 +2026,9 @@ class ImageImportDialog(QDialog):
             )
             if not has_points:
                 continue
-            targets.append((result.image_id, float(old_scale), float(new_scale), measurements))
+            targets.append(
+                (result.image_id, float(old_scale), float(effective_new_scale), measurements)
+            )
         return targets
 
     def _confirm_rescale_for_targets(self, target_count: int) -> str:
@@ -2140,10 +2370,20 @@ class ImageImportDialog(QDialog):
                 return float(scale)
         return None
 
-    def _compute_resample_scale_factor(self, result: ImageImportResult | None) -> float:
+    def _compute_resample_scale_factor(
+        self,
+        result: ImageImportResult | None,
+        respect_toggle: bool = True,
+    ) -> float:
         if not result or result.image_type != "microscope":
             return 1.0
-        if not hasattr(self, "resize_optimal_checkbox") or not self.resize_optimal_checkbox.isChecked():
+        if (
+            respect_toggle
+            and (
+                not hasattr(self, "resize_optimal_checkbox")
+                or not self.resize_optimal_checkbox.isChecked()
+            )
+        ):
             return 1.0
         objective = None
         if result.objective and result.objective in self.objectives:
@@ -2180,7 +2420,7 @@ class ImageImportDialog(QDialog):
             self.current_resolution_label.setText("--")
             self.target_resolution_label.setText("--")
             return
-        size = self._get_image_size(result.original_filepath or result.filepath or result.preview_path)
+        size = self._get_image_size(result.filepath or result.preview_path or result.original_filepath)
         if not size:
             self.current_resolution_label.setText("--")
             self.target_resolution_label.setText("--")
@@ -2229,17 +2469,17 @@ class ImageImportDialog(QDialog):
         )
 
     def _on_resize_settings_changed(self) -> None:
-        if not hasattr(self, "resize_optimal_checkbox") or not hasattr(self, "store_original_checkbox"):
+        if not hasattr(self, "resize_optimal_checkbox"):
             return
         resize_enabled = bool(self.resize_optimal_checkbox.isChecked())
         self._sync_resize_controls()
-        store_original = bool(self.store_original_checkbox.isChecked()) if resize_enabled else False
         SettingsDB.set_setting("resize_to_optimal_sampling", resize_enabled)
-        SettingsDB.set_setting("store_original_images", store_original)
+        store_original = self._store_originals_enabled() if resize_enabled else False
         for result in self.import_results:
             result.resize_to_optimal = resize_enabled
             result.store_original = store_original
-            result.resample_scale_factor = self._compute_resample_scale_factor(result)
+            if not result.image_id:
+                result.resample_scale_factor = self._compute_resample_scale_factor(result)
         if self.selected_index is not None and 0 <= self.selected_index < len(self.import_results):
             self._update_current_image_sampling(self.import_results[self.selected_index])
 
@@ -2251,9 +2491,17 @@ class ImageImportDialog(QDialog):
             self.objectives[selected_objective]["target_sampling_pct"] = float(value)
             save_objectives(self.objectives)
         for result in self.import_results:
-            result.resample_scale_factor = self._compute_resample_scale_factor(result)
+            if not result.image_id:
+                result.resample_scale_factor = self._compute_resample_scale_factor(result)
         if self.selected_index is not None and 0 <= self.selected_index < len(self.import_results):
             self._update_current_image_sampling(self.import_results[self.selected_index])
+        self._refresh_resize_preview(preserve_view=True)
+
+    def _store_originals_enabled(self) -> bool:
+        storage_mode = SettingsDB.get_setting("original_storage_mode")
+        if not storage_mode:
+            return bool(SettingsDB.get_setting("store_original_images", False))
+        return storage_mode != "none"
 
     def _format_megapixels(self, mp_value: float) -> str:
         text = f"{mp_value:.1f}"
@@ -2337,7 +2585,7 @@ class ImageImportDialog(QDialog):
             self.scale_warning_label.setVisible(False)
             return
         image_mp = self._get_image_megapixels(
-            result.original_filepath or result.filepath or result.preview_path
+            result.filepath or result.preview_path or result.original_filepath
         )
         if not image_mp:
             self.scale_warning_label.setText("")
@@ -2425,6 +2673,7 @@ class ImageImportDialog(QDialog):
 
     def _show_multi_selection_state(self) -> None:
         self.preview.set_image(None)
+        self.preview.set_corner_tag("")
         self.preview_stack.setCurrentWidget(self.preview_message)
         self._clear_current_image_exif()
         self._update_set_from_image_button_state()
@@ -2635,6 +2884,9 @@ class ImageImportDialog(QDialog):
         self._accepted = True
         self.continueRequested.emit(self.import_results)
         self.accept()
+
+    def get_observation_gps(self) -> tuple[float | None, float | None]:
+        return self._observation_lat, self._observation_lon
 
     def enter_calibration_mode(self, dialog):
         if not getattr(self, "preview", None) or not self.preview.original_pixmap:

@@ -15,8 +15,12 @@ from PIL import Image
 from PySide6.QtCore import QUrl
 from pathlib import Path
 import sqlite3
+import csv
+import shutil
 from database.models import ObservationDB, ImageDB, MeasurementDB, SettingsDB, CalibrationDB
 from database.schema import (
+    get_connection,
+    get_database_path,
     get_images_dir,
     load_objectives,
     objective_display_name,
@@ -70,6 +74,7 @@ class MapServiceHelper:
 
     def __init__(self, parent):
         self.parent = parent
+        self._nbic_index: dict[str, int] | None = None
 
     def _utm_from_latlon(self, lat, lon):
         """Convert WGS84 lat/lon to EUREF89 / UTM 33N."""
@@ -85,6 +90,65 @@ class MapServiceHelper:
         transformer = Transformer.from_crs("EPSG:4326", "EPSG:25833", always_xy=True)
         easting, northing = transformer.transform(lon, lat)
         return easting, northing
+
+    def _normalize_species_key(self, text: str | None) -> str:
+        if not text:
+            return ""
+        return " ".join(text.strip().lower().split())
+
+    def _load_nbic_index(self) -> dict[str, int]:
+        if self._nbic_index is not None:
+            return self._nbic_index
+        self._nbic_index = {}
+        try:
+            try:
+                csv.field_size_limit(1024 * 1024 * 10)
+            except OverflowError:
+                csv.field_size_limit(2147483647)
+            base_dir = Path(__file__).resolve().parents[1]
+            taxon_path = base_dir / "database" / "taxon.txt"
+            if not taxon_path.exists():
+                return self._nbic_index
+            with taxon_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                reader = csv.DictReader(handle, delimiter="\t")
+                for row in reader:
+                    if (row.get("taxonRank") or "").strip().lower() != "species":
+                        continue
+                    if (row.get("taxonomicStatus") or "").strip().lower() != "valid":
+                        continue
+                    taxon_id = (row.get("id") or row.get("taxonID") or "").strip()
+                    if not taxon_id:
+                        continue
+                    sci = (row.get("scientificName") or "").strip()
+                    genus = (row.get("genus") or "").strip()
+                    species = (row.get("specificEpithet") or "").strip()
+                    if sci:
+                        self._nbic_index[self._normalize_species_key(sci)] = int(taxon_id)
+                    if genus and species:
+                        combined = f"{genus} {species}"
+                        self._nbic_index[self._normalize_species_key(combined)] = int(taxon_id)
+        except Exception:
+            return self._nbic_index
+        return self._nbic_index
+
+    def _nbic_id_from_local(self, scientific_name: str) -> int | None:
+        key = self._normalize_species_key(scientific_name)
+        if not key:
+            return None
+        index = self._load_nbic_index()
+        return index.get(key)
+
+    def _taxon_id_from_nbic(self, nbic_id: int) -> int | None:
+        try:
+            import requests
+        except Exception as exc:
+            raise RuntimeError("requests is required for Artsdatabanken lookups.") from exc
+        url = f"https://artsdatabanken.no/Api/Taxon/ScientificName/{nbic_id}"
+        response = requests.get(url, timeout=20)
+        response.raise_for_status()
+        data = response.json()
+        taxon_id = data.get("taxonID")
+        return int(taxon_id) if taxon_id else None
 
     def _inat_taxon_id(self, species_name):
         try:
@@ -110,6 +174,11 @@ class MapServiceHelper:
             params["taxon_id"] = taxon_id
         return "https://www.inaturalist.org/observations?" + urlencode(params)
 
+    def _inat_species_link(self, species_name):
+        taxon_id = self._inat_taxon_id(species_name)
+        slug = species_name.strip().replace(" ", "-")
+        return f"https://www.inaturalist.org/taxa/{taxon_id}-{slug}"
+
     def open_inaturalist_map(self, lat, lon, species_name):
         """Open iNaturalist observations map for the selected species."""
         import webbrowser
@@ -120,19 +189,64 @@ class MapServiceHelper:
             return
         webbrowser.open(url)
 
+    def open_inaturalist_species(self, species_name):
+        import webbrowser
+        try:
+            url = self._inat_species_link(species_name)
+        except Exception as exc:
+            QMessageBox.warning(self.parent, "iNaturalist Lookup Failed", str(exc))
+            return
+        webbrowser.open(url)
+
+    def _gbif_taxon_id(self, species_name):
+        try:
+            import requests
+        except Exception as exc:
+            raise RuntimeError("requests is required for GBIF lookups.") from exc
+
+        url = "https://api.gbif.org/v1/species/match"
+        response = requests.get(
+            url,
+            params={"name": species_name, "strict": "false", "kingdom": "Fungi"},
+            timeout=20
+        )
+        response.raise_for_status()
+        data = response.json()
+        taxon_id = data.get("usageKey")
+        if not taxon_id:
+            raise ValueError("No GBIF taxon found")
+        return taxon_id
+
+    def open_gbif_species(self, species_name):
+        import webbrowser
+        try:
+            taxon_id = self._gbif_taxon_id(species_name)
+            url = f"https://www.gbif.org/species/{taxon_id}"
+        except Exception as exc:
+            QMessageBox.warning(self.parent, "GBIF Lookup Failed", str(exc))
+            return
+        webbrowser.open(url)
+
     def _artskart_taxon_id(self, scientific_name):
         try:
             import requests
         except Exception as exc:
             raise RuntimeError("requests is required for Artskart lookups.") from exc
 
+        nbic_id = self._nbic_id_from_local(scientific_name)
+        if nbic_id:
+            try:
+                taxon_id = self._taxon_id_from_nbic(nbic_id)
+                if taxon_id:
+                    return taxon_id
+            except Exception:
+                pass
+
         candidates = [
             ("https://artskart.artsdatabanken.no/publicapi/api/taxon/search", {"searchString": scientific_name}),
             ("https://artskart.artsdatabanken.no/publicapi/api/taxon", {"searchString": scientific_name}),
             ("https://artskart.artsdatabanken.no/publicapi/api/taxon/search", {"q": scientific_name}),
             ("https://artskart.artsdatabanken.no/publicapi/api/taxon", {"q": scientific_name}),
-            ("https://api.artsdatabanken.no/v1/Taxon/Search", {"searchText": scientific_name}),
-            ("https://api.artsdatabanken.no/v1/Taxon/Search", {"q": scientific_name}),
         ]
 
         last_error = None
@@ -175,7 +289,7 @@ class MapServiceHelper:
             raise last_error
         raise ValueError("No taxon found")
 
-    def _artskart_link(self, taxon_id, lat, lon, zoom=12, bg="topo2"):
+    def _artskart_link(self, taxon_id, lat, lon, zoom=12, bg="nibwmts"):
         from urllib.parse import quote
         import json
 
@@ -184,7 +298,8 @@ class MapServiceHelper:
             "TaxonIds": [taxon_id],
             "IncludeSubTaxonIds": True,
             "Found": [2],
-            "CenterPoints": True,
+            "NotRecovered": [2],
+            "Blocked": [2],
             "Style": 1
         }
         filt_s = json.dumps(filt, separators=(",", ":"))
@@ -193,7 +308,7 @@ class MapServiceHelper:
             f"{easting:.0f},{northing:.0f}/{zoom}/background/{bg}/filter/{quote(filt_s)}"
         )
 
-    def _artskart_base_link(self, lat, lon, zoom=12, bg="topo2"):
+    def _artskart_base_link(self, lat, lon, zoom=12, bg="nibwmts"):
         easting, northing = self._utm_from_latlon(lat, lon)
         return (
             f"https://artskart.artsdatabanken.no/app/#map/"
@@ -205,70 +320,97 @@ class MapServiceHelper:
         dialog = QDialog(self.parent)
         dialog.setWindowTitle("Open Map")
         dialog.setModal(True)
+        dialog.setMinimumHeight(360)
+        dialog.setMinimumWidth(320)
 
         layout = QVBoxLayout(dialog)
         layout.addWidget(QLabel("Choose a map service:"))
-        list_widget = QListWidget()
-        services = ["Google Maps", "Kilden", "Artskart", "Norge i Bilder", "iNaturalist"]
-        for service in services:
-            list_widget.addItem(QListWidgetItem(service))
-        list_widget.setCurrentRow(0)
-        layout.addWidget(list_widget)
+        species_complete = bool(species_name and len(species_name.split()) >= 2)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Open | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(dialog.accept)
+        def add_link(label_text, handler):
+            link_label = QLabel(f'<a href="#">{label_text}</a>')
+            link_label.setTextFormat(Qt.RichText)
+            link_label.setTextInteractionFlags(Qt.TextBrowserInteraction)
+            link_label.setOpenExternalLinks(False)
+            link_label.linkActivated.connect(lambda _=None: handler())
+            layout.addWidget(link_label)
+
+        def open_url(url):
+            import webbrowser
+            webbrowser.open(url)
+            dialog.accept()
+
+        def open_google_maps():
+            open_url(f"https://www.google.com/maps?q={lat},{lon}")
+
+        def open_kilden():
+            easting, northing = self._utm_from_latlon(lat, lon)
+            url = (
+                "https://kilden.nibio.no/?topic=arealinformasjon"
+                f"&zoom=14&x={easting:.2f}&y={northing:.2f}&bgLayer=graatone"
+            )
+            open_url(url)
+
+        def open_norge_i_bilder():
+            easting, northing = self._utm_from_latlon(lat, lon)
+            url = (
+                "https://www.norgeibilder.no/"
+                f"?x={easting:.0f}&y={northing:.0f}&level=17&utm=33"
+                "&projects=&layers=&plannedOmlop=0&plannedGeovekst=0"
+            )
+            open_url(url)
+
+        def open_artskart():
+            try:
+                if species_complete:
+                    taxon_id = self._artskart_taxon_id(species_name)
+                    url = self._artskart_link(taxon_id, lat, lon, zoom=12, bg="nibwmts")
+                else:
+                    url = self._artskart_base_link(lat, lon, zoom=12, bg="nibwmts")
+            except Exception as exc:
+                QMessageBox.warning(
+                    self.parent,
+                    "Artskart Lookup Failed",
+                    f"{exc}\nOpening map without species filter."
+                )
+                url = self._artskart_base_link(lat, lon, zoom=12, bg="nibwmts")
+            open_url(url)
+
+        def open_inat_local():
+            try:
+                self.open_inaturalist_map(lat, lon, species_name)
+            finally:
+                dialog.accept()
+
+        def open_inat_species():
+            try:
+                self.open_inaturalist_species(species_name)
+            finally:
+                dialog.accept()
+
+        def open_gbif_species():
+            try:
+                self.open_gbif_species(species_name)
+            finally:
+                dialog.accept()
+
+        add_link("Google Maps", open_google_maps)
+        add_link("Kilden", open_kilden)
+        add_link("Artskart", open_artskart)
+        add_link("Norge i Bilder", open_norge_i_bilder)
+        if species_complete:
+            add_link("iNaturalist map search", open_inat_local)
+            add_link("iNaturalist species page", open_inat_species)
+            add_link("GBIF species page", open_gbif_species)
+        else:
+            add_link("iNaturalist map search", open_inat_local)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
         buttons.rejected.connect(dialog.reject)
+        buttons.accepted.connect(dialog.accept)
         layout.addWidget(buttons)
 
-        list_widget.itemDoubleClicked.connect(lambda _: dialog.accept())
-        if dialog.exec() != QDialog.Accepted:
-            return
-
-        selected_item = list_widget.currentItem()
-        if not selected_item:
-            return
-        selection = selected_item.text()
-
-        try:
-            if selection == "Google Maps":
-                url = f"https://www.google.com/maps?q={lat},{lon}"
-            elif selection == "Kilden":
-                easting, northing = self._utm_from_latlon(lat, lon)
-                url = (
-                    "https://kilden.nibio.no/?topic=arealinformasjon"
-                    f"&zoom=14&x={easting:.2f}&y={northing:.2f}&bgLayer=graatone"
-                )
-            elif selection == "Norge i Bilder":
-                easting, northing = self._utm_from_latlon(lat, lon)
-                url = (
-                    "https://www.norgeibilder.no/"
-                    f"?x={easting:.0f}&y={northing:.0f}&level=17&utm=33"
-                    "&projects=&layers=&plannedOmlop=0&plannedGeovekst=0"
-                )
-            elif selection == "Artskart":
-                try:
-                    if species_name:
-                        taxon_id = self._artskart_taxon_id(species_name)
-                        url = self._artskart_link(taxon_id, lat, lon)
-                    else:
-                        url = self._artskart_base_link(lat, lon)
-                except Exception as exc:
-                    QMessageBox.warning(
-                        self.parent,
-                        "Artskart Lookup Failed",
-                        f"{exc}\nOpening map without species filter."
-                    )
-                    url = self._artskart_base_link(lat, lon)
-            else:
-                if selection == "iNaturalist":
-                    self.open_inaturalist_map(lat, lon, species_name)
-                return
-        except Exception as exc:
-            QMessageBox.warning(self.parent, "Map Lookup Failed", str(exc))
-            return
-
-        import webbrowser
-        webbrowser.open(url)
+        dialog.exec()
 
 
 class ObservationsTab(QWidget):
@@ -905,6 +1047,16 @@ class ObservationsTab(QWidget):
                     image_results = image_dialog.import_results
                     ai_taxon = image_dialog.get_ai_selected_taxon()
                     ai_state = self._remap_ai_state_to_images(ai_state, image_results)
+                    obs_lat, obs_lon = image_dialog.get_observation_gps()
+                    ObservationDB.update_observation(
+                        obs_id,
+                        gps_latitude=obs_lat,
+                        gps_longitude=obs_lon,
+                        allow_nulls=True,
+                    )
+                    if observation is not None:
+                        observation["gps_latitude"] = obs_lat
+                        observation["gps_longitude"] = obs_lon
                 continue
             ai_state = dialog.get_ai_state()
             self._ai_suggestions_cache[obs_id] = ai_state
@@ -1073,6 +1225,21 @@ class ObservationsTab(QWidget):
                 except (TypeError, ValueError):
                     custom_scale = None
             objective_value = resolved_key if resolved_key else (None if objective_name == "Custom" else objective_name)
+            resize_to_optimal = bool(SettingsDB.get_setting("resize_to_optimal_sampling", False))
+            storage_mode = self._get_original_storage_mode()
+            store_original = storage_mode != "none"
+            resample_factor = img.get("resample_scale_factor")
+            if (
+                resample_factor is None
+                and objective_value
+                and objective_value in objectives
+                and isinstance(scale_value, (int, float))
+            ):
+                base_scale = objectives[objective_value].get("microns_per_pixel")
+                if isinstance(base_scale, (int, float)) and base_scale > 0 and scale_value > 0:
+                    factor_guess = float(base_scale) / float(scale_value)
+                    if 0 < factor_guess < 0.999:
+                        resample_factor = factor_guess
             results.append(
                 ImageImportResult(
                     filepath=filepath,
@@ -1088,8 +1255,10 @@ class ObservationsTab(QWidget):
                     ai_crop_box=ai_crop_box,
                     ai_crop_source_size=ai_crop_source_size,
                     gps_source=gps_source,
-                    resample_scale_factor=img.get("resample_scale_factor"),
+                    resample_scale_factor=resample_factor,
                     original_filepath=img.get("original_filepath") or filepath,
+                    resize_to_optimal=resize_to_optimal,
+                    store_original=store_original,
                 )
             )
         return results
@@ -1134,6 +1303,13 @@ class ObservationsTab(QWidget):
             return source_path
         try:
             with Image.open(source_path) as img:
+                exif_bytes = None
+                try:
+                    exif = img.getexif()
+                    if exif:
+                        exif_bytes = exif.tobytes()
+                except Exception:
+                    exif_bytes = None
                 new_w = max(1, int(round(img.width * scale_factor)))
                 new_h = max(1, int(round(img.height * scale_factor)))
                 resized = img.resize((new_w, new_h), Image.LANCZOS)
@@ -1148,13 +1324,175 @@ class ObservationsTab(QWidget):
                 fmt = img.format or None
                 if suffix.lower() in {".jpg", ".jpeg"}:
                     resized = resized.convert("RGB")
-                    save_kwargs["quality"] = 95
+                    quality = SettingsDB.get_setting("resize_jpeg_quality", 80)
+                    try:
+                        quality = int(quality)
+                    except (TypeError, ValueError):
+                        quality = 80
+                    quality = max(1, min(100, quality))
+                    save_kwargs["quality"] = quality
                     fmt = "JPEG"
+                    if exif_bytes:
+                        save_kwargs["exif"] = exif_bytes
                 resized.save(temp_path, format=fmt, **save_kwargs)
                 return str(temp_path)
         except Exception as exc:
             print(f"Warning: Could not resize image {source_path}: {exc}")
             return source_path
+
+    def _get_image_size(self, path: str | None) -> tuple[int, int] | None:
+        if not path:
+            return None
+        try:
+            with Image.open(path) as img:
+                return img.width, img.height
+        except Exception:
+            return None
+
+    def _scale_measurement_points(self, image_id: int, scale_factor: float) -> None:
+        if not image_id or not scale_factor or scale_factor <= 0:
+            return
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            '''
+            UPDATE spore_measurements
+            SET p1_x = p1_x * ?, p1_y = p1_y * ?,
+                p2_x = p2_x * ?, p2_y = p2_y * ?,
+                p3_x = CASE WHEN p3_x IS NOT NULL THEN p3_x * ? ELSE NULL END,
+                p3_y = CASE WHEN p3_y IS NOT NULL THEN p3_y * ? ELSE NULL END,
+                p4_x = CASE WHEN p4_x IS NOT NULL THEN p4_x * ? ELSE NULL END,
+                p4_y = CASE WHEN p4_y IS NOT NULL THEN p4_y * ? ELSE NULL END
+            WHERE image_id = ?
+            ''',
+            [
+                scale_factor, scale_factor,
+                scale_factor, scale_factor,
+                scale_factor, scale_factor,
+                scale_factor, scale_factor,
+                image_id,
+            ]
+        )
+        conn.commit()
+        conn.close()
+
+    def _rescale_measurement_lengths(
+        self,
+        image_id: int,
+        old_scale: float | None,
+        new_scale: float | None,
+    ) -> None:
+        if (
+            not image_id
+            or not old_scale
+            or not new_scale
+            or old_scale <= 0
+            or new_scale <= 0
+        ):
+            return
+        ratio = float(new_scale) / float(old_scale)
+        if abs(ratio - 1.0) < 1e-6:
+            return
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            '''
+            UPDATE spore_measurements
+            SET length_um = length_um * ?,
+                width_um = CASE WHEN width_um IS NOT NULL THEN width_um * ? ELSE NULL END
+            WHERE image_id = ?
+            ''',
+            (ratio, ratio, image_id)
+        )
+        conn.commit()
+        conn.close()
+
+    def _maybe_remove_image_file(
+        self,
+        old_path: str | None,
+        new_path: str | None,
+        keep_original: bool,
+        images_root: Path,
+    ) -> None:
+        if keep_original or not old_path or not new_path:
+            return
+        if old_path == new_path:
+            return
+        try:
+            old = Path(old_path).resolve()
+            root = images_root.resolve()
+            old.relative_to(root)
+        except Exception:
+            return
+        try:
+            old.unlink()
+        except Exception as exc:
+            print(f"Warning: Could not remove replaced image {old_path}: {exc}")
+
+    def _get_original_storage_mode(self) -> str:
+        mode = SettingsDB.get_setting("original_storage_mode")
+        if not mode:
+            mode = "observation" if SettingsDB.get_setting("store_original_images", False) else "none"
+        return str(mode)
+
+    def _get_originals_base_dir(self) -> Path:
+        base = SettingsDB.get_setting("originals_dir")
+        if base:
+            return Path(base)
+        return get_database_path().parent / "images" / "originals"
+
+    def _store_original_for_observation(
+        self,
+        observation_id: int,
+        source_path: str | None,
+        storage_mode: str,
+        images_root: Path,
+        obs_folder: Path | None,
+    ) -> tuple[str | None, bool]:
+        if storage_mode == "none" or not source_path:
+            return None, False
+        try:
+            source = Path(source_path).resolve()
+        except Exception:
+            return None, False
+        if not source.exists():
+            return None, False
+        target_dir = None
+        if storage_mode == "global":
+            base = self._get_originals_base_dir()
+            if obs_folder:
+                try:
+                    rel = obs_folder.resolve().relative_to(images_root.resolve())
+                    target_dir = base / rel
+                except Exception:
+                    target_dir = base / obs_folder.name
+            else:
+                target_dir = base / f"observation_{observation_id}"
+        else:
+            if obs_folder:
+                target_dir = obs_folder / "originals"
+        if not target_dir:
+            return None, False
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            return None, False
+        try:
+            if source.is_relative_to(target_dir.resolve()):
+                return str(source), True
+        except Exception:
+            pass
+        dest = target_dir / source.name
+        counter = 1
+        while dest.exists():
+            dest = target_dir / f"{source.stem}_{counter}{source.suffix}"
+            counter += 1
+        try:
+            shutil.copy2(source, dest)
+        except Exception as exc:
+            print(f"Warning: Could not copy original image: {exc}")
+            return None, False
+        return str(dest), True
 
     def _apply_import_results_to_observation(
         self,
@@ -1163,8 +1501,22 @@ class ObservationsTab(QWidget):
         existing_images: list[dict] | None = None,
     ) -> None:
         objectives = load_objectives()
-        output_dir = get_images_dir() / "imports"
+        images_root = Path(get_images_dir())
+        output_dir = images_root / "imports"
         output_dir.mkdir(parents=True, exist_ok=True)
+        existing_by_id = {
+            img.get("id"): img for img in (existing_images or []) if img.get("id")
+        }
+        storage_mode = self._get_original_storage_mode()
+        obs_folder = None
+        try:
+            obs = ObservationDB.get_observation(obs_id)
+            if obs and obs.get("folder_path"):
+                obs_folder = Path(obs.get("folder_path"))
+        except Exception:
+            obs_folder = None
+        if obs_folder:
+            obs_folder.mkdir(parents=True, exist_ok=True)
 
         existing_ids = {img.get("id") for img in (existing_images or []) if img.get("id")}
         result_ids = {res.image_id for res in results if res.image_id}
@@ -1186,21 +1538,51 @@ class ObservationsTab(QWidget):
 
             scale = None
             objective_name = None
+            scale_from_existing = False
+            scale_is_custom = False
             if image_type == "microscope":
                 if result.custom_scale:
                     scale = float(result.custom_scale)
                     objective_name = "Custom"
+                    scale_is_custom = True
                 elif objective_key and objective_key in objectives:
-                    scale = float(objectives[objective_key]["microns_per_pixel"])
                     objective_name = objective_key
+                    if result.image_id:
+                        existing = existing_by_id.get(result.image_id)
+                        existing_scale = existing.get("scale_microns_per_pixel") if existing else None
+                        existing_obj = existing.get("objective_name") if existing else None
+                        existing_key = resolve_objective_key(existing_obj, objectives) or existing_obj
+                        if (
+                            existing_scale is not None
+                            and existing_key
+                            and existing_key == objective_key
+                        ):
+                            scale = float(existing_scale)
+                            scale_from_existing = True
+                    if scale is None:
+                        scale = float(objectives[objective_key]["microns_per_pixel"])
 
             calibration_id = None
             if objective_name and objective_name != "Custom":
                 calibration_id = CalibrationDB.get_active_calibration_id(objective_name)
 
             if result.image_id:
-                ImageDB.update_image(
-                    result.image_id,
+                existing = existing_by_id.get(result.image_id)
+                existing_path = existing.get("filepath") if existing else result.filepath
+                existing_scale = existing.get("scale_microns_per_pixel") if existing else None
+                existing_resample = existing.get("resample_scale_factor") if existing else None
+                already_resized = (
+                    isinstance(existing_resample, (int, float))
+                    and existing_resample > 0
+                    and existing_resample < 0.999
+                )
+                resample_factor = self._compute_resample_scale_factor(result, scale, objective_entry)
+                if already_resized and isinstance(existing_resample, (int, float)):
+                    resample_factor = float(existing_resample)
+                    if scale is not None and not scale_from_existing and not scale_is_custom:
+                        scale = float(scale) / float(existing_resample)
+
+                update_kwargs = dict(
                     image_type=image_type,
                     objective_name=objective_name,
                     scale=scale,
@@ -1212,6 +1594,92 @@ class ObservationsTab(QWidget):
                     gps_source=result.gps_source,
                     calibration_id=calibration_id,
                 )
+
+                apply_resample = (
+                    image_type == "microscope"
+                    and getattr(result, "resize_to_optimal", True)
+                    and resample_factor < 0.999
+                    and not already_resized
+                )
+                if apply_resample and existing_path:
+                    resample_dir = None
+                    try:
+                        resample_dir = Path(existing_path).parent
+                    except Exception:
+                        resample_dir = None
+                    if resample_dir is None and obs_folder is not None:
+                        resample_dir = obs_folder
+                    if resample_dir is None:
+                        resample_dir = output_dir
+                    resample_dir.mkdir(parents=True, exist_ok=True)
+                    resampled_path = self._resample_import_image(
+                        existing_path,
+                        resample_factor,
+                        resample_dir,
+                    ) or existing_path
+                    if resampled_path != existing_path:
+                        if scale is not None and resample_factor > 0:
+                            scale = float(scale) / float(resample_factor)
+                            update_kwargs["scale"] = scale
+                        update_kwargs["filepath"] = resampled_path
+                        update_kwargs["resample_scale_factor"] = resample_factor
+
+                        crop_box = result.ai_crop_box
+                        if crop_box:
+                            update_kwargs["ai_crop_box"] = tuple(v * resample_factor for v in crop_box)
+                        source_size = result.ai_crop_source_size
+                        if source_size:
+                            update_kwargs["ai_crop_source_size"] = (
+                                int(round(source_size[0] * resample_factor)),
+                                int(round(source_size[1] * resample_factor)),
+                            )
+                        else:
+                            size = self._get_image_size(existing_path)
+                            if size:
+                                update_kwargs["ai_crop_source_size"] = (
+                                    int(round(size[0] * resample_factor)),
+                                    int(round(size[1] * resample_factor)),
+                                )
+
+                        self._scale_measurement_points(result.image_id, resample_factor)
+
+                        copied_original = False
+                        if storage_mode != "none":
+                            original_source = None
+                            if existing:
+                                original_source = existing.get("original_filepath")
+                            if not original_source:
+                                original_source = existing_path
+                            dest_original, copied_original = self._store_original_for_observation(
+                                obs_id,
+                                original_source,
+                                storage_mode,
+                                images_root,
+                                obs_folder,
+                            )
+                            update_kwargs["original_filepath"] = dest_original or original_source
+                        else:
+                            update_kwargs["original_filepath"] = None
+
+                        try:
+                            generate_all_sizes(resampled_path, result.image_id)
+                        except Exception as e:
+                            print(f"Warning: Could not regenerate thumbnails for {resampled_path}: {e}")
+                        self._maybe_remove_image_file(
+                            existing_path,
+                            resampled_path,
+                            not (storage_mode == "none" or copied_original),
+                            images_root,
+                        )
+
+                if not apply_resample:
+                    self._rescale_measurement_lengths(
+                        result.image_id,
+                        existing_scale,
+                        scale,
+                    )
+
+                ImageDB.update_image(result.image_id, **update_kwargs)
                 continue
 
             filepath = result.filepath
@@ -1596,8 +2064,8 @@ class ObservationDetailsDialog(QDialog):
         self.ai_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.ai_table.setMinimumHeight(140)
         self.ai_table.setStyleSheet(
-            "QTableWidget::item:selected { background-color: #1f5aa6; color: white; font-weight: bold; }"
-            "QTableWidget::item:selected:!active { background-color: #2f74c0; color: white; font-weight: bold; }"
+            "QTableWidget::item:selected { background-color: #f0f2f4; color: #2c3e50; font-weight: bold; }"
+            "QTableWidget::item:selected:!active { background-color: #f0f2f4; color: #2c3e50; font-weight: bold; }"
         )
         self.ai_table.itemSelectionChanged.connect(self._on_ai_selection_changed)
         ai_layout.addWidget(self.ai_table)
@@ -1769,6 +2237,10 @@ class ObservationDetailsDialog(QDialog):
                     return value
         if not isinstance(taxon, dict):
             return None
+        for key in ("infoURL", "infoUrl", "info_url"):
+            value = taxon.get(key)
+            if isinstance(value, str) and value.startswith("http"):
+                return value
         for key in ("url", "link", "href", "uri"):
             value = taxon.get(key)
             if isinstance(value, str) and value.startswith("http"):
@@ -1780,7 +2252,7 @@ class ObservationDetailsDialog(QDialog):
             or taxon.get("id")
         )
         if taxon_id:
-            return f"https://artsdatabanken.no/Taxon/{taxon_id}"
+            return f"https://artsdatabanken.no/arter/takson/{taxon_id}"
         return "https://artsdatabanken.no"
 
     def _build_adb_link_widget(self, url: str | None) -> QLabel | None:
@@ -1947,8 +2419,15 @@ class ObservationDetailsDialog(QDialog):
         predictions: list,
         _box: object,
         _warnings: object,
-        _temp_paths: list,
+        temp_paths: list,
     ) -> None:
+        for temp_path in temp_paths or []:
+            if not temp_path:
+                continue
+            try:
+                Path(temp_path).unlink(missing_ok=True)
+            except Exception:
+                pass
         for index in indices or []:
             self._ai_predictions_by_index[index] = predictions or []
         self._update_ai_table()
