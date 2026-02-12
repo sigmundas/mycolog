@@ -32,7 +32,7 @@ sopp.jpg
 !database/vernacular_multilanguage.sqlite3
 
 # App local data folders
-images/
+/images/
 image_cache/
 thumbnails/
 database/taxon.txt
