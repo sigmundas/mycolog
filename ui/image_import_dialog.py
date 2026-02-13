@@ -421,6 +421,8 @@ class ImageImportDialog(QDialog):
         self._current_exif_lat: float | None = None
         self._current_exif_lon: float | None = None
         self._current_exif_path: str | None = None
+        self._missing_exif_paths: set[str] = set()
+        self._missing_exif_warning_scheduled = False
         self._pixmap_cache: dict[str, QPixmap] = {}
         self._pixmap_cache_is_preview: dict[str, bool] = {}
         self._max_preview_dim = 1600
@@ -1489,6 +1491,8 @@ class ImageImportDialog(QDialog):
                 path = converted_path
             self.image_paths.append(path)
             meta = get_image_metadata(path)
+            if meta.get("missing"):
+                self._register_missing_exif_path(path)
             captured_at = None
             dt = meta.get("datetime")
             if dt:
@@ -1555,6 +1559,8 @@ class ImageImportDialog(QDialog):
                 or result.gps_longitude is None
             ):
                 meta = get_image_metadata(result.filepath)
+                if meta.get("missing"):
+                    self._register_missing_exif_path(result.filepath)
                 lat = meta.get("latitude")
                 lon = meta.get("longitude")
                 if (lat is None or lon is None):
@@ -2249,14 +2255,52 @@ class ImageImportDialog(QDialog):
             )
         )
 
+    def _register_missing_exif_path(self, path: str | None) -> None:
+        if not path:
+            return
+        self._missing_exif_paths.add(path)
+        if not self._missing_exif_warning_scheduled:
+            self._missing_exif_warning_scheduled = True
+            QTimer.singleShot(0, self._show_missing_exif_warning)
+
+    def _show_missing_exif_warning(self) -> None:
+        self._missing_exif_warning_scheduled = False
+        if not self._missing_exif_paths:
+            return
+        paths = sorted(self._missing_exif_paths)
+        self._missing_exif_paths.clear()
+        names = [Path(p).name for p in paths if p]
+        preview = "\n".join(f"- {name}" for name in names[:5])
+        extra = ""
+        if len(names) > 5:
+            extra = self.tr("\n...and {count} more.").format(count=len(names) - 5)
+        QMessageBox.warning(
+            self,
+            self.tr("Missing image files"),
+            self.tr(
+                "Some image files are missing or were moved. EXIF data could not be read."
+            )
+            + "\n\n"
+            + self.tr("Missing files:")
+            + "\n"
+            + preview
+            + extra
+            + "\n\n"
+            + self.tr("Please relink or remove the missing images."),
+        )
+
     def _update_current_image_exif(self, result: ImageImportResult) -> None:
         path = result.filepath
         self._current_exif_path = path
         exif = get_exif_data(path) if path else {}
         meta = get_image_metadata(path) if path else {}
+        if meta.get("missing"):
+            self._register_missing_exif_path(path)
         dt = meta.get("datetime")
         if not dt and result.preview_path and result.preview_path != result.filepath:
             meta_preview = get_image_metadata(result.preview_path)
+            if meta_preview.get("missing"):
+                self._register_missing_exif_path(result.preview_path)
             dt = meta_preview.get("datetime")
         if dt:
             self._current_exif_datetime = QDateTime(dt)
@@ -2620,35 +2664,6 @@ class ImageImportDialog(QDialog):
         )
         self.scale_warning_label.setVisible(True)
 
-    def _utm_from_latlon(self, lat, lon):
-        """Convert WGS84 lat/lon to EUREF89 / UTM 33N."""
-        try:
-            from pyproj import Transformer
-        except Exception as exc:
-            QMessageBox.warning(
-                self,
-                self.tr("Missing Dependency"),
-                self.tr("pyproj is required for UTM conversions. Install it and try again.")
-            )
-            raise exc
-        transformer = Transformer.from_crs("EPSG:4326", "EPSG:25833", always_xy=True)
-        easting, northing = transformer.transform(lon, lat)
-        return easting, northing
-
-    def _artskart_base_link(self, lat, lon, zoom=12, bg="topo2"):
-        easting, northing = self._utm_from_latlon(lat, lon)
-        return (
-            f"https://artskart.artsdatabanken.no/app/#map/"
-            f"{easting:.0f},{northing:.0f}/{zoom}/background/{bg}"
-        )
-
-    def _inat_map_link(self, lat, lon, radius_km):
-        from urllib.parse import urlencode
-
-        return (
-            "https://www.inaturalist.org/observations?"
-            + urlencode({"lat": lat, "lng": lon, "radius": radius_km})
-        )
 
     def _clear_current_image_exif(self) -> None:
         self._current_exif_path = None
@@ -2723,61 +2738,12 @@ class ImageImportDialog(QDialog):
     def _open_current_image_map(self) -> None:
         if self._current_exif_lat is None or self._current_exif_lon is None:
             return
-        dialog = QDialog(self)
-        dialog.setWindowTitle(self.tr("Open Map"))
-        dialog.setModal(True)
-
-        layout = QVBoxLayout(dialog)
-        layout.addWidget(QLabel(self.tr("Choose a map service:")))
-        list_widget = QListWidget()
-        services = ["Google Maps", "Kilden", "Artskart", "Norge i Bilder", "iNaturalist"]
-        for service in services:
-            list_widget.addItem(QListWidgetItem(service))
-        list_widget.setCurrentRow(0)
-        layout.addWidget(list_widget)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Open | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
-
-        list_widget.itemDoubleClicked.connect(lambda _: dialog.accept())
-        if dialog.exec() != QDialog.Accepted:
-            return
-
-        selected_item = list_widget.currentItem()
-        if not selected_item:
-            return
-        selection = selected_item.text()
-        lat = self._current_exif_lat
-        lon = self._current_exif_lon
-
-        try:
-            if selection == "Google Maps":
-                url = f"https://www.google.com/maps?q={lat},{lon}"
-            elif selection == "Kilden":
-                easting, northing = self._utm_from_latlon(lat, lon)
-                url = (
-                    "https://kilden.nibio.no/?topic=arealinformasjon"
-                    f"&zoom=14&x={easting:.2f}&y={northing:.2f}&bgLayer=graatone"
-                )
-            elif selection == "Norge i Bilder":
-                easting, northing = self._utm_from_latlon(lat, lon)
-                url = (
-                    "https://www.norgeibilder.no/"
-                    f"?x={easting:.0f}&y={northing:.0f}&level=17&utm=33"
-                    "&projects=&layers=&plannedOmlop=0&plannedGeovekst=0"
-                )
-            elif selection == "Artskart":
-                url = self._artskart_base_link(lat, lon)
-            else:
-                url = self._inat_map_link(lat, lon, 50.0)
-        except Exception as exc:
-            QMessageBox.warning(self, self.tr("Map Lookup Failed"), str(exc))
-            return
-
-        import webbrowser
-        webbrowser.open(url)
+        from .observations_tab import MapServiceHelper
+        if not hasattr(self, "_map_helper"):
+            self._map_helper = MapServiceHelper(self)
+        self._map_helper.show_map_service_dialog(
+            self._current_exif_lat, self._current_exif_lon
+        )
 
     def _refresh_gallery(self) -> None:
         selected = self.gallery.selected_paths() if hasattr(self, "gallery") else []
@@ -2822,6 +2788,36 @@ class ImageImportDialog(QDialog):
     def _on_remove_selected(self) -> None:
         if not self.selected_indices:
             return
+        measurement_indices = []
+        for idx in self.selected_indices:
+            if idx is None or idx < 0 or idx >= len(self.import_results):
+                continue
+            image_id = self.import_results[idx].image_id
+            if not image_id:
+                continue
+            try:
+                if MeasurementDB.get_measurements_for_image(image_id):
+                    measurement_indices.append(idx)
+            except Exception:
+                continue
+        if measurement_indices:
+            count = len(measurement_indices)
+            title = self.tr("Measurements exist")
+            if count == 1:
+                message = self.tr("Measurements exist for this image.")
+            else:
+                message = self.tr("Measurements exist for {count} images.").format(count=count)
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Warning)
+            box.setWindowTitle(title)
+            box.setText(message)
+            box.setInformativeText(self.tr("Delete anyway?"))
+            delete_btn = box.addButton(self.tr("Delete"), QMessageBox.AcceptRole)
+            cancel_btn = box.addButton(self.tr("Cancel"), QMessageBox.RejectRole)
+            box.setDefaultButton(cancel_btn)
+            box.exec()
+            if box.clickedButton() is not delete_btn:
+                return
         removed_numbers = [idx + 1 for idx in self.selected_indices if idx is not None]
         removed_indices = sorted(idx for idx in self.selected_indices if idx is not None)
         for idx in sorted(self.selected_indices, reverse=True):

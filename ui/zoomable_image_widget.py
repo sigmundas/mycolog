@@ -53,6 +53,7 @@ class ZoomableImageLabel(QLabel):
         self.min_zoom = 0.1
         self.max_zoom = 10.0
         self.pan_offset = QPointF(0, 0)
+        self._auto_fit_pending = False
 
         # Pan interaction state
         self.is_panning = False
@@ -77,6 +78,7 @@ class ZoomableImageLabel(QLabel):
         self._full_loaded = not self._preview_is_scaled
         self.pan_offset = QPointF(0, 0)
         self.reset_view()
+        self._auto_fit_pending = True
 
     def _light_stroke_color(self):
         """Return a lighter, low-opacity version of the measure color."""
@@ -241,6 +243,7 @@ class ZoomableImageLabel(QLabel):
             self.pan_offset = QPointF(0, 0)
             # Fit image to screen by default
             self.reset_view()
+            self._auto_fit_pending = True
         else:
             self.zoom_level = max(self.min_zoom, min(self.max_zoom, self.zoom_level))
             self.update()
@@ -342,6 +345,7 @@ class ZoomableImageLabel(QLabel):
 
     def set_view_state(self, center: QPointF, zoom: float):
         """Set view based on center (image coords) and zoom."""
+        self._auto_fit_pending = False
         if not self.original_pixmap:
             return
         zoom = max(self.min_zoom, min(self.max_zoom, float(zoom)))
@@ -455,6 +459,7 @@ class ZoomableImageLabel(QLabel):
         """Set zoom so that 1 image pixel equals 1 screen pixel."""
         if not self.original_pixmap:
             return
+        self._auto_fit_pending = False
         if self._preview_is_scaled and not self._full_loaded:
             self._load_full_resolution()
         self.zoom_level = 1.0
@@ -463,6 +468,7 @@ class ZoomableImageLabel(QLabel):
 
     def zoom_in(self):
         """Zoom in by 20%."""
+        self._auto_fit_pending = False
         self.zoom_level = min(self.zoom_level * 1.2, self.max_zoom)
         if self.zoom_level > 1.0 and self._preview_is_scaled and not self._full_loaded:
             self._load_full_resolution()
@@ -470,6 +476,7 @@ class ZoomableImageLabel(QLabel):
 
     def zoom_out(self):
         """Zoom out by 20%."""
+        self._auto_fit_pending = False
         self.zoom_level = max(self.zoom_level / 1.2, self.min_zoom)
         self.update()
 
@@ -477,6 +484,7 @@ class ZoomableImageLabel(QLabel):
         """Handle mouse wheel for zooming."""
         if not self.original_pixmap:
             return
+        self._auto_fit_pending = False
 
         # Zoom toward mouse cursor position
         delta = event.angleDelta().y()
@@ -506,6 +514,13 @@ class ZoomableImageLabel(QLabel):
         if self.zoom_level > 1.0 and self._preview_is_scaled and not self._full_loaded:
             self._load_full_resolution()
         self.update()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._auto_fit_pending and self.original_pixmap:
+            if self.width() > 1 and self.height() > 1:
+                self.reset_view()
+                self._auto_fit_pending = False
 
     def _load_full_resolution(self):
         if not self._full_image_path:

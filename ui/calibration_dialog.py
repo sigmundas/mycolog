@@ -466,6 +466,7 @@ class CalibrationDialog(QDialog):
         self.auto_parabola_color = "#b455ff"
         self._auto_crop_active = False
         self._show_auto_debug_overlays = True
+        self._auto_manual_notice_shown = False
 
         self._init_ui()
         self._load_objectives_combo()
@@ -646,7 +647,7 @@ class CalibrationDialog(QDialog):
         distance_row.addWidget(QLabel(self.tr("Known distance:")))
         self.known_distance_input = QDoubleSpinBox()
         self.known_distance_input.setRange(0.01, 1000.0)
-        self.known_distance_input.setValue(1.00)
+        self.known_distance_input.setValue(0.10)
         self.known_distance_input.setSuffix(" mm")
         self.known_distance_input.setDecimals(2)
         self.known_distance_input.setSingleStep(0.01)
@@ -689,9 +690,13 @@ class CalibrationDialog(QDialog):
 
         self.result_count_label = QLabel("0")
 
-        # Comparison with active calibration
+        # Comparison with auto calibration
         self.comparison_label = QLabel("")
         self.comparison_label.setWordWrap(True)
+        results_layout.addRow(self.tr("Compared to auto:"), self.comparison_label)
+        self.auto_used_label = QLabel("")
+        self.auto_used_label.setStyleSheet("color: #c0392b;")
+        results_layout.addRow("", self.auto_used_label)
 
         manual_layout.addWidget(results_group)
         manual_layout.addStretch()
@@ -1005,6 +1010,7 @@ class CalibrationDialog(QDialog):
                 self.auto_spread_label.setStyleSheet("")
             if hasattr(self, "sampling_status_label"):
                 self.sampling_status_label.setText("--")
+                self.sampling_status_label.setToolTip("")
             if hasattr(self, "auto_scale_current_title"):
                 self.auto_scale_current_title.setVisible(False)
                 self.auto_scale_current_label.setVisible(False)
@@ -1113,12 +1119,14 @@ class CalibrationDialog(QDialog):
             na_value = obj.get("na")
         if not na_value or not scale_nm_per_px or scale_nm_per_px <= 0:
             label.setText(self.tr("NA not set") if not na_value else "--")
+            label.setToolTip("")
             return
         pixels_per_micron = 1000.0 / float(scale_nm_per_px)
         result = get_resolution_status(pixels_per_micron, float(na_value))
         sampling_pct = float(result.get("sampling_pct", 0.0))
         if not np.isfinite(sampling_pct) or sampling_pct <= 0:
             label.setText("--")
+            label.setToolTip("")
             return
 
         score_text = f"{sampling_pct:.0f}%"
@@ -1150,8 +1158,9 @@ class CalibrationDialog(QDialog):
                 "Image can be reduced to {pct:.0f}% of current size without losing information."
             ).format(pct=reduce_pct)
 
-        label.setText(self.tr("{status} ({score})").format(status=status, score=score_text))
-        label.setToolTip(tooltip)
+        summary = format_resolution_summary(pixels_per_micron, float(na_value))
+        label.setText(self.tr("Sampling: {status} ({score})").format(status=status, score=score_text))
+        label.setToolTip(f"{summary}\n\n{tooltip}")
 
     def _compute_resample_scale_factor(self, scale_um_per_px: float | None) -> float:
         if not scale_um_per_px or scale_um_per_px <= 0:
@@ -1586,7 +1595,7 @@ class CalibrationDialog(QDialog):
         self.history_table.verticalHeader().setVisible(False)
         self.history_table.verticalHeader().setDefaultSectionSize(26)
         self.history_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.history_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.history_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.history_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.history_table.setMinimumHeight(150)
         self.history_table.setMaximumHeight(220)
@@ -1756,27 +1765,24 @@ class CalibrationDialog(QDialog):
         if not self.current_objective_key:
             return
 
-        usage_summary = CalibrationDB.get_calibration_usage_summary(self.current_objective_key)
-        for usage in usage_summary:
-            image_count = usage.get("image_count", 0)
-            measurement_count = usage.get("measurement_count", 0)
-            if image_count > 0 or measurement_count > 0:
-                self._show_calibration_in_use_dialog(
-                    usage.get("calibration_id"),
-                    image_count,
-                    measurement_count,
-                )
+        images_using = CalibrationDB.get_images_using_objective(self.current_objective_key)
+        if images_using:
+            if not self._show_objective_in_use_dialog(self.current_objective_key, images_using):
                 return
 
-        reply = QMessageBox.question(
-            self,
-            self.tr("Delete Objective"),
-            self.tr("Objective will be deleted.\n\nThis action cannot be undone."),
-            QMessageBox.Yes | QMessageBox.Cancel,
-        )
-        if reply != QMessageBox.Yes:
-            return
+        if not images_using:
+            reply = QMessageBox.question(
+                self,
+                self.tr("Delete Objective"),
+                self.tr("Objective will be deleted.\n\nThis action cannot be undone."),
+                QMessageBox.Yes | QMessageBox.Cancel,
+            )
+            if reply != QMessageBox.Yes:
+                return
 
+        CalibrationDB.clear_objective_usage(self.current_objective_key)
+        failures = CalibrationDB.delete_calibrations_for_objective(self.current_objective_key)
+        self._warn_delete_failures(failures)
         self.objectives.pop(self.current_objective_key, None)
         save_objectives(self.objectives)
         self._clear_all()
@@ -2274,13 +2280,16 @@ class CalibrationDialog(QDialog):
             self.image_viewer.setCursor(Qt.ArrowCursor)
 
             if distance_px > 0 and self.current_image_index >= 0:
-                if self._collect_auto_values(self._auto_use_edges()):
+                if self._collect_auto_values(self._auto_use_edges()) and not self._auto_manual_notice_shown:
                     QMessageBox.information(
                         self,
                         self.tr("Auto Calibration Available"),
-                        self.tr("Auto calibration results are available. Manual measures are ignored."),
+                        self.tr(
+                            "Auto calibration results are available. Manual measurements are still recorded, "
+                            "but auto results will be used unless they are cleared."
+                        ),
                     )
-                    return
+                    self._auto_manual_notice_shown = True
                 known_um = self.known_distance_input.value() * 1000.0
                 measurement = {
                     "known_um": known_um,
@@ -2337,48 +2346,92 @@ class CalibrationDialog(QDialog):
 
     def _delete_selected_calibration(self):
         """Delete the selected calibration from the history table."""
-        selected_rows = self.history_table.selectedItems()
+        selected_rows = self.history_table.selectionModel().selectedRows()
         if not selected_rows:
             return
 
-        row = self.history_table.currentRow()
-        if not hasattr(self, '_history_calibration_ids') or row >= len(self._history_calibration_ids):
+        rows = [row.row() for row in selected_rows]
+        if not hasattr(self, '_history_calibration_ids'):
+            return
+        calibration_ids = [
+            self._history_calibration_ids[r]
+            for r in rows
+            if 0 <= r < len(self._history_calibration_ids)
+        ]
+        if not calibration_ids:
             return
 
-        calibration_id = self._history_calibration_ids[row]
-        cal = CalibrationDB.get_calibration(calibration_id)
-        if not cal:
+        if len(calibration_ids) == 1:
+            calibration_id = calibration_ids[0]
+            cal = CalibrationDB.get_calibration(calibration_id)
+            if not cal:
+                return
+
+            # Check if this calibration is being used
+            usage_summary = CalibrationDB.get_calibration_usage_summary(self.current_objective_key)
+            usage = next((u for u in usage_summary if u["calibration_id"] == calibration_id), {})
+            image_count = usage.get("image_count", 0)
+            measurement_count = usage.get("measurement_count", 0)
+
+            if image_count > 0 or measurement_count > 0:
+                self._show_calibration_in_use_dialog(calibration_id, image_count, measurement_count)
+                return
+
+            # Confirm deletion
+            date_str = cal.get("calibration_date", "")[:16]
+            scale_nm = um_to_nm(cal.get("microns_per_pixel", 0))
+
+            reply = QMessageBox.question(
+                self,
+                self.tr("Delete Calibration"),
+                self.tr(
+                    "Delete calibration from {date}?\n\n"
+                    "Scale: {scale:.2f} nm/px\n\n"
+                    "This action cannot be undone."
+                ).format(date=date_str, scale=scale_nm),
+                QMessageBox.Yes | QMessageBox.Cancel,
+            )
+
+            if reply != QMessageBox.Yes:
+                return
+
+            failures = CalibrationDB.delete_calibration(calibration_id)
+            self._warn_delete_failures(failures)
+            self._update_history_table()
             return
 
-        # Check if this calibration is being used
         usage_summary = CalibrationDB.get_calibration_usage_summary(self.current_objective_key)
-        usage = next((u for u in usage_summary if u["calibration_id"] == calibration_id), {})
-        image_count = usage.get("image_count", 0)
-        measurement_count = usage.get("measurement_count", 0)
-
-        if image_count > 0 or measurement_count > 0:
-            self._show_calibration_in_use_dialog(calibration_id, image_count, measurement_count)
+        in_use = []
+        for calibration_id in calibration_ids:
+            usage = next((u for u in usage_summary if u["calibration_id"] == calibration_id), {})
+            if usage.get("image_count", 0) > 0 or usage.get("measurement_count", 0) > 0:
+                in_use.append(calibration_id)
+        if in_use:
+            QMessageBox.warning(
+                self,
+                self.tr("Delete Calibration"),
+                self.tr(
+                    "Some selected calibrations are in use. Delete them individually to review usage details."
+                ),
+            )
             return
-
-        # Confirm deletion
-        date_str = cal.get("calibration_date", "")[:16]
-        scale_nm = um_to_nm(cal.get("microns_per_pixel", 0))
 
         reply = QMessageBox.question(
             self,
             self.tr("Delete Calibration"),
             self.tr(
-                "Delete calibration from {date}?\n\n"
-                "Scale: {scale:.2f} nm/px\n\n"
+                "Delete {count} calibrations?\n\n"
                 "This action cannot be undone."
-            ).format(date=date_str, scale=scale_nm),
+            ).format(count=len(calibration_ids)),
             QMessageBox.Yes | QMessageBox.Cancel,
         )
-
         if reply != QMessageBox.Yes:
             return
 
-        CalibrationDB.delete_calibration(calibration_id)
+        failures: list[str] = []
+        for calibration_id in calibration_ids:
+            failures.extend(CalibrationDB.delete_calibration(calibration_id))
+        self._warn_delete_failures(failures)
         self._update_history_table()
 
     def _show_calibration_in_use_dialog(
@@ -2502,7 +2555,8 @@ class CalibrationDialog(QDialog):
             if reply != QMessageBox.Yes:
                 return
             CalibrationDB.clear_calibration_usage(calibration_id, clear_objective=True)
-            CalibrationDB.delete_calibration(calibration_id)
+            failures = CalibrationDB.delete_calibration(calibration_id)
+            self._warn_delete_failures(failures)
             dialog.accept()
             self._update_history_table()
 
@@ -2511,6 +2565,157 @@ class CalibrationDialog(QDialog):
         close_btn.clicked.connect(dialog.reject)
 
         dialog.exec()
+
+    def _show_objective_in_use_dialog(
+        self,
+        objective_key: str,
+        rows: list[dict],
+    ) -> bool:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.tr("Warning - objective in use"))
+        dialog.setModal(True)
+        dialog.setMinimumWidth(400)
+        dialog.resize(400, 320)
+
+        layout = QVBoxLayout(dialog)
+        obs_map: dict[int, dict] = {}
+        for row in rows:
+            obs_id = row.get("observation_id")
+            if obs_id is None:
+                continue
+            if obs_id not in obs_map:
+                obs_map[obs_id] = {
+                    "id": obs_id,
+                    "genus": row.get("genus") or "",
+                    "species": row.get("species") or "",
+                    "common_name": row.get("common_name") or "",
+                    "date": row.get("date") or "",
+                }
+        obs_list = list(obs_map.values())
+        obs_list.sort(key=lambda o: (o.get("date") or "", o.get("genus") or "", o.get("species") or ""))
+
+        message = QLabel(
+            self.tr(
+                "This objective is used by {images} images across {observations} observations."
+            ).format(images=len(rows), observations=len(obs_list))
+        )
+        message.setWordWrap(True)
+        layout.addWidget(message)
+
+        table = QTableWidget(0, 5)
+        table.setHorizontalHeaderLabels([
+            self.tr("ID"),
+            self.tr("Genus"),
+            self.tr("Species"),
+            self.tr("Vernacular name"),
+            self.tr("Date"),
+        ])
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SingleSelection)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.verticalHeader().setVisible(False)
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.Stretch)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        table.setSortingEnabled(False)
+
+        table.setRowCount(len(obs_list))
+        for i, obs in enumerate(obs_list):
+            id_item = QTableWidgetItem(str(obs.get("id", "")))
+            id_item.setData(Qt.UserRole, obs.get("id"))
+            table.setItem(i, 0, id_item)
+            table.setItem(i, 1, QTableWidgetItem(obs.get("genus", "")))
+            table.setItem(i, 2, QTableWidgetItem(obs.get("species", "")))
+            table.setItem(i, 3, QTableWidgetItem(obs.get("common_name", "")))
+            table.setItem(i, 4, QTableWidgetItem(obs.get("date", "")))
+
+        if obs_list:
+            table.selectRow(0)
+
+        layout.addWidget(table)
+
+        should_delete = {"value": False}
+
+        button_row = QHBoxLayout()
+        go_btn = QPushButton(self.tr("Go to observation"))
+        delete_btn = QPushButton(self.tr("Delete objective"))
+        close_btn = QPushButton(self.tr("Close"))
+        button_row.addWidget(delete_btn)
+        button_row.addWidget(go_btn)
+        button_row.addStretch()
+        button_row.addWidget(close_btn)
+        layout.addLayout(button_row)
+
+        def _open_selected_observation():
+            row = table.currentRow()
+            if row < 0:
+                return
+            if row >= len(obs_list):
+                return
+            obs_id = obs_list[row].get("id")
+            if not obs_id:
+                return
+            obs = ObservationDB.get_observation(obs_id)
+            genus = obs.get("genus") if obs else ""
+            species = obs.get("species") if obs else ""
+            date = (obs.get("date") or "")[:10] if obs else ""
+            display_name = f"{genus} {species} {date}".strip() or f"Observation {obs_id}"
+            parent = self.parent()
+            if parent and hasattr(parent, "on_observation_selected"):
+                dialog.accept()
+                self.close()
+                parent.on_observation_selected(obs_id, display_name, switch_tab=True, suppress_gallery=False)
+                return
+            if parent and hasattr(parent, "_on_observation_selected_impl"):
+                dialog.accept()
+                self.close()
+                parent._on_observation_selected_impl(obs_id, display_name, switch_tab=True, schedule_gallery=True)
+
+        def _delete_objective_in_use():
+            reply = QMessageBox.question(
+                dialog,
+                self.tr("Delete Objective"),
+                self.tr(
+                    "Delete this objective and remove scale data from all observations that use it?\n\n"
+                    "This will also delete all calibrations for this objective.\n\n"
+                    "This action cannot be undone."
+                ),
+                QMessageBox.Yes | QMessageBox.Cancel,
+            )
+            if reply != QMessageBox.Yes:
+                return
+            should_delete["value"] = True
+            dialog.accept()
+
+        go_btn.clicked.connect(_open_selected_observation)
+        delete_btn.clicked.connect(_delete_objective_in_use)
+        close_btn.clicked.connect(dialog.reject)
+
+        dialog.exec()
+        return should_delete["value"]
+
+    def _warn_delete_failures(self, failures: list[str]) -> None:
+        if not failures:
+            return
+        paths = [p for p in failures if p]
+        if not paths:
+            return
+        names = [Path(p).name for p in paths]
+        preview = "\n".join(f"- {name}" for name in names[:5])
+        extra = ""
+        if len(names) > 5:
+            extra = self.tr("\n...and {count} more.").format(count=len(names) - 5)
+        QMessageBox.warning(
+            self,
+            self.tr("Delete Failed"),
+            self.tr("Some files or folders could not be deleted.")
+            + "\n\n"
+            + preview
+            + extra,
+        )
 
     def _on_set_active_calibration(self):
         """Set the selected calibration as active for this objective."""
@@ -2686,7 +2891,10 @@ class CalibrationDialog(QDialog):
             self.result_count_label.setText("0")
             if hasattr(self, "sampling_status_label"):
                 self.sampling_status_label.setText("--")
-            self.comparison_label.setText("")
+                self.sampling_status_label.setToolTip("")
+            self.comparison_label.setText("--")
+            if hasattr(self, "auto_used_label"):
+                self.auto_used_label.setText("")
             return
 
         # Calculate statistics
@@ -2720,29 +2928,29 @@ class CalibrationDialog(QDialog):
                 obj = self.objectives.get(self.current_objective_key, {})
                 na_value = obj.get("na")
             if mean and na_value:
-                pixels_per_micron = 1.0 / mean if mean > 0 else None
-                if pixels_per_micron:
-                    summary = format_resolution_summary(pixels_per_micron, float(na_value))
-                    self.sampling_status_label.setText(summary)
-                else:
-                    self.sampling_status_label.setText("--")
+                scale_nm_per_px = um_to_nm(mean)
+                self._update_sampling_label(self.sampling_status_label, scale_nm_per_px)
             else:
                 self.sampling_status_label.setText(self.tr("NA not set") if not na_value else "--")
+                self.sampling_status_label.setToolTip("")
 
-        # Compare with active calibration
-        if mean and self.current_objective_key:
-            active_cal = CalibrationDB.get_active_calibration(self.current_objective_key)
-            if active_cal:
-                active_scale = active_cal.get("microns_per_pixel", 0)
-                if active_scale > 0:
-                    diff_percent = ((mean - active_scale) / active_scale) * 100
-                    sign = "+" if diff_percent >= 0 else ""
-                    color = "#27ae60" if abs(diff_percent) < 1 else "#e74c3c"
-                    self.comparison_label.setText(
-                        f'<span style="color: {color};">{sign}{diff_percent:.2f}%</span>'
-                    )
-                    return
-        self.comparison_label.setText("")
+        auto_values = self._collect_auto_values(self._auto_use_edges())
+        if mean and auto_values:
+            auto_mean_nm = float(np.mean(auto_values))
+            if auto_mean_nm > 0:
+                mean_nm = um_to_nm(mean)
+                diff_percent = ((mean_nm - auto_mean_nm) / auto_mean_nm) * 100
+                sign = "+" if diff_percent >= 0 else ""
+                color = "#27ae60" if abs(diff_percent) < 1 else "#e74c3c"
+                self.comparison_label.setText(
+                    f'<span style="color: {color};">{sign}{diff_percent:.2f}%</span>'
+                )
+                if hasattr(self, "auto_used_label"):
+                    self.auto_used_label.setText(self.tr("Automatic calibration is used"))
+                return
+        self.comparison_label.setText("--")
+        if hasattr(self, "auto_used_label"):
+            self.auto_used_label.setText("")
 
     def _update_history_table(self):
         """Update the calibration history table."""
@@ -3049,6 +3257,7 @@ class CalibrationDialog(QDialog):
             image_entries = []
             first_saved_path = None
             auto_images = []
+            all_measurements = self._get_all_measurements()
             for idx, img_data in enumerate(self.calibration_images):
                 saved_path = self._save_calibration_image(img_data["path"])
                 if saved_path and first_saved_path is None:
@@ -3056,7 +3265,7 @@ class CalibrationDialog(QDialog):
                 image_entries.append({
                     "index": idx,
                     "path": saved_path,
-                    "measurements": [],
+                    "measurements": img_data.get("measurements", []),
                     "crop_box": img_data.get("crop_box"),
                     "crop_source_size": img_data.get("crop_source_size"),
                 })
@@ -3091,6 +3300,7 @@ class CalibrationDialog(QDialog):
 
             calibration_data = {
                 "images": image_entries,
+                "measurements": all_measurements,
                 "auto_images": auto_images,
                 "auto_summary": {
                     "method": "edges" if self._auto_use_edges() else "parabola",

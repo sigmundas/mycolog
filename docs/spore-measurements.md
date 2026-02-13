@@ -15,11 +15,51 @@ Common categories include **Spores** and **Field**. Categories determine how mea
 - Adjust lines and apply changes in the preview pane.
 - Delete unwanted measurements from the table.
 
+Drag the lines you want to adjust - the spore dimensions are updated instantly
+![Spore-preiew](images/spore-preview.png)
+
 ## Analysis
 
 - Scatter plot shows length vs width.
 - Histograms (optional) show distributions.
 - Confidence ellipse can be shown for datasets with point measurements.
+
+### 95% Confidence Ellipse
+
+For bivariate measurements (length $x$ and width $y$), the 95% confidence ellipse
+is defined from the sample mean and covariance matrix. Let
+$\mathbf{z} = \begin{bmatrix} x \\ y \end{bmatrix}$, the mean
+$\boldsymbol{\mu} = \begin{bmatrix} \bar{x} \\ \bar{y} \end{bmatrix}$, and the
+covariance matrix
+
+$$
+\mathbf{\Sigma} =
+\begin{bmatrix}
+s_{x}^{2} & s_{xy} \\
+s_{xy} & s_{y}^{2}
+\end{bmatrix}
+$$
+
+Then the ellipse is the set of points satisfying
+
+$$
+(\mathbf{z} - \boldsymbol{\mu})^{\mathsf{T}} \mathbf{\Sigma}^{-1}
+(\mathbf{z} - \boldsymbol{\mu}) = \chi^{2}_{2,\,0.95}
+$$
+
+where $\chi^{2}_{2,\,0.95} \approx 5.991$ is the 95th percentile of the
+chi-square distribution with 2 degrees of freedom.
+
+Equivalently, if $\lambda_{1}, \lambda_{2}$ are the eigenvalues of
+$\mathbf{\Sigma}$ and $\mathbf{v}_{1}, \mathbf{v}_{2}$ the corresponding
+eigenvectors, the ellipse axes are
+
+$$
+a = \sqrt{\chi^{2}_{2,\,0.95} \, \lambda_{1}}, \qquad
+b = \sqrt{\chi^{2}_{2,\,0.95} \, \lambda_{2}}
+$$
+
+with the ellipse rotated by the eigenvectors $\mathbf{v}_{1}, \mathbf{v}_{2}$.
 
 ## Reference Data
 

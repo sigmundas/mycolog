@@ -24,6 +24,8 @@ def get_exif_data(image_path: str) -> Dict[str, Any]:
         Dictionary with decoded EXIF tags
     """
     try:
+        if not image_path or not Path(image_path).exists():
+            return {}
         suffix = Path(image_path).suffix.lower()
 
         # Handle HEIC/HEIF files with pillow_heif
@@ -259,13 +261,25 @@ def get_image_metadata(image_path: str) -> Dict[str, Any]:
     Returns:
         Dictionary with 'datetime', 'latitude', 'longitude', 'filename'
     """
+    path = Path(image_path) if image_path else None
+    if not path or not path.exists():
+        return {
+            'missing': True,
+            'datetime': None,
+            'latitude': None,
+            'longitude': None,
+            'filename': path.name if path else "",
+            'filepath': image_path,
+        }
+
     dt = get_image_datetime(image_path)
     lat, lon = get_gps_coordinates(image_path)
 
     return {
+        'missing': False,
         'datetime': dt,
         'latitude': lat,
         'longitude': lon,
-        'filename': Path(image_path).name,
+        'filename': path.name,
         'filepath': image_path
     }

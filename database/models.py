@@ -310,12 +310,16 @@ class ObservationDB:
         conn.close()
 
     @staticmethod
-    def delete_observation(observation_id: int):
-        """Delete an observation and all associated images/measurements"""
+    def delete_observation(observation_id: int) -> list[str]:
+        """Delete an observation and all associated images/measurements.
+
+        Returns a list of file or folder paths that could not be deleted.
+        """
         conn = get_connection()
         cursor = conn.cursor()
         folder_path = None
         image_rows = []
+        failed_paths: list[str] = []
         try:
             # Collect image filepaths and observation folder before deleting rows
             cursor.execute('SELECT folder_path FROM observations WHERE id = ?', (observation_id,))
@@ -382,6 +386,7 @@ class ObservationDB:
                         path.unlink()
                 except Exception as e:
                     print(f"Warning: Could not delete image file {candidate}: {e}")
+                    failed_paths.append(str(candidate))
 
         # Remove observation folder if it lives under images root
         if folder_path:
@@ -389,9 +394,11 @@ class ObservationDB:
                 obs_folder = Path(folder_path).resolve()
                 root = images_root.resolve()
                 if obs_folder.exists() and obs_folder.is_relative_to(root):
-                    shutil.rmtree(obs_folder, ignore_errors=True)
+                    shutil.rmtree(obs_folder)
             except Exception as e:
                 print(f"Warning: Could not delete observation folder {folder_path}: {e}")
+                failed_paths.append(str(folder_path))
+        return failed_paths
 
 class ImageDB:
     """Handle image database operations"""
@@ -1662,13 +1669,16 @@ class CalibrationDB:
         return history
 
     @staticmethod
-    def delete_calibration(calibration_id: int) -> None:
-        """Delete a calibration by ID."""
+    def delete_calibration(calibration_id: int) -> list[str]:
+        """Delete a calibration by ID.
+
+        Returns a list of file or folder paths that could not be deleted.
+        """
         conn = get_connection()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT image_filepath, measurements_json FROM calibrations WHERE id = ?",
+            "SELECT objective_key, image_filepath, measurements_json FROM calibrations WHERE id = ?",
             (calibration_id,),
         )
         row = cursor.fetchone()
@@ -1677,6 +1687,7 @@ class CalibrationDB:
         conn.close()
 
         image_paths: set[Path] = set()
+        failed_paths: list[str] = []
         if row:
             image_filepath = row["image_filepath"]
             if image_filepath:
@@ -1705,7 +1716,86 @@ class CalibrationDB:
                     if images_root in target.parents and target.exists():
                         target.unlink()
                 except Exception:
-                    continue
+                    failed_paths.append(str(path))
+        objective_key = None
+        if row:
+            try:
+                objective_key = row["objective_key"]
+            except Exception:
+                objective_key = None
+        if objective_key:
+            try:
+                cal_dir = get_calibrations_dir() / objective_key
+                if cal_dir.exists() and not any(cal_dir.iterdir()):
+                    cal_dir.rmdir()
+            except Exception:
+                failed_paths.append(str(cal_dir))
+        return failed_paths
+
+    @staticmethod
+    def delete_calibrations_for_objective(objective_key: str) -> list[str]:
+        """Delete all calibrations (and calibration images) for an objective.
+
+        Returns a list of file or folder paths that could not be deleted.
+        """
+        if not objective_key:
+            return []
+        calibrations = CalibrationDB.get_calibrations_for_objective(objective_key)
+        failed_paths: list[str] = []
+        for cal in calibrations:
+            cal_id = None
+            if isinstance(cal, dict):
+                cal_id = cal.get("id")
+            else:
+                try:
+                    cal_id = cal["id"]
+                except Exception:
+                    cal_id = None
+            if cal_id:
+                failed_paths.extend(CalibrationDB.delete_calibration(cal_id))
+        try:
+            cal_dir = get_calibrations_dir() / objective_key
+            if cal_dir.exists():
+                shutil.rmtree(cal_dir)
+        except Exception:
+            failed_paths.append(str(cal_dir))
+        return failed_paths
+
+    @staticmethod
+    def clear_objective_usage(objective_key: str) -> None:
+        """Clear objective usage from images tied to an objective."""
+        if not objective_key:
+            return
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM calibrations WHERE objective_key = ?", (objective_key,))
+        cal_ids = [row[0] for row in cursor.fetchall()]
+        if cal_ids:
+            placeholders = ",".join("?" for _ in cal_ids)
+            params = [objective_key, *cal_ids]
+            cursor.execute(
+                f'''
+                UPDATE images
+                SET calibration_id = NULL,
+                    scale_microns_per_pixel = NULL,
+                    objective_name = NULL
+                WHERE objective_name = ? OR calibration_id IN ({placeholders})
+                ''',
+                params,
+            )
+        else:
+            cursor.execute(
+                '''
+                UPDATE images
+                SET calibration_id = NULL,
+                    scale_microns_per_pixel = NULL,
+                    objective_name = NULL
+                WHERE objective_name = ?
+                ''',
+                (objective_key,),
+            )
+        conn.commit()
+        conn.close()
 
     @staticmethod
     def clear_calibration_usage(calibration_id: int, clear_objective: bool = True) -> None:
@@ -1730,7 +1820,7 @@ class CalibrationDB:
         cursor = conn.cursor()
 
         cursor.execute('''
-            SELECT i.*, o.id AS observation_id, o.genus, o.species, o.date
+            SELECT i.*, o.id AS observation_id, o.genus, o.species, o.common_name, o.date
             FROM images i
             LEFT JOIN observations o ON i.observation_id = o.id
             WHERE i.objective_name = ?

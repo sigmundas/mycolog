@@ -8150,13 +8150,29 @@ class MainWindow(QMainWindow):
                 self.active_observation_id,
                 measurement_category='spores'
             )
-            if obs_stats:
+            self._update_observation_spore_statistics(self.active_observation_id, obs_stats)
+
+    def _update_observation_spore_statistics(self, observation_id: int, stats: dict) -> None:
+        if not observation_id:
+            return
+        if not hasattr(self, "_stats_retry_pending"):
+            self._stats_retry_pending = False
+        try:
+            if stats:
                 ObservationDB.update_spore_statistics(
-                    self.active_observation_id,
-                    self.format_literature_string(obs_stats)
+                    observation_id,
+                    self.format_literature_string(stats)
                 )
             else:
-                ObservationDB.update_spore_statistics(self.active_observation_id, None)
+                ObservationDB.update_spore_statistics(observation_id, None)
+            self._stats_retry_pending = False
+        except sqlite3.OperationalError as exc:
+            if "locked" in str(exc).lower():
+                if not self._stats_retry_pending:
+                    self._stats_retry_pending = True
+                    QTimer.singleShot(250, self.update_statistics)
+                return
+            raise
 
     def format_literature_string(self, stats):
         """Format the literature string for spore statistics."""

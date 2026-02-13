@@ -33,38 +33,33 @@ imported microscope images and the scale is adjusted by the resample factor.
 
 ## Sampling Assessment
 
-Sampling status is shown in the Calibration dialog and Prepare Images panel. This checks if your pixel sampling is undersampled or oversampled based on NA.
+Sampling status is shown in the Calibration dialog and Prepare Images panel. This checks if your pixel sampling is undersampled or oversampled based on NA.Typically, images taken with a 100X objective are oversampled, and your local database can be shrunk quite a lot if you work with spores.
+
+There is a resize preview feature you can use to check if important details are lost: press **P** to toggle original resolution vs ideal resolution.
 
 ### Nyquist Sampling (Basics)
 
 MycoLog uses a Nyquist-based ideal pixel size:
 
-```
-ideal_pixel_um = lambda_um / (4 * NA)
-```
+$$
+p_{\mathrm{ideal}} = \frac{\lambda}{4\,\mathrm{NA}}
+$$
 
-The default wavelength is violet light at 405 nm (0.405 um). From a calibration scale:
-
-```
-pixels_per_micron = 1 / (microns_per_pixel)
-ideal_pixels_per_micron = 1 / ideal_pixel_um
-sampling_pct = 100 * pixels_per_micron / ideal_pixels_per_micron
-```
-
-Rules of thumb:
-- <80% is undersampled
-- 80-150% is good
-- >150% is oversampled
+where $\lambda$ is the illumination wavelength in $\mathrm{\mu m}$ and $\mathrm{NA}$ is the numerical aperture.
 
 ### Downsampling and Scale Propagation
 
-If an image is resampled by a uniform factor `f` (e.g. `f = 0.212`), the scale
-and megapixels adjust as:
+If an image is resampled by a uniform factor $f$, the scale
+and megapixels adjust as follows:
 
-```
-microns_per_pixel_target = microns_per_pixel_full / f
-megapixels_target = megapixels_full * f^2
-```
+$$
+p_{\mathrm{target}} = \frac{p_{\mathrm{full}}}{f}, \qquad
+M_{\mathrm{target}} = M_{\mathrm{full}} \cdot f^{2}
+$$
+
+where $f$ is the linear resampling factor ($0 < f \le 1$), $p_{\mathrm{full}}$ is the
+original scale in $\mathrm{\mu m}/\mathrm{px}$, $p_{\mathrm{target}}$ is the resampled scale in $\mathrm{\mu m}/\mathrm{px}$,
+$M_{\mathrm{full}}$ is the original megapixels, and $M_{\mathrm{target}}$ is the resampled megapixels.
 
 MycoLog uses this relationship instead of requiring a second calibration on the
 downsampled image.

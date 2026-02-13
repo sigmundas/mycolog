@@ -8,8 +8,9 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                                 QComboBox,
                                 QListWidget, QListWidgetItem, QGroupBox, QCheckBox,
                                 QDoubleSpinBox, QTabWidget, QDialogButtonBox, QCompleter,
-                                QSizePolicy, QAbstractItemView, QFrame)
-from PySide6.QtCore import Signal, Qt, QDateTime, QStringListModel, QEvent
+                                QSizePolicy, QAbstractItemView, QFrame, QProgressDialog,
+                                QApplication)
+from PySide6.QtCore import Signal, Qt, QDateTime, QStringListModel, QEvent, QTimer, QThread
 from PySide6.QtGui import QPixmap, QImage
 from PIL import Image
 from PySide6.QtCore import QUrl
@@ -34,6 +35,7 @@ from utils.heic_converter import maybe_convert_heic
 from utils.ml_export import export_coco_format, get_export_summary
 from datetime import datetime
 import re
+import requests
 from utils.vernacular_utils import (
     normalize_vernacular_language,
     common_name_display_label,
@@ -53,6 +55,32 @@ def _parse_observation_datetime(value: str | None) -> QDateTime | None:
             return dt_value
     dt_value = QDateTime.fromString(value, Qt.ISODate)
     return dt_value if dt_value.isValid() else None
+
+
+class LocationLookupWorker(QThread):
+    """Background worker to look up place name from coordinates."""
+    resultReady = Signal(str)
+
+    def __init__(self, lat: float, lon: float, parent=None):
+        super().__init__(parent)
+        self.lat = lat
+        self.lon = lon
+
+    def run(self):
+        try:
+            resp = requests.get(
+                "https://stedsnavn.artsdatabanken.no/v1/punkt",
+                params={"lat": self.lat, "lng": self.lon, "zoom": 55},
+                headers={"Accept": "application/json"},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                name = data.get("navn", "")
+                if name:
+                    self.resultReady.emit(name)
+        except Exception:
+            pass
 
 
 class SortableTableWidgetItem(QTableWidgetItem):
@@ -315,25 +343,40 @@ class MapServiceHelper:
             f"{easting:.0f},{northing:.0f}/{zoom}/background/{bg}"
         )
 
-    def show_map_service_dialog(self, lat, lon, species_name):
+    def show_map_service_dialog(self, lat, lon, species_name=None):
         """Show a dialog to choose a map service."""
         dialog = QDialog(self.parent)
         dialog.setWindowTitle("Open Map")
         dialog.setModal(True)
-        dialog.setMinimumHeight(360)
-        dialog.setMinimumWidth(320)
+        dialog.setMinimumWidth(300)
 
         layout = QVBoxLayout(dialog)
-        layout.addWidget(QLabel("Choose a map service:"))
+        layout.setSpacing(4)
+        layout.setContentsMargins(16, 16, 16, 12)
+
+        header = QLabel("Choose a map service:")
+        header.setStyleSheet("font-weight: bold; margin-bottom: 4px;")
+        layout.addWidget(header)
+
         species_complete = bool(species_name and len(species_name.split()) >= 2)
 
-        def add_link(label_text, handler):
-            link_label = QLabel(f'<a href="#">{label_text}</a>')
-            link_label.setTextFormat(Qt.RichText)
-            link_label.setTextInteractionFlags(Qt.TextBrowserInteraction)
-            link_label.setOpenExternalLinks(False)
-            link_label.linkActivated.connect(lambda _=None: handler())
-            layout.addWidget(link_label)
+        btn_style = (
+            "QPushButton#mapLink { text-align: left; padding: 7px 12px;"
+            " border: 1px solid #d0d0d0; border-radius: 4px;"
+            " background-color: white; color: #2c3e50;"
+            " font-size: 10pt; font-weight: normal; }"
+            "QPushButton#mapLink:hover { background-color: #e8f0fe;"
+            " border-color: #4a90d9; color: #2c3e50; }"
+        )
+
+        def add_link(label_text, description, handler):
+            btn = QPushButton(label_text)
+            btn.setObjectName("mapLink")
+            btn.setStyleSheet(btn_style)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setToolTip(description)
+            btn.clicked.connect(handler)
+            layout.addWidget(btn)
 
         def open_url(url):
             import webbrowser
@@ -394,20 +437,19 @@ class MapServiceHelper:
             finally:
                 dialog.accept()
 
-        add_link("Google Maps", open_google_maps)
-        add_link("Kilden", open_kilden)
-        add_link("Artskart", open_artskart)
-        add_link("Norge i Bilder", open_norge_i_bilder)
+        add_link("Google Maps", "Open location in Google Maps", open_google_maps)
+        add_link("Kilden (NIBIO)", "Agricultural & land-use maps", open_kilden)
+        add_link("Artskart", "Species occurrence map (Artsdatabanken)", open_artskart)
+        add_link("Norge i Bilder", "Aerial imagery of Norway", open_norge_i_bilder)
+        add_link("iNaturalist — nearby observations", "Observations near this location", open_inat_local)
         if species_complete:
-            add_link("iNaturalist map search", open_inat_local)
-            add_link("iNaturalist species page", open_inat_species)
-            add_link("GBIF species page", open_gbif_species)
-        else:
-            add_link("iNaturalist map search", open_inat_local)
+            add_link(f"iNaturalist — {species_name}", "Species page on iNaturalist", open_inat_species)
+            add_link(f"GBIF — {species_name}", "Species page on GBIF", open_gbif_species)
+
+        layout.addStretch()
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         buttons.rejected.connect(dialog.reject)
-        buttons.accepted.connect(dialog.accept)
         layout.addWidget(buttons)
 
         dialog.exec()
@@ -505,7 +547,7 @@ class ObservationsTab(QWidget):
         header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
 
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table.setSelectionMode(QTableWidget.SingleSelection)
+        self.table.setSelectionMode(QTableWidget.ExtendedSelection)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
         # Better selection highlight - white text on blue background
@@ -863,6 +905,26 @@ class ObservationsTab(QWidget):
         box.exec()
         return box.clickedButton() == yes_btn
 
+    def _warn_delete_failures(self, failures: list[str]) -> None:
+        if not failures:
+            return
+        paths = [p for p in failures if p]
+        if not paths:
+            return
+        names = [Path(p).name for p in paths]
+        preview = "\n".join(f"- {name}" for name in names[:5])
+        extra = ""
+        if len(names) > 5:
+            extra = self.tr("\n...and {count} more.").format(count=len(names) - 5)
+        QMessageBox.warning(
+            self,
+            self.tr("Delete Failed"),
+            self.tr("Some files or folders could not be deleted.")
+            + "\n\n"
+            + preview
+            + extra,
+        )
+
     def _get_measurements_for_image(self, image_id):
         """Get measurements for a specific image."""
         return MeasurementDB.get_measurements_for_image(image_id)
@@ -915,6 +977,12 @@ class ObservationsTab(QWidget):
             self.gallery_widget.clear()
             self.selected_observation_id = None
             return
+        if len(selected_rows) > 1:
+            self.rename_btn.setEnabled(False)
+            self.delete_btn.setEnabled(True)
+            self.gallery_widget.clear()
+            self.selected_observation_id = None
+            return
 
         row = selected_rows[0].row()
         obs_id = int(self.table.item(row, 0).text())
@@ -934,12 +1002,14 @@ class ObservationsTab(QWidget):
 
     def on_row_double_clicked(self, item):
         """Double-click to open edit dialog for the observation."""
+        if len(self.table.selectionModel().selectedRows()) != 1:
+            return
         self.edit_observation()
 
     def set_selected_as_active(self, switch_tab=True):
         """Set the selected observation as active, optionally switching to Measure tab."""
         selected_rows = self.table.selectionModel().selectedRows()
-        if not selected_rows:
+        if len(selected_rows) != 1:
             return
 
         row = selected_rows[0].row()
@@ -968,7 +1038,7 @@ class ObservationsTab(QWidget):
     def edit_observation(self):
         """Edit the selected observation."""
         selected_rows = self.table.selectionModel().selectedRows()
-        if not selected_rows:
+        if len(selected_rows) != 1:
             return
 
         row = selected_rows[0].row()
@@ -1089,7 +1159,47 @@ class ObservationsTab(QWidget):
                     obs_data["author"] = author
 
                 obs_id = ObservationDB.create_observation(**obs_data)
-                self._apply_import_results_to_observation(obs_id, image_results)
+                progress = None
+                progress_cb = None
+                total_images = len(image_results)
+                if total_images:
+                    progress = QProgressDialog(
+                        self.tr("Processing images..."),
+                        None,
+                        0,
+                        total_images,
+                        self,
+                    )
+                    progress.setWindowTitle(self.tr("Processing Images"))
+                    progress.setWindowModality(Qt.WindowModal)
+                    progress.setAutoClose(True)
+                    progress.setAutoReset(True)
+                    progress.setCancelButton(None)
+                    progress.setMinimumDuration(300)
+
+                    def progress_cb(index, total, _result):
+                        if total <= 0:
+                            return
+                        progress.setMaximum(total)
+                        progress.setValue(index)
+                        progress.setLabelText(
+                            self.tr("Processing image {current}/{total}").format(
+                                current=index,
+                                total=total,
+                            )
+                        )
+                        QApplication.processEvents()
+
+                try:
+                    self._apply_import_results_to_observation(
+                        obs_id,
+                        image_results,
+                        progress_cb=progress_cb,
+                    )
+                finally:
+                    if progress is not None:
+                        progress.setValue(total_images)
+                        progress.close()
 
                 self.refresh_observations()
                 for row, obs in enumerate(ObservationDB.get_all_observations()):
@@ -1173,25 +1283,42 @@ class ObservationsTab(QWidget):
         if not selected_rows:
             return
 
-        row = selected_rows[0].row()
-        obs_id = int(self.table.item(row, 0).text())
-        species = self.table.item(row, 1).text()
+        if len(selected_rows) == 1:
+            row = selected_rows[0].row()
+            obs_id = int(self.table.item(row, 0).text())
+            species = self.table.item(row, 1).text()
+            prompt = self.tr(
+                "Delete observation '{species}'?\n\n"
+                "This will also delete all associated images and measurements."
+            ).format(species=species)
+        else:
+            obs_id = None
+            prompt = self.tr(
+                "Delete {count} observations?\n\n"
+                "This will also delete all associated images and measurements."
+            ).format(count=len(selected_rows))
 
-        # Confirm deletion
-        confirmed = self._question_yes_no(
-            self.tr("Confirm Delete"),
-            self.tr("Delete observation '{species}'?\n\nThis will also delete all associated images and measurements.").format(
-                species=species
-            ),
-            default_yes=False
-        )
+        confirmed = self._question_yes_no(self.tr("Confirm Delete"), prompt, default_yes=False)
         if confirmed:
-            ObservationDB.delete_observation(obs_id)
+            failures: list[str] = []
+            if obs_id is not None:
+                failures.extend(ObservationDB.delete_observation(obs_id))
+            else:
+                rows = [row.row() for row in selected_rows]
+                obs_ids = [
+                    int(self.table.item(r, 0).text())
+                    for r in rows
+                    if self.table.item(r, 0) is not None
+                ]
+                for obs_id in obs_ids:
+                    failures.extend(ObservationDB.delete_observation(obs_id))
+            self._warn_delete_failures(failures)
             self.refresh_observations()
 
     def _build_import_results_from_images(self, images: list[dict]) -> list[ImageImportResult]:
         objectives = load_objectives()
         results: list[ImageImportResult] = []
+        missing_paths: list[str] = []
         for img in images:
             if not img:
                 continue
@@ -1199,6 +1326,8 @@ class ObservationsTab(QWidget):
             filepath = img.get("filepath")
             if filepath:
                 meta = get_image_metadata(filepath)
+                if meta.get("missing"):
+                    missing_paths.append(filepath)
             dt = meta.get("datetime")
             captured_at = QDateTime(dt) if dt else None
             exif_has_gps = meta.get("latitude") is not None or meta.get("longitude") is not None
@@ -1260,6 +1389,26 @@ class ObservationsTab(QWidget):
                     resize_to_optimal=resize_to_optimal,
                     store_original=store_original,
                 )
+            )
+        if missing_paths:
+            names = [Path(p).name for p in missing_paths if p]
+            preview = "\n".join(f"- {name}" for name in names[:5])
+            extra = ""
+            if len(names) > 5:
+                extra = self.tr("\n...and {count} more.").format(count=len(names) - 5)
+            QMessageBox.warning(
+                self,
+                self.tr("Missing image files"),
+                self.tr(
+                    "Some image files are missing or were moved. EXIF data could not be read."
+                )
+                + "\n\n"
+                + self.tr("Missing files:")
+                + "\n"
+                + preview
+                + extra
+                + "\n\n"
+                + self.tr("Please relink or remove the missing images."),
             )
         return results
 
@@ -1499,6 +1648,7 @@ class ObservationsTab(QWidget):
         obs_id: int,
         results: list[ImageImportResult],
         existing_images: list[dict] | None = None,
+        progress_cb=None,
     ) -> None:
         objectives = load_objectives()
         images_root = Path(get_images_dir())
@@ -1524,7 +1674,10 @@ class ObservationsTab(QWidget):
         for image_id in removed_ids:
             ImageDB.delete_image(image_id)
 
-        for result in results:
+        total = len(results)
+        for index, result in enumerate(results, start=1):
+            if progress_cb:
+                progress_cb(index, total, result)
             image_type = result.image_type or "field"
             objective_key = result.objective
             if objective_key and objective_key not in objectives:
@@ -1869,6 +2022,15 @@ class ObservationDetailsDialog(QDialog):
         # Enable map button when coordinates are manually changed
         self.lat_input.valueChanged.connect(self._update_map_button)
         self.lon_input.valueChanged.connect(self._update_map_button)
+
+        # Location lookup from coordinates (debounced)
+        self._location_lookup_timer = QTimer(self)
+        self._location_lookup_timer.setSingleShot(True)
+        self._location_lookup_timer.setInterval(600)
+        self._location_lookup_timer.timeout.connect(self._do_location_lookup)
+        self._location_lookup_worker = None
+        self.lat_input.valueChanged.connect(self._schedule_location_lookup)
+        self.lon_input.valueChanged.connect(self._schedule_location_lookup)
 
         datetime_layout.addStretch()
         details_layout.addRow(self.tr("Date & time:"), datetime_container)
@@ -2848,6 +3010,31 @@ class ObservationDetailsDialog(QDialog):
         lon = self.lon_input.value()
         has_coords = lat > self.lat_input.minimum() and lon > self.lon_input.minimum()
         self.map_btn.setEnabled(has_coords)
+
+    def _schedule_location_lookup(self):
+        """Restart the debounce timer for location lookup."""
+        self._location_lookup_timer.start()
+
+    def _do_location_lookup(self):
+        """Fire off a background request to resolve coordinates to a place name."""
+        lat = self.lat_input.value()
+        lon = self.lon_input.value()
+        if lat <= self.lat_input.minimum() or lon <= self.lon_input.minimum():
+            return
+        # Cancel any in-flight worker
+        if self._location_lookup_worker is not None:
+            self._location_lookup_worker.resultReady.disconnect(self._on_location_lookup_result)
+            self._location_lookup_worker = None
+        worker = LocationLookupWorker(lat, lon, parent=self)
+        worker.resultReady.connect(self._on_location_lookup_result)
+        worker.finished.connect(worker.deleteLater)
+        self._location_lookup_worker = worker
+        worker.start()
+
+    def _on_location_lookup_result(self, name: str):
+        """Fill the location field with the place name from the API."""
+        self.location_input.setText(name)
+        self._location_lookup_worker = None
 
     def open_map(self):
         """Open the GPS coordinates in a map service."""
