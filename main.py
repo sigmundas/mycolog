@@ -1,14 +1,25 @@
 """Main entry point for Mushroom Spore Analyzer"""
+import os
+import signal
 import sys
 from pathlib import Path
+
+os.environ.setdefault("QTWEBENGINE_DISABLE_GPU", "1")
+os.environ.setdefault("QT_QUICK_BACKEND", "software")
+os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
+os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu --disable-software-rasterizer")
+if sys.platform.startswith("linux"):
+    # Avoid loading libproxy-based GIO module in mixed snap/system setups.
+    os.environ.setdefault("GIO_USE_PROXY_RESOLVER", "0")
+
 from PySide6.QtWidgets import QApplication, QSplashScreen
 from PySide6.QtGui import QFont, QPixmap, QPainter, QColor
-from PySide6.QtCore import QTranslator, QLocale, Qt
+from PySide6.QtCore import QTranslator, QLocale, Qt, QTimer
 from database.schema import init_database, get_app_settings, update_app_settings
 from database.models import SettingsDB
 from ui.main_window import MainWindow
 
-APP_VERSION = "0.5.3"
+APP_VERSION = "0.5.5"
 
 
 def _create_splash(app: QApplication, version: str) -> QSplashScreen | None:
@@ -94,7 +105,23 @@ def main():
         splash.finish(window)
     window.start_update_check()
 
-    sys.exit(app.exec())
+    # Keep Python signal handling responsive while Qt runs its event loop.
+    signal_pump = QTimer()
+    signal_pump.setInterval(200)
+    signal_pump.timeout.connect(lambda: None)
+    signal_pump.start()
+
+    def _request_quit(*_args):
+        print("\nShutdown requested, exiting...")
+        app.quit()
+
+    signal.signal(signal.SIGINT, _request_quit)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, _request_quit)
+
+    exit_code = app.exec()
+    signal_pump.stop()
+    sys.exit(exit_code)
 
 
 if __name__ == '__main__':

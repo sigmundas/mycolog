@@ -447,8 +447,8 @@ class CalibrationDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle(self.tr("Calibrate Objective"))
-        self.setMinimumSize(1100, 700)
-        self.resize(1200, 750)
+        self.setMinimumSize(1300, 820)
+        self.resize(1400, 900)
 
         self.objectives = load_objectives()
         self.target_sampling_pct = float(

@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                 QCheckBox, QDoubleSpinBox, QDialog, QFormLayout,
                                 QDialogButtonBox, QSpinBox, QSizePolicy, QToolButton,
                                 QStyle, QLineEdit, QApplication, QProgressDialog,
-                                QToolTip, QCompleter, QSplitterHandle)
+                                QToolTip, QCompleter, QSplitterHandle, QListView)
 from PySide6.QtGui import (
     QPixmap,
     QAction,
@@ -836,6 +836,194 @@ class LanguageSettingsDialog(QDialog):
             )
 
         self.accept()
+
+
+class ArtsobservasjonerSettingsDialog(QDialog):
+    """Dialog for Artsobservasjoner login and upload preferences."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from platformdirs import user_data_dir
+        from utils.artsobs_uploaders import list_uploaders
+        self.cookies_file = (
+            Path(user_data_dir("MycoLog", appauthor=False, roaming=True))
+            / "artsobservasjoner_cookies.json"
+        )
+        self._migrate_legacy_cookies()
+        self._auth_widget = None
+        self._uploaders = list_uploaders()
+        self.setWindowTitle(self.tr("Publish observation"))
+        self.setModal(True)
+        self.setMinimumWidth(520)
+        self._build_ui()
+        self._load_settings()
+        self._update_status()
+        self._update_controls()
+
+    def _migrate_legacy_cookies(self) -> None:
+        legacy_file = Path.home() / ".myco_log" / "artsobservasjoner_cookies.json"
+        if not legacy_file.exists() or self.cookies_file.exists():
+            return
+        try:
+            self.cookies_file.parent.mkdir(parents=True, exist_ok=True)
+            legacy_file.replace(self.cookies_file)
+        except Exception:
+            return
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+
+        self.status_label = QLabel()
+        layout.addWidget(self.status_label)
+
+        target_row = QHBoxLayout()
+        target_label = QLabel(self.tr("Publish target:"))
+        self.upload_target_combo = QComboBox()
+        self._apply_combo_popup_style(self.upload_target_combo)
+        for uploader in self._uploaders:
+            self.upload_target_combo.addItem(self.tr(uploader.label), uploader.key)
+        self.upload_target_combo.currentIndexChanged.connect(self._save_upload_target)
+        target_row.addWidget(target_label)
+        target_row.addWidget(self.upload_target_combo, 1)
+        layout.addLayout(target_row)
+
+        button_layout = QHBoxLayout()
+        self.login_button = QPushButton(self.tr("Log in to Artsobservasjoner"))
+        self.login_button.clicked.connect(self._open_login)
+        button_layout.addWidget(self.login_button)
+
+        self.logout_button = QPushButton(self.tr("Log out"))
+        self.logout_button.clicked.connect(self._logout)
+        button_layout.addWidget(self.logout_button)
+        layout.addLayout(button_layout)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(self.reject)
+        buttons.accepted.connect(self.accept)
+        layout.addWidget(buttons)
+
+    def _is_logged_in(self) -> bool:
+        return self.cookies_file.exists()
+
+    def _update_status(self):
+        if self._is_logged_in():
+            self.status_label.setText(self.tr("Logged in to Artsobservasjoner"))
+            self.status_label.setStyleSheet("color: #27ae60; font-weight: bold;")
+        else:
+            self.status_label.setText(self.tr("Not logged in"))
+            self.status_label.setStyleSheet("color: #e67e22;")
+
+    def _update_controls(self):
+        logged_in = self._is_logged_in()
+        self.logout_button.setEnabled(logged_in)
+        self.login_button.setText(
+            self.tr("Re-authenticate") if logged_in else self.tr("Log in to Artsobservasjoner")
+        )
+
+    def _open_login(self):
+        try:
+            from utils.artsobservasjoner_auto_login import ArtsObservasjonerAuthWidget
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                self.tr("Login Unavailable"),
+                self.tr(f"Could not start the login widget.\n\n{exc}")
+            )
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.tr("Log in to Artsobservasjoner"))
+        dialog.setModal(True)
+
+        def _handle_success(cookies: dict) -> None:
+            self._on_login_success(cookies)
+            dialog.accept()
+
+        login_url = None
+        if hasattr(self, "upload_target_combo"):
+            selected = self.upload_target_combo.currentData()
+            for uploader in self._uploaders:
+                if uploader.key == selected:
+                    login_url = uploader.login_url
+                    break
+
+        self._auth_widget = ArtsObservasjonerAuthWidget(
+            on_login_success=_handle_success,
+            parent=dialog,
+            login_url=login_url,
+        )
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(self._auth_widget.widget)
+
+        screen = QApplication.primaryScreen()
+        if screen:
+            available = screen.availableGeometry()
+            target_w = min(900, int(available.width() * 0.85))
+            target_h = min(650, int(available.height() * 0.85))
+            dialog.resize(max(640, target_w), max(520, target_h))
+        else:
+            dialog.resize(1000, 800)
+
+        dialog.exec()
+
+    def _on_login_success(self, cookies: dict):
+        try:
+            self.cookies_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.cookies_file, "w") as handle:
+                json.dump(cookies, handle, indent=2)
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                self.tr("Login Failed"),
+                self.tr(f"Unable to save login cookies.\n\n{exc}")
+            )
+            return
+
+        self._update_status()
+        self._update_controls()
+        # No modal dialog; status label updates in the settings dialog.
+
+    def _logout(self):
+        if self.cookies_file.exists():
+            try:
+                self.cookies_file.unlink()
+            except Exception as exc:
+                QMessageBox.warning(
+                    self,
+                    self.tr("Logout Failed"),
+                    self.tr(f"Unable to remove login cookies.\n\n{exc}")
+                )
+                return
+        self._update_status()
+        self._update_controls()
+
+    def _apply_combo_popup_style(self, combo: QComboBox) -> None:
+        view = QListView()
+        view.setStyleSheet(
+            "QListView { background: white; color: #2c3e50; }"
+            "QListView::item { color: #2c3e50; background: white; }"
+            "QListView::item:hover { background: #d9e9f8; color: #2c3e50; }"
+            "QListView::item:selected { background: #3498db; color: white; }"
+        )
+        combo.setView(view)
+
+    def _load_settings(self):
+        selected = self._get_upload_target()
+        idx = self.upload_target_combo.findData(selected)
+        if idx >= 0:
+            self.upload_target_combo.setCurrentIndex(idx)
+
+    def _get_upload_target(self) -> str:
+        raw = SettingsDB.get_setting("artsobs_upload_target")
+        if not raw:
+            return "mobile"
+        return str(raw)
+
+    def _save_upload_target(self):
+        if not hasattr(self, "upload_target_combo"):
+            return
+        value = self.upload_target_combo.currentData()
+        SettingsDB.set_setting("artsobs_upload_target", value)
 
 
 #
@@ -2080,6 +2268,7 @@ class MainWindow(QMainWindow):
         self.observations_tab = ObservationsTab()
         self.observations_tab.observation_selected.connect(self.on_observation_selected)
         self.observations_tab.image_selected.connect(self.on_image_selected)
+        self.observations_tab.observation_deleted.connect(self.on_observation_deleted)
         self.tab_widget.addTab(self.observations_tab, self.tr("Observations"))
 
         # Measure tab (includes control panel on left and stats panel on right)
@@ -2149,6 +2338,10 @@ class MainWindow(QMainWindow):
         calib_action.setShortcut("Ctrl+K")
         calib_action.triggered.connect(self.open_calibration_dialog)
         settings_menu.addAction(calib_action)
+
+        artsobs_action = QAction(self.tr("Publish observation"), self)
+        artsobs_action.triggered.connect(self.open_artsobservasjoner_settings_dialog)
+        settings_menu.addAction(artsobs_action)
 
         language_action = QAction(self.tr("Language"), self)
         language_action.triggered.connect(self.open_language_settings_dialog)
@@ -5854,12 +6047,19 @@ class MainWindow(QMainWindow):
         if self.active_observation_id:
             obs = ObservationDB.get_observation(self.active_observation_id)
             if obs:
-                parts = [
-                    obs.get("genus") or "",
-                    obs.get("species") or obs.get("species_guess") or "",
-                    obs.get("date") or ""
-                ]
-                name = " ".join([p for p in parts if p]).strip()
+                genus = obs.get("genus") or ""
+                species = obs.get("species") or obs.get("species_guess") or ""
+                date = obs.get("date") or ""
+                vernacular = (obs.get("common_name") or "").strip()
+                if not vernacular and genus and species:
+                    lang = normalize_vernacular_language(SettingsDB.get_setting("vernacular_language", "no"))
+                    db_path = resolve_vernacular_db_path(lang)
+                    if db_path and Path(db_path).exists():
+                        vernacular_db = VernacularDB(db_path, language_code=lang)
+                        vernacular = vernacular_db.vernacular_from_taxon(genus, species) or ""
+                sci = " ".join([p for p in [genus, species] if p]).strip()
+                parts = [p for p in [vernacular, sci, date] if p]
+                name = " - ".join(parts).strip()
                 name = name.replace(":", "-")
                 name = re.sub(r'[<>:"/\\\\|?*]', "_", name)
                 name = re.sub(r"\\s+", " ", name).strip()
@@ -5878,25 +6078,35 @@ class MainWindow(QMainWindow):
 
         export_settings = dialog.get_settings()
         self.export_scale_percent = export_settings["scale_percent"]
-
-        default_ext = ".jpg" if self.export_format == "jpg" else ".png"
+        export_format = export_settings["format"]
+        ext_map = {
+            "jpg": ".jpg",
+            "png": ".png",
+            "svg": ".svg",
+        }
+        default_ext = ext_map.get(export_format, ".png")
         default_path = str(Path(self._get_default_export_dir()) / f"{default_name}{default_ext}")
         filename, _ = QFileDialog.getSaveFileName(
             self,
             "Export Image",
             default_path,
-            "PNG Images (*.png);;JPEG Images (*.jpg)"
+            "PNG Images (*.png);;JPEG Images (*.jpg);;SVG Files (*.svg)"
         )
         if not filename:
             return
-        if not re.search(r"\.(png|jpe?g)$", filename, re.IGNORECASE):
+        if not re.search(r"\.(png|jpe?g|svg)$", filename, re.IGNORECASE):
             filename += default_ext
         self._remember_export_dir(filename)
 
+        target_w = export_settings["width"]
+        target_h = export_settings["height"]
+        if export_format == "svg":
+            if self.image_label.export_annotated_svg(filename, (target_w, target_h)):
+                self.export_format = "svg"
+            return
+
         exported = self.image_label.export_annotated_pixmap()
         if exported:
-            target_w = export_settings["width"]
-            target_h = export_settings["height"]
             if target_w and target_h:
                 exported = exported.scaled(
                     target_w,
@@ -5904,7 +6114,7 @@ class MainWindow(QMainWindow):
                     Qt.KeepAspectRatio,
                     Qt.SmoothTransformation
                 )
-            fmt = "JPEG" if filename.lower().endswith((".jpg", ".jpeg")) else "PNG"
+            fmt = "JPEG" if export_format == "jpg" else "PNG"
             quality = export_settings["quality"]
             if fmt == "JPEG":
                 exported.save(filename, fmt, quality)
@@ -7800,6 +8010,11 @@ class MainWindow(QMainWindow):
         if dialog.exec() == QDialog.Accepted:
             self._populate_measure_categories()
 
+    def open_artsobservasjoner_settings_dialog(self):
+        """Open publish settings dialog."""
+        dialog = ArtsobservasjonerSettingsDialog(self)
+        dialog.exec()
+
     def open_language_settings_dialog(self):
         """Open language settings dialog."""
         dialog = LanguageSettingsDialog(self)
@@ -8401,6 +8616,18 @@ class MainWindow(QMainWindow):
         if suppress_gallery and self.is_analysis_visible():
             self.schedule_gallery_refresh()
 
+    def on_observation_deleted(self, observation_id: int):
+        if observation_id != getattr(self, "active_observation_id", None):
+            return
+        self.active_observation_id = None
+        self.active_observation_name = None
+        if hasattr(self, "image_info_label"):
+            self.image_info_label.setText("")
+        self.update_observation_header(None)
+        self.clear_current_image_display()
+        self.refresh_observation_images()
+        self.update_measurements_table()
+
     def _on_observation_selected_impl(self, observation_id, display_name, switch_tab=True, schedule_gallery=True):
         """Internal handler for observation selection."""
         self.active_observation_id = observation_id
@@ -8626,6 +8853,7 @@ class ExportImageDialog(QDialog):
     def __init__(self, base_width, base_height, scale_percent, fmt, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Export Image")
+        self.setWindowFlags(Qt.Dialog | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
         self.base_width = base_width
         self.base_height = base_height
         self.format = fmt
@@ -8635,6 +8863,16 @@ class ExportImageDialog(QDialog):
     def _init_ui(self, scale_percent, fmt):
         layout = QFormLayout(self)
         layout.setSpacing(8)
+
+        self.format_input = QComboBox()
+        self.format_input.addItem("PNG", "png")
+        self.format_input.addItem("JPEG", "jpg")
+        self.format_input.addItem("SVG", "svg")
+        current_format = self.format_input.findData(fmt)
+        if current_format >= 0:
+            self.format_input.setCurrentIndex(current_format)
+        self.format_input.currentIndexChanged.connect(self.on_format_changed)
+        layout.addRow("Format:", self.format_input)
 
         self.scale_input = QDoubleSpinBox()
         self.scale_input.setRange(1.0, 400.0)
@@ -8658,10 +8896,12 @@ class ExportImageDialog(QDialog):
         self.quality_input = QSpinBox()
         self.quality_input.setRange(1, 10)
         self.quality_input.setValue(9)
-        layout.addRow("JPEG quality (1-10):", self.quality_input)
+        self.quality_label = QLabel("JPEG quality (1-10):")
+        layout.addRow(self.quality_label, self.quality_input)
 
         if fmt == "jpg":
             self.quality_input.setValue(9)
+        self.on_format_changed()
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
@@ -8698,13 +8938,21 @@ class ExportImageDialog(QDialog):
         self.width_input.setValue(max(1, width))
         self._updating = False
 
+    def on_format_changed(self):
+        selected = self.format_input.currentData()
+        if selected:
+            self.format = selected
+        is_jpeg = self.format == "jpg"
+        self.quality_input.setEnabled(is_jpeg)
+        self.quality_label.setEnabled(is_jpeg)
+
     def get_settings(self):
         return {
             "scale_percent": float(self.scale_input.value()),
             "width": int(self.width_input.value()),
             "height": int(self.height_input.value()),
             "quality": int(self.quality_input.value()) * 10,
-            "format": self.format
+            "format": self.format_input.currentData()
         }
 
         self.measure_status_label.setText(self.tr("Scale calibrated - check dialog for result"))

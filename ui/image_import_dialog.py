@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QListView,
     QPushButton,
     QRadioButton,
     QStackedLayout,
@@ -528,6 +529,16 @@ class ImageImportDialog(QDialog):
         elif hasattr(self, "preview_stack") and self.preview_stack.currentWidget() != self.preview:
             self.preview_stack.setCurrentWidget(self.preview)
 
+    def _apply_combo_popup_style(self, combo: QComboBox) -> None:
+        view = QListView()
+        view.setStyleSheet(
+            "QListView { background: white; color: #2c3e50; }"
+            "QListView::item { color: #2c3e50; background: white; }"
+            "QListView::item:hover { background: #d9e9f8; color: #2c3e50; }"
+            "QListView::item:selected { background: #3498db; color: white; }"
+        )
+        combo.setView(view)
+
     def _build_left_panel(self) -> QWidget:
         container = QWidget()
         outer = QVBoxLayout(container)
@@ -563,6 +574,7 @@ class ImageImportDialog(QDialog):
         self.scale_group = QGroupBox(self.tr("Scale"))
         scale_layout = QVBoxLayout(self.scale_group)
         self.objective_combo = QComboBox()
+        self._apply_combo_popup_style(self.objective_combo)
         self._populate_objectives()
         self.objective_combo.currentIndexChanged.connect(self._on_settings_changed)
         scale_layout.addWidget(self.objective_combo)
@@ -579,6 +591,7 @@ class ImageImportDialog(QDialog):
         self.contrast_group = QGroupBox(self.tr("Contrast"))
         contrast_layout = QVBoxLayout(self.contrast_group)
         self.contrast_combo = QComboBox()
+        self._apply_combo_popup_style(self.contrast_combo)
         self.contrast_combo.addItems(self.contrast_options)
         if self.contrast_default:
             idx = self.contrast_combo.findText(self.contrast_default)
@@ -591,6 +604,7 @@ class ImageImportDialog(QDialog):
         self.mount_group = QGroupBox(self.tr("Mount"))
         mount_layout = QVBoxLayout(self.mount_group)
         self.mount_combo = QComboBox()
+        self._apply_combo_popup_style(self.mount_combo)
         self.mount_combo.addItems(self.mount_options)
         if self.mount_default:
             idx = self.mount_combo.findText(self.mount_default)
@@ -603,6 +617,7 @@ class ImageImportDialog(QDialog):
         self.sample_group = QGroupBox(self.tr("Sample type"))
         sample_layout = QVBoxLayout(self.sample_group)
         self.sample_combo = QComboBox()
+        self._apply_combo_popup_style(self.sample_combo)
         self.sample_combo.addItems(self.sample_options)
         if self.sample_default:
             idx = self.sample_combo.findText(self.sample_default)

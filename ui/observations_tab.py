@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                                 QSizePolicy, QAbstractItemView, QFrame, QProgressDialog,
                                 QApplication)
 from PySide6.QtCore import Signal, Qt, QDateTime, QStringListModel, QEvent, QTimer, QThread
-from PySide6.QtGui import QPixmap, QImage
+from PySide6.QtGui import QPixmap, QImage, QDesktopServices
 from PIL import Image
 from PySide6.QtCore import QUrl
 from pathlib import Path
@@ -36,6 +36,7 @@ from utils.ml_export import export_coco_format, get_export_summary
 from datetime import datetime
 import re
 import requests
+from urllib.parse import urlparse, parse_qs
 from utils.vernacular_utils import (
     normalize_vernacular_language,
     common_name_display_label,
@@ -55,6 +56,28 @@ def _parse_observation_datetime(value: str | None) -> QDateTime | None:
             return dt_value
     dt_value = QDateTime.fromString(value, Qt.ISODate)
     return dt_value if dt_value.isValid() else None
+
+
+def _extract_coords_from_osm_url(text: str) -> tuple[float, float] | None:
+    if not text:
+        return None
+    match = re.search(r"#map=\d+/(-?\d+(?:\.\d+)?)/(-?\d+(?:\.\d+)?)", text)
+    if match:
+        lat = float(match.group(1))
+        lon = float(match.group(2))
+        if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+            return lat, lon
+    parsed = urlparse(text)
+    query = parse_qs(parsed.query)
+    if "mlat" in query and "mlon" in query:
+        try:
+            lat = float(query["mlat"][0])
+            lon = float(query["mlon"][0])
+            if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+                return lat, lon
+        except (TypeError, ValueError, IndexError):
+            return None
+    return None
 
 
 class LocationLookupWorker(QThread):
@@ -460,6 +483,8 @@ class ObservationsTab(QWidget):
 
     # Signal emitted when observation is selected (id, display_name, switch_tab)
     observation_selected = Signal(int, str, bool)
+    # Signal emitted when an observation is deleted
+    observation_deleted = Signal(int)
     # Signal emitted when an image is selected to open in Measure tab
     image_selected = Signal(int, int, str)  # image_id, observation_id, display_name
 
@@ -499,6 +524,11 @@ class ObservationsTab(QWidget):
         self.delete_btn.clicked.connect(self.delete_selected_observation)
         button_layout.addWidget(self.delete_btn)
 
+        self.upload_artsobs_btn = QPushButton(self.tr("Upload to Artsobs"))
+        self.upload_artsobs_btn.setEnabled(False)
+        self.upload_artsobs_btn.clicked.connect(self._upload_selected_observation)
+        button_layout.addWidget(self.upload_artsobs_btn)
+
         refresh_btn = QPushButton(self.tr("Refresh DB"))
         refresh_btn.clicked.connect(self.refresh_observations)
         button_layout.addWidget(refresh_btn)
@@ -521,7 +551,7 @@ class ObservationsTab(QWidget):
 
         # Observations table
         self.table = QTableWidget()
-        self.table.setColumnCount(9)
+        self.table.setColumnCount(10)
         self.table.setHorizontalHeaderLabels([
             self.tr("ID"),
             self.tr("Genus"),
@@ -531,7 +561,8 @@ class ObservationsTab(QWidget):
             self.tr("Needs ID"),
             self.tr("Date"),
             self.tr("Location"),
-            self.tr("Map")
+            self.tr("Map"),
+            self.tr("Artsobs")
         ])
 
         # Set column properties
@@ -545,6 +576,7 @@ class ObservationsTab(QWidget):
         header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(7, QHeaderView.Stretch)
         header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(9, QHeaderView.ResizeToContents)
 
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.ExtendedSelection)
@@ -685,9 +717,29 @@ class ObservationsTab(QWidget):
                 )
                 self.table.setCellWidget(row, 8, map_label)
 
+            # Artsobservasjoner link
+            arts_id = obs.get('artsdata_id')
+            arts_item = SortableTableWidgetItem("" if arts_id else "-")
+            arts_item.setData(Qt.UserRole, arts_id or 0)
+            arts_item.setFlags(arts_item.flags() & ~Qt.ItemIsEditable)
+            self.table.setItem(row, 9, arts_item)
+            if arts_id:
+                arts_label = QLabel('<a href="#">Link</a>')
+                arts_label.setTextFormat(Qt.RichText)
+                arts_label.setTextInteractionFlags(Qt.TextBrowserInteraction)
+                arts_label.setOpenExternalLinks(False)
+                arts_label.setAlignment(Qt.AlignCenter)
+                arts_url = f"https://mobil.artsobservasjoner.no/sighting/{arts_id}"
+                arts_label.linkActivated.connect(
+                    lambda _=None, url=arts_url: QDesktopServices.openUrl(QUrl(url))
+                )
+                self.table.setCellWidget(row, 9, arts_label)
+
         # Clear detail view
         self.rename_btn.setEnabled(False)
         self.delete_btn.setEnabled(False)
+        if hasattr(self, "upload_artsobs_btn"):
+            self.upload_artsobs_btn.setEnabled(False)
         self.gallery_widget.clear()
         self.selected_observation_id = None
 
@@ -935,6 +987,11 @@ class ObservationsTab(QWidget):
         species = (obs.get('species') or '').strip()
         if genus and species:
             return f"{genus} {species}".strip()
+        guess = (obs.get('species_guess') or '').strip()
+        if guess:
+            parts = guess.split()
+            if len(parts) >= 2:
+                return f"{parts[0]} {parts[1]}".strip()
         return None
 
     def show_map_service_dialog(self, lat, lon, species_name):
@@ -974,12 +1031,14 @@ class ObservationsTab(QWidget):
         if not selected_rows:
             self.rename_btn.setEnabled(False)
             self.delete_btn.setEnabled(False)
+            self.upload_artsobs_btn.setEnabled(False)
             self.gallery_widget.clear()
             self.selected_observation_id = None
             return
         if len(selected_rows) > 1:
             self.rename_btn.setEnabled(False)
             self.delete_btn.setEnabled(True)
+            self.upload_artsobs_btn.setEnabled(False)
             self.gallery_widget.clear()
             self.selected_observation_id = None
             return
@@ -995,6 +1054,7 @@ class ObservationsTab(QWidget):
         if obs:
             self.rename_btn.setEnabled(True)
             self.delete_btn.setEnabled(True)
+            self.upload_artsobs_btn.setEnabled(True)
 
             # Populate image browser
             self.gallery_widget.set_observation_id(obs_id)
@@ -1034,6 +1094,195 @@ class ObservationsTab(QWidget):
         date = self.table.item(row, 6).text()
         display_name = f"{genus} {species} {date}"
         return obs_id, display_name
+
+    def _upload_selected_observation(self):
+        if not self.selected_observation_id:
+            QMessageBox.information(
+                self,
+                self.tr("Upload to Artsobs"),
+                self.tr("Select an observation to upload.")
+            )
+            return
+        self.upload_observation_to_artsobs(self.selected_observation_id)
+
+    def _collect_artsobs_image_paths(self, observation_id: int) -> list[str]:
+        images = ImageDB.get_images_for_observation(observation_id)
+        ordered = []
+        for image in images:
+            image_type = (image.get("image_type") or "").strip().lower()
+            if image_type not in {"field", "microscope"}:
+                continue
+            filepath = image.get("filepath") or image.get("original_filepath")
+            if not filepath or not Path(filepath).exists():
+                continue
+            if filepath not in ordered:
+                ordered.append(filepath)
+        return ordered
+
+    def _resolve_artsobs_taxon_id(self, obs: dict) -> int | None:
+        adb_taxon_id = obs.get("adb_taxon_id")
+        if adb_taxon_id:
+            try:
+                return int(adb_taxon_id)
+            except (TypeError, ValueError):
+                pass
+        genus = (obs.get("genus") or "").strip()
+        species = (obs.get("species") or "").strip()
+        if not genus or not species:
+            return None
+        adb_taxon_id = ObservationDB.resolve_adb_taxon_id(genus, species)
+        if adb_taxon_id and obs.get("id"):
+            ObservationDB.update_observation(obs["id"], adb_taxon_id=adb_taxon_id)
+        return adb_taxon_id
+
+    def upload_observation_to_artsobs(self, observation_id: int) -> None:
+        try:
+            from utils.artsobs_uploaders import get_uploader
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                self.tr("Upload Unavailable"),
+                self.tr("Missing Artsobservasjoner upload client.\n\n{error}").format(error=exc)
+            )
+            return
+
+        obs = ObservationDB.get_observation(observation_id)
+        if not obs:
+            QMessageBox.warning(
+                self,
+                self.tr("Upload Failed"),
+                self.tr("Observation not found.")
+            )
+            return
+
+        lat = obs.get("gps_latitude")
+        lon = obs.get("gps_longitude")
+        if lat is None or lon is None:
+            QMessageBox.warning(
+                self,
+                self.tr("Upload Failed"),
+                self.tr("This observation is missing GPS coordinates.")
+            )
+            return
+
+        image_paths = self._collect_artsobs_image_paths(observation_id)
+
+        taxon_id = self._resolve_artsobs_taxon_id(obs)
+        if not taxon_id:
+            QMessageBox.warning(
+                self,
+                self.tr("Upload Failed"),
+                self.tr("Species must be set to upload to Artsobservasjoner.")
+            )
+            return
+
+        observed_datetime = obs.get("date")
+        if not observed_datetime:
+            QMessageBox.warning(
+                self,
+                self.tr("Upload Failed"),
+                self.tr("Observation date is missing.")
+            )
+            return
+
+        try:
+            from utils.artsobservasjoner_auto_login import ArtsObservasjonerAuth
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                self.tr("Upload Failed"),
+                self.tr("Could not load the Artsobservasjoner login helper.\n\n{error}").format(error=exc)
+            )
+            return
+
+        auth = ArtsObservasjonerAuth()
+        cookies = auth.get_valid_cookies()
+        if not cookies:
+            QMessageBox.information(
+                self,
+                self.tr("Login Required"),
+                self.tr("Please log in via Settings -> Artsobservasjoner before uploading.")
+            )
+            return
+
+        uploader = get_uploader(SettingsDB.get_setting("artsobs_upload_target"))
+        if not uploader:
+            QMessageBox.warning(
+                self,
+                self.tr("Upload Failed"),
+                self.tr("No uploader is configured for Artsobservasjoner.")
+            )
+            return
+
+        if uploader.key == "mobile" and not image_paths:
+            QMessageBox.warning(
+                self,
+                self.tr("Upload Failed"),
+                self.tr("No field or microscope images found for this observation.")
+            )
+            return
+
+        progress = QProgressDialog(self.tr("Preparing upload..."), None, 0, 3, self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setCancelButton(None)
+        progress.show()
+        QApplication.processEvents()
+
+        try:
+            def progress_cb(text: str, current: int, total: int) -> None:
+                progress.setMaximum(max(1, total))
+                progress.setLabelText(self.tr(text))
+                progress.setValue(min(current, total))
+                QApplication.processEvents()
+
+            spore_stats = (obs.get("spore_statistics") or "").strip()
+            habitat = (obs.get("habitat") or "").strip()
+            notes = (obs.get("notes") or "").strip()
+            comment_parts = [part for part in [spore_stats, habitat, notes] if part]
+            comment_text = "\n".join(comment_parts) if comment_parts else None
+            observation_payload = {
+                "taxon_id": taxon_id,
+                "latitude": float(lat),
+                "longitude": float(lon),
+                "observed_datetime": observed_datetime,
+                "count": 1,
+                "comment": comment_text,
+                "accuracy_meters": obs.get("gps_accuracy") or 25,
+                "site_name": (obs.get("location") or "").strip(),
+                "habitat": habitat or None,
+                "notes": notes or None,
+            }
+            result = uploader.upload(
+                observation_payload,
+                image_paths,
+                cookies,
+                progress_cb=progress_cb,
+            )
+        except Exception as exc:
+            progress.close()
+            import traceback
+
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Warning)
+            msg.setWindowTitle(self.tr("Upload Failed"))
+            msg.setText(
+                self.tr("Upload to Artsobservasjoner failed.\n\n{error}").format(error=exc)
+            )
+            msg.setDetailedText(traceback.format_exc())
+            msg.setStandardButtons(QMessageBox.Ok)
+            msg.exec()
+            return
+        finally:
+            progress.close()
+
+        obs_id = None
+        if result and getattr(result, "sighting_id", None):
+            obs_id = result.sighting_id
+        if obs_id:
+            ObservationDB.update_observation(observation_id, artsdata_id=int(obs_id))
+        self.refresh_observations()
+        progress.close()
 
     def edit_observation(self):
         """Edit the selected observation."""
@@ -1303,6 +1552,7 @@ class ObservationsTab(QWidget):
             failures: list[str] = []
             if obs_id is not None:
                 failures.extend(ObservationDB.delete_observation(obs_id))
+                self.observation_deleted.emit(obs_id)
             else:
                 rows = [row.row() for row in selected_rows]
                 obs_ids = [
@@ -1312,6 +1562,7 @@ class ObservationsTab(QWidget):
                 ]
                 for obs_id in obs_ids:
                     failures.extend(ObservationDB.delete_observation(obs_id))
+                    self.observation_deleted.emit(obs_id)
             self._warn_delete_failures(failures)
             self.refresh_observations()
 
@@ -1979,10 +2230,18 @@ class ObservationDetailsDialog(QDialog):
 
         # ===== OBSERVATION DETAILS SECTION =====
         details_group = QGroupBox(self.tr("Observation Details"))
-        details_layout = QFormLayout()
-        details_layout.setSpacing(8)
+        details_layout = QHBoxLayout(details_group)
+        details_layout.setSpacing(12)
 
-        # Date and time + GPS in same row
+        left_panel = QWidget()
+        left_layout = QFormLayout(left_panel)
+        left_layout.setSpacing(8)
+
+        right_panel = QWidget()
+        right_layout = QFormLayout(right_panel)
+        right_layout.setSpacing(8)
+
+        # Date and time
         datetime_container = QWidget()
         datetime_layout = QHBoxLayout(datetime_container)
         datetime_layout.setContentsMargins(0, 0, 0, 0)
@@ -1992,32 +2251,44 @@ class ObservationDetailsDialog(QDialog):
         self.datetime_input.setCalendarPopup(True)
         self.datetime_input.setMaximumWidth(200)
         datetime_layout.addWidget(self.datetime_input)
+        datetime_layout.addStretch()
+        left_layout.addRow(self.tr("Date & time:"), datetime_container)
 
-        datetime_layout.addSpacing(12)
-        datetime_layout.addWidget(QLabel("Lat:"))
+        # GPS fields
         self.lat_input = QDoubleSpinBox()
         self.lat_input.setRange(-90.0, 90.0)
         self.lat_input.setDecimals(6)
         self.lat_input.setSpecialValueText("--")
         self.lat_input.setValue(self.lat_input.minimum())
-        datetime_layout.addWidget(self.lat_input)
+        left_layout.addRow(self.tr("Lat:"), self.lat_input)
 
-        datetime_layout.addSpacing(8)
-        datetime_layout.addWidget(QLabel("Lon:"))
         self.lon_input = QDoubleSpinBox()
         self.lon_input.setRange(-180.0, 180.0)
         self.lon_input.setDecimals(6)
         self.lon_input.setSpecialValueText("--")
         self.lon_input.setValue(self.lon_input.minimum())
-        datetime_layout.addWidget(self.lon_input)
+        left_layout.addRow(self.tr("Lon:"), self.lon_input)
 
         # Map button - opens location in browser
-        self.map_btn = QPushButton(self.tr("  Map  "))
+        self.map_btn = QPushButton(self.tr("Go to map"))
         self.map_btn.setToolTip("Open location in Google Maps")
-        self.map_btn.setMinimumWidth(70)
+        self.map_btn.setMinimumWidth(90)
         self.map_btn.clicked.connect(self.open_map)
         self.map_btn.setEnabled(False)
-        datetime_layout.addWidget(self.map_btn)
+        left_layout.addRow(self.tr("Map:"), self.map_btn)
+
+        maplink_container = QWidget()
+        maplink_layout = QHBoxLayout(maplink_container)
+        maplink_layout.setContentsMargins(0, 0, 0, 0)
+        self.maplink_input = QLineEdit()
+        self.maplink_input.setPlaceholderText(self.tr("Paste OpenStreetMap link"))
+        self.maplink_input.setClearButtonEnabled(True)
+        self.maplink_input.textChanged.connect(self._on_map_link_changed)
+        self.maplink_open_btn = QPushButton(self.tr("Get map url"))
+        self.maplink_open_btn.clicked.connect(self._open_map_url)
+        maplink_layout.addWidget(self.maplink_input, 1)
+        maplink_layout.addWidget(self.maplink_open_btn)
+        left_layout.addRow(self.tr("Paste link:"), maplink_container)
 
         # Enable map button when coordinates are manually changed
         self.lat_input.valueChanged.connect(self._update_map_button)
@@ -2032,23 +2303,20 @@ class ObservationDetailsDialog(QDialog):
         self.lat_input.valueChanged.connect(self._schedule_location_lookup)
         self.lon_input.valueChanged.connect(self._schedule_location_lookup)
 
-        datetime_layout.addStretch()
-        details_layout.addRow(self.tr("Date & time:"), datetime_container)
-
         # Location (text)
         self.location_input = QLineEdit()
         self.location_input.setPlaceholderText("e.g., Bymarka, Trondheim")
-        details_layout.addRow(self.tr("Location:"), self.location_input)
+        right_layout.addRow(self.tr("Location:"), self.location_input)
 
         # GPS info label (shows source of coordinates)
         self.gps_info_label = QLabel("")
         self.gps_info_label.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
-        details_layout.addRow("", self.gps_info_label)
+        right_layout.addRow("", self.gps_info_label)
 
         # Habitat
         self.habitat_input = QLineEdit()
         self.habitat_input.setPlaceholderText(self.tr("e.g., Spruce forest"))
-        details_layout.addRow(self.tr("Habitat:"), self.habitat_input)
+        right_layout.addRow(self.tr("Habitat:"), self.habitat_input)
 
         # Notes
         self.notes_input = QTextEdit()
@@ -2057,9 +2325,10 @@ class ObservationDetailsDialog(QDialog):
         self.notes_input.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
         self.notes_input.setStyleSheet("QTextEdit { border: 1px solid #bdc3c7; border-radius: 3px; }")
         self.notes_input.setPlaceholderText(self.tr("Any additional notes..."))
-        details_layout.addRow(self.tr("Notes:"), self.notes_input)
+        right_layout.addRow(self.tr("Notes:"), self.notes_input)
 
-        details_group.setLayout(details_layout)
+        details_layout.addWidget(left_panel, 3)
+        details_layout.addWidget(right_panel, 7)
         main_layout.addWidget(details_group)
 
         # ===== TAXONOMY SECTION =====
@@ -3035,6 +3304,24 @@ class ObservationDetailsDialog(QDialog):
         """Fill the location field with the place name from the API."""
         self.location_input.setText(name)
         self._location_lookup_worker = None
+
+    def _open_map_url(self):
+        lat = self.lat_input.value()
+        lon = self.lon_input.value()
+        if lat > self.lat_input.minimum() and lon > self.lon_input.minimum():
+            url = f"https://www.openstreetmap.org/#map=18/{lat:.6f}/{lon:.6f}"
+        else:
+            url = "https://www.openstreetmap.org"
+        QDesktopServices.openUrl(QUrl(url))
+
+    def _on_map_link_changed(self, text: str):
+        coords = _extract_coords_from_osm_url(text)
+        if not coords:
+            return
+        lat, lon = coords
+        self.lat_input.setValue(lat)
+        self.lon_input.setValue(lon)
+        self._update_map_button()
 
     def open_map(self):
         """Open the GPS coordinates in a map service."""

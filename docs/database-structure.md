@@ -12,7 +12,7 @@ MycoLog stores user data in the OS-specific application data folder:
 
 Key tables include:
 
-- **observations**: field and taxonomy metadata; includes source tracking fields.
+- **observations**: field and taxonomy metadata; includes source tracking fields, `adb_taxon_id` (Artsdatabanken taxon id), and `artsdata_id` (Artsobservasjoner sighting id).
 - **images**: image paths, image type, objective name, calibration id, and crop metadata.
 - **spore_measurements**: length, width, Q, and measurement points.
 - **calibrations**: objective calibration history, camera, and megapixels.
@@ -46,6 +46,7 @@ These are available in the **File** menu as **Export DB** and **Import DB**.
 
 ## See also
 
+- [Artsobservasjoner login and upload](docs/artsobservasjoner.md)
 - [Field photography](docs/field-photography.md)
 - [Microscopy workflow](docs/microscopy-workflow.md)
 - [Spore measurements](docs/spore-measurements.md)

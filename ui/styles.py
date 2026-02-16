@@ -158,6 +158,47 @@ QComboBox {
     font-size: 10pt;
 }
 
+QComboBox QAbstractItemView {
+    background-color: white;
+    color: #2c3e50;
+    selection-background-color: #3498db;
+    selection-color: white;
+}
+
+QComboBox QAbstractItemView::item {
+    color: #2c3e50;
+    background-color: white;
+}
+
+QComboBox QAbstractItemView::item:selected,
+QComboBox QAbstractItemView::item:hover {
+    background-color: #3498db;
+    color: white;
+}
+
+QComboBoxPrivateContainer {
+    background-color: white;
+    border: 1px solid #e0e0e0;
+}
+
+QComboBoxPrivateContainer QListView {
+    background-color: white;
+    color: #2c3e50;
+    selection-background-color: #3498db;
+    selection-color: white;
+}
+
+QComboBoxPrivateContainer QListView::item {
+    color: #2c3e50;
+    background-color: white;
+}
+
+QComboBoxPrivateContainer QListView::item:selected,
+QComboBoxPrivateContainer QListView::item:hover {
+    background-color: #3498db;
+    color: white;
+}
+
 QComboBox:focus {
     border: 2px solid #3498db;
 }

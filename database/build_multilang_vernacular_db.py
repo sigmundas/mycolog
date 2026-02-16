@@ -86,6 +86,7 @@ def create_schema(conn: sqlite3.Connection) -> None:
 
         CREATE TABLE taxon_min (
             taxon_id         INTEGER PRIMARY KEY,
+            AdbTaxonId       INTEGER,
             genus            TEXT NOT NULL,
             specific_epithet TEXT NOT NULL,
             family           TEXT
@@ -105,6 +106,7 @@ def create_schema(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX idx_taxon_genus ON taxon_min(genus);
         CREATE INDEX idx_taxon_genus_species ON taxon_min(genus, specific_epithet);
+        CREATE INDEX idx_taxon_adb_id ON taxon_min(AdbTaxonId);
         CREATE INDEX idx_vern_lang_name ON vernacular_min(language_code, vernacular_name);
         CREATE INDEX idx_vern_taxon_lang ON vernacular_min(taxon_id, language_code);
         """
@@ -130,10 +132,21 @@ def _insert_vernacular_rows(conn: sqlite3.Connection, rows: list[tuple[int, str,
     )
 
 
-def _insert_taxon(conn: sqlite3.Connection, taxon_id: int, genus: str, species: str, family: str | None) -> None:
+def _insert_taxon(
+    conn: sqlite3.Connection,
+    taxon_id: int,
+    genus: str,
+    species: str,
+    family: str | None,
+    adb_taxon_id: int | None,
+) -> None:
     conn.execute(
-        "INSERT INTO taxon_min (taxon_id, genus, specific_epithet, family) VALUES (?, ?, ?, ?)",
-        (taxon_id, genus, species, family),
+        """
+        INSERT INTO taxon_min
+            (taxon_id, AdbTaxonId, genus, specific_epithet, family)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (taxon_id, adb_taxon_id, genus, species, family),
     )
 
 
@@ -143,8 +156,11 @@ def _parse_bool(value: str | None) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y"}
 
 
-def _load_art_taxa(taxon_path: Path) -> tuple[dict[str, tuple[str, str, str | None]], int, int]:
-    taxa: dict[str, tuple[str, str, str | None]] = {}
+def _load_art_taxa(
+    taxon_path: Path,
+) -> tuple[dict[str, tuple[str, str, str | None, int | None]], dict[tuple[str, str], int], int, int]:
+    taxa: dict[str, tuple[str, str, str | None, int | None]] = {}
+    adb_by_taxon: dict[tuple[str, str], int] = {}
     total = 0
     valid = 0
     with taxon_path.open("r", encoding="utf-8-sig", newline="") as handle:
@@ -165,9 +181,16 @@ def _load_art_taxa(taxon_path: Path) -> tuple[dict[str, tuple[str, str, str | No
                 continue
             genus, species = _normalize_taxon(genus, species)
             family = (row.get("family") or "").strip() or None
-            taxa[taxon_id] = (genus, species, family)
+            adb_raw = (row.get("parentNameUsageID") or "").strip()
+            try:
+                adb_taxon_id = int(adb_raw) if adb_raw else None
+            except ValueError:
+                adb_taxon_id = None
+            taxa[taxon_id] = (genus, species, family, adb_taxon_id)
+            if adb_taxon_id:
+                adb_by_taxon[(genus, species)] = adb_taxon_id
             valid += 1
-    return taxa, total, valid
+    return taxa, adb_by_taxon, total, valid
 
 
 def _merge_norwegian_from_arts(
@@ -175,14 +198,18 @@ def _merge_norwegian_from_arts(
     get_taxon_id,
     taxon_path: Path,
     vernacular_path: Path,
+    art_taxa: dict[str, tuple[str, str, str | None, int | None]] | None = None,
 ) -> None:
     if not taxon_path.exists() or not vernacular_path.exists():
         print("Norwegian source files not found, skipping merge.")
         return
 
-    taxa, total, valid = _load_art_taxa(taxon_path)
-    print(f"Artsnavnebase taxa: {valid} valid entries out of {total} total")
-    if not taxa:
+    if art_taxa is None:
+        art_taxa, _, total, valid = _load_art_taxa(taxon_path)
+        print(f"Artsnavnebase taxa: {valid} valid entries out of {total} total")
+    else:
+        total = valid = 0
+    if not art_taxa:
         print("No taxa loaded from artsnavnebase taxon.txt")
         return
 
@@ -199,11 +226,11 @@ def _merge_norwegian_from_arts(
             name = (row.get("vernacularName") or "").strip()
             if not name:
                 continue
-            taxon = taxa.get(taxon_id)
+            taxon = art_taxa.get(taxon_id)
             if not taxon:
                 continue
-            genus, species, family = taxon
-            db_taxon_id = get_taxon_id(genus, species, family)
+            genus, species, family, adb_taxon_id = taxon
+            db_taxon_id = get_taxon_id(genus, species, family, adb_taxon_id)
             is_pref = 1 if _parse_bool(row.get("isPreferredName")) else 0
             batch.append((db_taxon_id, "no", name, is_pref))
             if len(batch) >= 5000:
@@ -228,8 +255,18 @@ def build_db(csv_path: Path, out_db: Path, no_taxon: Path | None, no_names: Path
         create_schema(conn)
         taxon_cache: dict[tuple[str, str], int] = {}
         next_taxon_id = 1
+        art_taxa: dict[str, tuple[str, str, str | None, int | None]] | None = None
+        adb_taxon_lookup: dict[tuple[str, str], int] = {}
+        if no_taxon and no_taxon.exists():
+            art_taxa, adb_taxon_lookup, total, valid = _load_art_taxa(no_taxon)
+            print(f"Artsnavnebase taxa: {valid} valid entries out of {total} total")
 
-        def get_taxon_id(genus: str, species: str, family: str | None = None) -> int:
+        def get_taxon_id(
+            genus: str,
+            species: str,
+            family: str | None = None,
+            adb_taxon_id: int | None = None,
+        ) -> int:
             nonlocal next_taxon_id
             key = (genus, species)
             if key in taxon_cache:
@@ -238,10 +275,15 @@ def build_db(csv_path: Path, out_db: Path, no_taxon: Path | None, no_names: Path
                         "UPDATE taxon_min SET family = COALESCE(family, ?) WHERE taxon_id = ?",
                         (family, taxon_cache[key]),
                     )
+                if adb_taxon_id:
+                    conn.execute(
+                        "UPDATE taxon_min SET AdbTaxonId = COALESCE(AdbTaxonId, ?) WHERE taxon_id = ?",
+                        (adb_taxon_id, taxon_cache[key]),
+                    )
                 return taxon_cache[key]
             taxon_id = next_taxon_id
             next_taxon_id += 1
-            _insert_taxon(conn, taxon_id, genus, species, family)
+            _insert_taxon(conn, taxon_id, genus, species, family, adb_taxon_id)
             taxon_cache[key] = taxon_id
             return taxon_id
 
@@ -277,7 +319,8 @@ def build_db(csv_path: Path, out_db: Path, no_taxon: Path | None, no_names: Path
                     continue
                 valid_rows += 1
                 genus, species = _normalize_taxon(*parsed)
-                taxon_id = get_taxon_id(genus, species, None)
+                adb_taxon_id = adb_taxon_lookup.get((genus, species))
+                taxon_id = get_taxon_id(genus, species, None, adb_taxon_id)
 
                 has_any = False
                 for lang in lang_columns:
@@ -313,7 +356,7 @@ def build_db(csv_path: Path, out_db: Path, no_taxon: Path | None, no_names: Path
 
         # -------- Norwegian merge from artsnavnebase --------
         if use_arts_no:
-            _merge_norwegian_from_arts(conn, get_taxon_id, no_taxon, no_names)
+            _merge_norwegian_from_arts(conn, get_taxon_id, no_taxon, no_names, art_taxa=art_taxa)
         else:
             print("Norwegian sources not found, skipping merge.")
 

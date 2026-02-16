@@ -1,7 +1,8 @@
 """Zoomable and pannable image widget with measurement overlays."""
 from PySide6.QtWidgets import QLabel, QWidget, QVBoxLayout
 from PySide6.QtGui import QPixmap, QPainter, QPen, QColor, QCursor, QTransform, QPolygonF
-from PySide6.QtCore import Qt, QPoint, QRect, QPointF, Signal, QRectF
+from PySide6.QtCore import Qt, QPoint, QRect, QPointF, Signal, QRectF, QSize
+from PySide6.QtSvg import QSvgGenerator
 import math
 
 
@@ -832,13 +833,46 @@ class ZoomableImageLabel(QLabel):
         result.fill(Qt.transparent)
 
         painter = QPainter(result)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setRenderHint(QPainter.SmoothPixmapTransform)
-        painter.drawPixmap(0, 0, self.original_pixmap)
-
         scale_factor = 1.0
         if self.zoom_level and self.zoom_level > 0:
             scale_factor = 1.0 / self.zoom_level
+
+        self._render_export(painter, scale_factor)
+
+        painter.end()
+        return result
+
+    def export_annotated_svg(self, filename, target_size=None):
+        """Export annotations to an SVG with the image embedded."""
+        if not self.original_pixmap:
+            return False
+
+        base_size = self.original_pixmap.size()
+        target_w = base_size.width()
+        target_h = base_size.height()
+        if target_size:
+            target_w = max(1, int(target_size[0]))
+            target_h = max(1, int(target_size[1]))
+
+        generator = QSvgGenerator()
+        generator.setFileName(filename)
+        generator.setSize(QSize(target_w, target_h))
+        generator.setViewBox(QRect(0, 0, base_size.width(), base_size.height()))
+        generator.setTitle("MycoLog Export")
+        generator.setDescription("Annotated image export")
+
+        painter = QPainter(generator)
+        scale_factor = 1.0
+        if self.zoom_level and self.zoom_level > 0:
+            scale_factor = 1.0 / self.zoom_level
+        self._render_export(painter, scale_factor)
+        painter.end()
+        return True
+
+    def _render_export(self, painter, scale_factor):
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+        painter.drawPixmap(0, 0, self.original_pixmap)
 
         thin_width = max(1.0, 1.0 * scale_factor)
         wide_width = max(1.0, 3.0 * scale_factor)
@@ -994,9 +1028,6 @@ class ZoomableImageLabel(QLabel):
             text_y = box_y + pad + 4 * scale_factor + label_h
             painter.setPen(QColor(0, 0, 0))
             painter.drawText(int(text_x), int(text_y), label)
-
-        painter.end()
-        return result
 
     def paintEvent(self, event):
         """Custom paint event to draw image, overlays, and measurements."""

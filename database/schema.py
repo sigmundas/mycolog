@@ -11,27 +11,11 @@ REFERENCE_DATABASE_PATH = _app_dir / "reference_values.db"
 SETTINGS_PATH = _app_dir / "app_settings.json"
 
 DEFAULT_OBJECTIVES = {
-    "10X": {
-        "magnification": 10.0,
-        "na": 0.25,
-        "objective_name": "Plan achro",
-        "name": "10X/0.25 Plan achro",
-        "microns_per_pixel": 0.314,
-        "notes": "Leica DM2000, Olympus MFT 1:1",
-    },
-    "40X": {
-        "magnification": 40.0,
-        "na": 0.75,
-        "objective_name": "Plan fluor",
-        "name": "40X/0.75 Plan fluor",
-        "microns_per_pixel": 0.07875,
-        "notes": "Leica DM2000, Olympus MFT 1:1",
-    },
     "100X": {
         "magnification": 100.0,
         "na": 1.25,
-        "objective_name": "Plan achro Oil",
-        "name": "100X/1.25 Plan achro Oil",
+        "objective_name": "Plan acrho",
+        "name": "100X/1.25 Plan acrho",
         "microns_per_pixel": 0.0315,
         "notes": "Leica DM2000, Olympus MFT 1:1",
     },
@@ -466,6 +450,8 @@ def init_database():
             habitat TEXT,
             genus TEXT,
             species TEXT,
+            adb_taxon_id INTEGER,
+            artsdata_id INTEGER,
             common_name TEXT,
             species_guess TEXT,
             uncertain INTEGER DEFAULT 0,
@@ -497,6 +483,18 @@ def init_database():
     # Add author column if it doesn't exist
     try:
         cursor.execute('ALTER TABLE observations ADD COLUMN author TEXT')
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Add adb_taxon_id column if it doesn't exist
+    try:
+        cursor.execute('ALTER TABLE observations ADD COLUMN adb_taxon_id INTEGER')
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Add artsdata_id column if it doesn't exist
+    try:
+        cursor.execute('ALTER TABLE observations ADD COLUMN artsdata_id INTEGER')
     except sqlite3.OperationalError:
         pass  # Column already exists
 

@@ -15,6 +15,64 @@ def _images_dir() -> Path:
     return get_images_dir()
 
 
+def _normalize_taxon_key(genus: str | None, species: str | None) -> tuple[str, str] | None:
+    if not genus or not species:
+        return None
+    genus = genus.strip()
+    species = species.strip()
+    if not genus or not species:
+        return None
+    genus = genus[0].upper() + genus[1:]
+    species = species.lower()
+    return genus, species
+
+
+def _lookup_adb_taxon_id_from_db(genus: str, species: str) -> int | None:
+    try:
+        from utils.vernacular_utils import resolve_vernacular_db_path
+    except Exception:
+        return None
+    db_path = resolve_vernacular_db_path()
+    if not db_path or not db_path.exists():
+        return None
+    try:
+        conn = sqlite3.connect(db_path)
+    except Exception:
+        return None
+    try:
+        cur = conn.execute("PRAGMA table_info(taxon_min)")
+        has_adb = any((row[1] or "").lower() == "adbtaxonid" for row in cur.fetchall())
+        if not has_adb:
+            return None
+        cur = conn.execute(
+            """
+            SELECT AdbTaxonId
+            FROM taxon_min
+            WHERE genus = ? COLLATE NOCASE
+              AND specific_epithet = ? COLLATE NOCASE
+              AND AdbTaxonId IS NOT NULL
+            LIMIT 1
+            """,
+            (genus, species),
+        )
+        row = cur.fetchone()
+        if not row or row[0] is None:
+            return None
+        try:
+            return int(row[0])
+        except (TypeError, ValueError):
+            return None
+    finally:
+        conn.close()
+
+
+def _resolve_adb_taxon_id(genus: str | None, species: str | None) -> int | None:
+    key = _normalize_taxon_key(genus, species)
+    if not key:
+        return None
+    return _lookup_adb_taxon_id_from_db(*key)
+
+
 def sanitize_folder_name(name: str) -> str:
     """Sanitize a string for use as a folder name."""
     if not name:
@@ -27,6 +85,10 @@ def sanitize_folder_name(name: str) -> str:
 
 class ObservationDB:
     """Handle observation database operations"""
+
+    @staticmethod
+    def resolve_adb_taxon_id(genus: str | None, species: str | None) -> int | None:
+        return _resolve_adb_taxon_id(genus, species)
 
     @staticmethod
     def _infer_image_folder(cursor, observation_id: int) -> Optional[str]:
@@ -84,7 +146,9 @@ class ObservationDB:
                           uncertain: bool = False, inaturalist_id: int = None,
                           gps_latitude: float = None, gps_longitude: float = None,
                           author: str = None, source_type: str = "personal",
-                          citation: str = None, data_provider: str = None) -> int:
+                          citation: str = None, data_provider: str = None,
+                          adb_taxon_id: int | None = None,
+                          artsdata_id: int | None = None) -> int:
         """Create a new observation and return its ID"""
         conn = get_connection()
         cursor = conn.cursor()
@@ -98,6 +162,9 @@ class ObservationDB:
                 parts.append(species)
             species_guess = ' '.join(parts)
 
+        if adb_taxon_id is None:
+            adb_taxon_id = _resolve_adb_taxon_id(genus, species)
+
         # Create folder path: genus/species date-time
         genus_folder = sanitize_folder_name(genus) if genus else "unknown"
         species_name = sanitize_folder_name(species) if species else "sp"
@@ -108,13 +175,14 @@ class ObservationDB:
 
         cursor.execute('''
             INSERT INTO observations (date, genus, species, common_name, location, habitat,
-                                     species_guess, notes, uncertain, folder_path, inaturalist_id,
-                                     gps_latitude, gps_longitude, author, source_type, citation,
-                                     data_provider)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (date, genus, species, common_name, location, habitat, species_guess, notes,
-              1 if uncertain else 0, folder_path, inaturalist_id, gps_latitude,
-              gps_longitude, author, source_type, citation, data_provider))
+                                     adb_taxon_id, artsdata_id, species_guess, notes, uncertain,
+                                     folder_path, inaturalist_id, gps_latitude, gps_longitude,
+                                     author, source_type, citation, data_provider)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (date, genus, species, common_name, location, habitat, adb_taxon_id,
+              artsdata_id, species_guess, notes, 1 if uncertain else 0, folder_path,
+              inaturalist_id, gps_latitude, gps_longitude, author, source_type,
+              citation, data_provider))
 
         obs_id = cursor.lastrowid
         conn.commit()
@@ -127,7 +195,8 @@ class ObservationDB:
                            notes: str = None, uncertain: bool = None,
                            species_guess: str = None, date: str = None,
                            gps_latitude: float = None, gps_longitude: float = None,
-                           allow_nulls: bool = False) -> Optional[str]:
+                           allow_nulls: bool = False, adb_taxon_id: int | None = None,
+                           artsdata_id: int | None = None) -> Optional[str]:
         """Update an observation. Returns new folder path if genus/species changed."""
         conn = get_connection()
         conn.row_factory = sqlite3.Row
@@ -199,6 +268,17 @@ class ObservationDB:
             if allow_nulls or notes is not None:
                 updates.append('notes = ?')
                 values.append(notes)
+            if adb_taxon_id is not None or genus is not None or species is not None:
+                if adb_taxon_id is None:
+                    adb_taxon_id = _resolve_adb_taxon_id(
+                        genus if genus is not None else current.get('genus'),
+                        species if species is not None else current.get('species'),
+                    )
+                updates.append('adb_taxon_id = ?')
+                values.append(adb_taxon_id)
+            if allow_nulls or artsdata_id is not None:
+                updates.append('artsdata_id = ?')
+                values.append(artsdata_id)
             if allow_nulls or uncertain is not None:
                 updates.append('uncertain = ?')
                 values.append(1 if uncertain else 0)
@@ -962,11 +1042,22 @@ class MeasurementDB:
         """Delete a measurement by ID"""
         conn = get_connection()
         cursor = conn.cursor()
-
-        cursor.execute('DELETE FROM spore_measurements WHERE id = ?', (measurement_id,))
-
-        conn.commit()
-        conn.close()
+        try:
+            cursor.execute("BEGIN")
+            cursor.execute(
+                'DELETE FROM spore_annotations WHERE measurement_id = ?',
+                (measurement_id,)
+            )
+            cursor.execute(
+                'DELETE FROM spore_measurements WHERE id = ?',
+                (measurement_id,)
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
 
 class ReferenceDB:
