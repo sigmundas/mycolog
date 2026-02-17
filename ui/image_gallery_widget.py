@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from database.models import ImageDB, MeasurementDB
 from database.schema import load_objectives, objective_display_name, resolve_objective_key
+from database.database_tags import DatabaseTerms
 from utils.thumbnail_generator import get_thumbnail_path
 
 
@@ -227,7 +228,7 @@ class ImageGalleryWidget(QGroupBox):
             else:
                 detail = tr("Micro")
             if contrast:
-                detail = f"{detail} {contrast}"
+                detail = f"{detail} {DatabaseTerms.translate_contrast(contrast)}"
             badges.append(detail)
             if needs_scale:
                 badges.append(tr("(!) needs scale"))

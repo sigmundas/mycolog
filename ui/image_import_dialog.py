@@ -60,6 +60,7 @@ from database.schema import (
     objective_sort_value,
 )
 from database.models import SettingsDB, ImageDB, MeasurementDB, CalibrationDB
+from database.database_tags import DatabaseTerms
 from utils.vernacular_utils import normalize_vernacular_language
 from utils.exif_reader import get_image_metadata, get_exif_data, get_gps_coordinates
 from utils.heic_converter import maybe_convert_heic
@@ -372,29 +373,23 @@ class ImageImportDialog(QDialog):
 
         self.objectives = self._load_objectives()
         self.default_objective = self._get_default_objective()
-        self.contrast_options = SettingsDB.get_list_setting(
-            "contrast_options",
-            ["BF", "DF", "DIC", "Phase"]
+        self.contrast_options = self._load_tag_options("contrast")
+        self.mount_options = self._load_tag_options("mount")
+        self.sample_options = self._load_tag_options("sample")
+        self.contrast_default = self._preferred_tag_value(
+            "contrast",
+            self.contrast_options,
+            DatabaseTerms.CONTRAST_METHODS[0],
         )
-        self.contrast_default = SettingsDB.get_setting(
-            "contrast_default",
-            self.contrast_options[0] if self.contrast_options else "BF"
+        self.mount_default = self._preferred_tag_value(
+            "mount",
+            self.mount_options,
+            DatabaseTerms.MOUNT_MEDIA[0],
         )
-        self.mount_options = SettingsDB.get_list_setting(
-            "mount_options",
-            ["Not set", "Water", "KOH", "Melzer", "Congo Red", "Cotton Blue"]
-        )
-        self.mount_default = SettingsDB.get_setting(
-            "mount_default",
-            self.mount_options[0] if self.mount_options else "Not set"
-        )
-        self.sample_options = SettingsDB.get_list_setting(
-            "sample_options",
-            ["Not set", "Fresh", "Dried", "Spore print"]
-        )
-        self.sample_default = SettingsDB.get_setting(
-            "sample_default",
-            self.sample_options[0] if self.sample_options else "Not set"
+        self.sample_default = self._preferred_tag_value(
+            "sample",
+            self.sample_options,
+            DatabaseTerms.SAMPLE_TYPES[0],
         )
         self.resize_to_optimal_default = bool(
             SettingsDB.get_setting("resize_to_optimal_sampling", False)
@@ -539,6 +534,54 @@ class ImageImportDialog(QDialog):
         )
         combo.setView(view)
 
+    def _load_tag_options(self, category: str) -> list[str]:
+        setting_key = DatabaseTerms.setting_key(category)
+        defaults = DatabaseTerms.default_values(category)
+        options = SettingsDB.get_list_setting(setting_key, defaults)
+        return DatabaseTerms.canonicalize_list(category, options)
+
+    def _canonicalize_tag(self, category: str, value: str | None) -> str | None:
+        return DatabaseTerms.canonicalize(category, value)
+
+    def _preferred_tag_value(self, category: str, options: list[str], fallback: str) -> str:
+        options = options or [fallback]
+        legacy_default_key = {
+            "contrast": "contrast_default",
+            "mount": "mount_default",
+            "sample": "sample_default",
+        }.get(category, "")
+        preferred = SettingsDB.get_setting(DatabaseTerms.last_used_key(category), None)
+        if not preferred and legacy_default_key:
+            preferred = SettingsDB.get_setting(legacy_default_key, None)
+        preferred = self._canonicalize_tag(category, preferred)
+        if preferred and preferred in options:
+            return preferred
+        if preferred and preferred not in options:
+            options.insert(0, preferred)
+        return options[0] if options else fallback
+
+    def _populate_tag_combo(self, combo: QComboBox, category: str, options: list[str]) -> None:
+        combo.clear()
+        for canonical in options:
+            combo.addItem(DatabaseTerms.translate(category, canonical), canonical)
+
+    def _set_combo_tag_value(self, combo: QComboBox, category: str, value: str | None) -> None:
+        canonical = self._canonicalize_tag(category, value)
+        if not canonical:
+            return
+        idx = combo.findData(canonical)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+            return
+        combo.addItem(DatabaseTerms.translate(category, canonical), canonical)
+        combo.setCurrentIndex(combo.count() - 1)
+
+    def _get_combo_tag_value(self, combo: QComboBox, category: str) -> str | None:
+        value = combo.currentData()
+        if value is None:
+            value = combo.currentText()
+        return self._canonicalize_tag(category, value)
+
     def _build_left_panel(self) -> QWidget:
         container = QWidget()
         outer = QVBoxLayout(container)
@@ -592,11 +635,8 @@ class ImageImportDialog(QDialog):
         contrast_layout = QVBoxLayout(self.contrast_group)
         self.contrast_combo = QComboBox()
         self._apply_combo_popup_style(self.contrast_combo)
-        self.contrast_combo.addItems(self.contrast_options)
-        if self.contrast_default:
-            idx = self.contrast_combo.findText(self.contrast_default)
-            if idx >= 0:
-                self.contrast_combo.setCurrentIndex(idx)
+        self._populate_tag_combo(self.contrast_combo, "contrast", self.contrast_options)
+        self._set_combo_tag_value(self.contrast_combo, "contrast", self.contrast_default)
         self.contrast_combo.currentIndexChanged.connect(self._on_settings_changed)
         contrast_layout.addWidget(self.contrast_combo)
         layout.addWidget(self.contrast_group)
@@ -605,11 +645,8 @@ class ImageImportDialog(QDialog):
         mount_layout = QVBoxLayout(self.mount_group)
         self.mount_combo = QComboBox()
         self._apply_combo_popup_style(self.mount_combo)
-        self.mount_combo.addItems(self.mount_options)
-        if self.mount_default:
-            idx = self.mount_combo.findText(self.mount_default)
-            if idx >= 0:
-                self.mount_combo.setCurrentIndex(idx)
+        self._populate_tag_combo(self.mount_combo, "mount", self.mount_options)
+        self._set_combo_tag_value(self.mount_combo, "mount", self.mount_default)
         self.mount_combo.currentIndexChanged.connect(self._on_settings_changed)
         mount_layout.addWidget(self.mount_combo)
         layout.addWidget(self.mount_group)
@@ -618,11 +655,8 @@ class ImageImportDialog(QDialog):
         sample_layout = QVBoxLayout(self.sample_group)
         self.sample_combo = QComboBox()
         self._apply_combo_popup_style(self.sample_combo)
-        self.sample_combo.addItems(self.sample_options)
-        if self.sample_default:
-            idx = self.sample_combo.findText(self.sample_default)
-            if idx >= 0:
-                self.sample_combo.setCurrentIndex(idx)
+        self._populate_tag_combo(self.sample_combo, "sample", self.sample_options)
+        self._set_combo_tag_value(self.sample_combo, "sample", self.sample_default)
         self.sample_combo.currentIndexChanged.connect(self._on_settings_changed)
         sample_layout.addWidget(self.sample_combo)
         layout.addWidget(self.sample_group)
@@ -1821,17 +1855,11 @@ class ImageImportDialog(QDialog):
         else:
             self.objective_combo.setCurrentIndex(0)
         if result.contrast:
-            idx = self.contrast_combo.findText(result.contrast)
-            if idx >= 0:
-                self.contrast_combo.setCurrentIndex(idx)
+            self._set_combo_tag_value(self.contrast_combo, "contrast", result.contrast)
         if result.mount_medium:
-            idx = self.mount_combo.findText(result.mount_medium)
-            if idx >= 0:
-                self.mount_combo.setCurrentIndex(idx)
+            self._set_combo_tag_value(self.mount_combo, "mount", result.mount_medium)
         if result.sample_type:
-            idx = self.sample_combo.findText(result.sample_type)
-            if idx >= 0:
-                self.sample_combo.setCurrentIndex(idx)
+            self._set_combo_tag_value(self.sample_combo, "sample", result.sample_type)
         self._loading_form = False
         self._last_objective_key = self.objective_combo.currentData()
         self._sync_observation_metadata_inputs()
@@ -1921,9 +1949,9 @@ class ImageImportDialog(QDialog):
         else:
             result.custom_scale = None
             result.objective = selected_objective or None
-        result.contrast = self.contrast_combo.currentText() or None
-        result.mount_medium = self.mount_combo.currentText() or None
-        result.sample_type = self.sample_combo.currentText() or None
+        result.contrast = self._get_combo_tag_value(self.contrast_combo, "contrast")
+        result.mount_medium = self._get_combo_tag_value(self.mount_combo, "mount")
+        result.sample_type = self._get_combo_tag_value(self.sample_combo, "sample")
         result.needs_scale = (
             result.image_type == "microscope"
             and not result.objective
@@ -2892,9 +2920,24 @@ class ImageImportDialog(QDialog):
 
     def _accept_continue(self) -> None:
         self._apply_to_selected()
+        self._save_last_used_tag_settings()
         self._accepted = True
         self.continueRequested.emit(self.import_results)
         self.accept()
+
+    def _save_last_used_tag_settings(self) -> None:
+        SettingsDB.set_setting(
+            DatabaseTerms.last_used_key("contrast"),
+            self._get_combo_tag_value(self.contrast_combo, "contrast"),
+        )
+        SettingsDB.set_setting(
+            DatabaseTerms.last_used_key("mount"),
+            self._get_combo_tag_value(self.mount_combo, "mount"),
+        )
+        SettingsDB.set_setting(
+            DatabaseTerms.last_used_key("sample"),
+            self._get_combo_tag_value(self.sample_combo, "sample"),
+        )
 
     def get_observation_gps(self) -> tuple[float | None, float | None]:
         return self._observation_lat, self._observation_lon

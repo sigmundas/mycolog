@@ -49,6 +49,7 @@ import re
 from PIL import Image, ExifTags
 from database.models import ObservationDB, ImageDB, MeasurementDB, SettingsDB, ReferenceDB, CalibrationDB
 from database.models import SpeciesDataAvailability
+from database.database_tags import DatabaseTerms
 from database.schema import (
     get_connection,
     get_app_settings,
@@ -79,6 +80,7 @@ from .calibration_dialog import CalibrationDialog
 from .zoomable_image_widget import ZoomableImageLabel
 from .spore_preview_widget import SporePreviewWidget
 from .observations_tab import ObservationsTab
+from .database_settings_dialog import DatabaseSettingsDialog
 from .styles import MODERN_STYLE
 from utils.db_share import export_database_bundle as export_db_bundle
 from utils.db_share import import_database_bundle as import_db_bundle
@@ -326,347 +328,6 @@ class ScaleBarCalibrationDialog(QDialog):
         if not self.scale_applied and self.previous_key:
             self.main_window._populate_scale_combo(self.previous_key)
         super().closeEvent(event)
-
-
-class DatabaseSettingsDialog(QDialog):
-    """Dialog for database and image folder settings."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Database Settings")
-        self.setModal(True)
-        self.setMinimumWidth(520)
-        self.init_ui()
-
-    def init_ui(self):
-        layout = QVBoxLayout(self)
-        form = QFormLayout()
-
-        self.db_path_input = QLineEdit()
-        db_browse = QPushButton(self.tr("Browse"))
-        db_browse.clicked.connect(self._browse_db_folder)
-        db_row = QHBoxLayout()
-        db_row.addWidget(self.db_path_input)
-        db_row.addWidget(db_browse)
-        form.addRow(self.tr("Database folder:"), db_row)
-
-        self.images_dir_input = QLineEdit()
-        img_browse = QPushButton(self.tr("Browse"))
-        img_browse.clicked.connect(self._browse_images_dir)
-        img_row = QHBoxLayout()
-        img_row.addWidget(self.images_dir_input)
-        img_row.addWidget(img_browse)
-        form.addRow(self.tr("Images folder:"), img_row)
-
-        self.contrast_input = QLineEdit()
-        form.addRow(self.tr("Contrast values:"), self.contrast_input)
-        self.mount_input = QLineEdit()
-        form.addRow(self.tr("Mount values:"), self.mount_input)
-        self.sample_input = QLineEdit()
-        form.addRow(self.tr("Sample values:"), self.sample_input)
-        self.measure_input = QLineEdit()
-        form.addRow(self.tr("Measure categories:"), self.measure_input)
-        self.resize_quality_input = QSpinBox()
-        self.resize_quality_input.setRange(1, 100)
-        self.resize_quality_input.setValue(80)
-        self.resize_quality_input.setSuffix("%")
-        fit_width = self.resize_quality_input.fontMetrics().horizontalAdvance("100%") + 24
-        self.resize_quality_input.setMaximumWidth(fit_width)
-        form.addRow(self.tr("Resize JPEG quality:"), self.resize_quality_input)
-
-        originals_group = QGroupBox(self.tr("Original images"))
-        originals_layout = QVBoxLayout(originals_group)
-        self.originals_button_group = QButtonGroup(self)
-
-        self.originals_none_radio = QRadioButton(self.tr("Don't store originals"))
-        self.originals_obs_radio = QRadioButton(self.tr("Observation folder"))
-        self.originals_global_radio = QRadioButton(self.tr("Unique folder"))
-        self.originals_button_group.addButton(self.originals_none_radio)
-        self.originals_button_group.addButton(self.originals_obs_radio)
-        self.originals_button_group.addButton(self.originals_global_radio)
-
-        originals_layout.addWidget(self.originals_none_radio)
-        originals_layout.addWidget(self.originals_obs_radio)
-        self.originals_obs_path = QLineEdit()
-        self.originals_obs_path.setReadOnly(True)
-        originals_layout.addWidget(self.originals_obs_path)
-
-        originals_layout.addWidget(self.originals_global_radio)
-        global_row = QHBoxLayout()
-        self.originals_global_input = QLineEdit()
-        self.originals_global_browse = QPushButton(self.tr("Browse"))
-        self.originals_global_browse.clicked.connect(self._browse_originals_dir)
-        global_row.addWidget(self.originals_global_input)
-        global_row.addWidget(self.originals_global_browse)
-        originals_layout.addLayout(global_row)
-        self.originals_global_hint = QLineEdit()
-        self.originals_global_hint.setReadOnly(True)
-        self.originals_global_hint.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
-        originals_layout.addWidget(self.originals_global_hint)
-
-        self.originals_none_radio.toggled.connect(self._update_originals_controls)
-        self.originals_obs_radio.toggled.connect(self._update_originals_controls)
-        self.originals_global_radio.toggled.connect(self._update_originals_controls)
-        self.images_dir_input.textChanged.connect(self._update_originals_path_hints)
-        self.originals_global_input.textChanged.connect(self._update_originals_path_hints)
-
-        hint = QLabel(
-            self.tr(
-                "Use comma-separated values. Mark the default with a trailing * (example: BF*). "
-                "Changes apply to new dialogs."
-            )
-        )
-        hint.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
-
-        layout.addLayout(form)
-        layout.addWidget(originals_group)
-        layout.addWidget(hint)
-
-        buttons = QHBoxLayout()
-        buttons.addStretch()
-        save_btn = QPushButton(self.tr("Save"))
-        save_btn.setObjectName("primaryButton")
-        save_btn.clicked.connect(self._save)
-        cancel_btn = QPushButton(self.tr("Cancel"))
-        cancel_btn.clicked.connect(self.reject)
-        buttons.addWidget(save_btn)
-        buttons.addWidget(cancel_btn)
-        layout.addLayout(buttons)
-
-        self._load_settings()
-
-
-    def _load_settings(self):
-        settings = get_app_settings()
-        db_folder = settings.get("database_folder")
-        if not db_folder and settings.get("database_path"):
-            db_folder = str(Path(settings.get("database_path")).parent)
-        if not db_folder:
-            db_folder = str(get_database_path().parent)
-        self.db_path_input.setText(db_folder)
-        self.images_dir_input.setText(str(settings.get("images_dir") or get_images_dir()))
-        storage_mode = SettingsDB.get_setting("original_storage_mode")
-        if not storage_mode:
-            storage_mode = "observation" if SettingsDB.get_setting("store_original_images", False) else "none"
-        if storage_mode == "none":
-            self.originals_none_radio.setChecked(True)
-        elif storage_mode == "global":
-            self.originals_global_radio.setChecked(True)
-        else:
-            self.originals_obs_radio.setChecked(True)
-
-        global_dir = SettingsDB.get_setting("originals_dir") or ""
-        if not global_dir:
-            global_dir = str(get_database_path().parent / "originals")
-        self.originals_global_input.setText(global_dir)
-        self._update_originals_path_hints()
-        self._update_originals_controls()
-
-        contrast = SettingsDB.get_list_setting("contrast_options", ["BF", "DF", "DIC", "Phase"])
-        mount = SettingsDB.get_list_setting(
-            "mount_options",
-            ["Not set", "Water", "KOH", "Melzer", "Congo Red", "Cotton Blue"]
-        )
-        sample = SettingsDB.get_list_setting(
-            "sample_options",
-            ["Not set", "Fresh", "Dried", "Spore print"]
-        )
-        categories = SettingsDB.get_list_setting(
-            "measure_categories",
-            ["Spores", "Field", "Pleurocystidia", "Cheilocystidia", "Caulocystidia", "Other"]
-        )
-        categories = [
-            "Spores" if str(c).strip().lower() == "spore" else c
-            for c in categories
-            if str(c).strip().lower() != "basidia"
-        ]
-        if not any(str(c).strip().lower() == "field" for c in categories):
-            categories.insert(1, "Field")
-
-        contrast_default = SettingsDB.get_setting("contrast_default", contrast[0] if contrast else "BF")
-        mount_default = SettingsDB.get_setting("mount_default", mount[0] if mount else "Not set")
-        sample_default = SettingsDB.get_setting("sample_default", sample[0] if sample else "Not set")
-        category_default = SettingsDB.get_setting("measure_default", categories[0] if categories else "Spores")
-        if str(category_default).strip().lower() == "spore":
-            category_default = "Spores"
-
-        self.contrast_input.setText(self._format_list_with_default(contrast, contrast_default))
-        self.mount_input.setText(self._format_list_with_default(mount, mount_default))
-        self.sample_input.setText(self._format_list_with_default(sample, sample_default))
-        self.measure_input.setText(self._format_list_with_default(categories, category_default))
-        resize_quality = SettingsDB.get_setting("resize_jpeg_quality", 80)
-        try:
-            resize_quality = int(resize_quality)
-        except (TypeError, ValueError):
-            resize_quality = 80
-        resize_quality = max(1, min(100, resize_quality))
-        self.resize_quality_input.setValue(resize_quality)
-
-    def _browse_db_folder(self):
-        path = QFileDialog.getExistingDirectory(self, "Select Database Folder", self.db_path_input.text())
-        if path:
-            self.db_path_input.setText(path)
-
-    def _browse_images_dir(self):
-        path = QFileDialog.getExistingDirectory(self, "Select Images Folder", self.images_dir_input.text())
-        if path:
-            self.images_dir_input.setText(path)
-
-    def _browse_originals_dir(self):
-        path = QFileDialog.getExistingDirectory(self, "Select Originals Folder", self.originals_global_input.text())
-        if path:
-            self.originals_global_input.setText(path)
-
-    def _update_originals_path_hints(self):
-        base = self.images_dir_input.text().strip()
-        if base:
-            obs_path = str(Path(base) / "<observation>" / "originals")
-        else:
-            obs_path = self.tr("Observation folder")
-        self.originals_obs_path.setText(obs_path)
-        global_base = self.originals_global_input.text().strip()
-        if not global_base:
-            global_base = str(get_database_path().parent / "originals")
-            self.originals_global_input.setText(global_base)
-        if hasattr(self, "originals_global_hint"):
-            if global_base:
-                self.originals_global_hint.setText(str(Path(global_base) / "<observation>"))
-            else:
-                self.originals_global_hint.setText(self.tr("Unique folder / <observation>"))
-
-    def _update_originals_controls(self):
-        use_global = self.originals_global_radio.isChecked()
-        self.originals_global_input.setEnabled(use_global)
-        self.originals_global_browse.setEnabled(use_global)
-
-    def _format_list_with_default(self, values, default_value):
-        formatted = []
-        for value in values:
-            if value == default_value:
-                formatted.append(f"{value}*")
-            else:
-                formatted.append(value)
-        if default_value and default_value not in values:
-            formatted.insert(0, f"{default_value}*")
-        return ", ".join(formatted)
-
-    def _parse_list_with_default(self, label, text, fallback_values):
-        items = [item.strip() for item in text.split(",") if item.strip()]
-        defaults = [item for item in items if "*" in item]
-        if len(defaults) != 1:
-            QMessageBox.warning(
-                self,
-                "Invalid Defaults",
-                f"{label} values must include exactly one default marked with *."
-            )
-            return None, None
-
-        seen = set()
-        cleaned = []
-        default_value = None
-        for item in items:
-            is_default = "*" in item
-            name = item.replace("*", "").strip()
-            if not name or name in seen:
-                continue
-            seen.add(name)
-            cleaned.append(name)
-            if is_default:
-                default_value = name
-
-        if not cleaned:
-            cleaned = fallback_values
-            default_value = fallback_values[0] if fallback_values else None
-
-        return cleaned, default_value
-
-    def _save(self):
-        settings = get_app_settings()
-        db_folder = self.db_path_input.text().strip()
-        images_dir = self.images_dir_input.text().strip()
-
-        old_db_path = settings.get("database_path")
-        old_ref_path = settings.get("reference_database_path")
-        if db_folder:
-            settings["database_folder"] = db_folder
-            settings.pop("database_path", None)
-            settings.pop("reference_database_path", None)
-        else:
-            settings.pop("database_folder", None)
-
-        if images_dir:
-            settings["images_dir"] = images_dir
-        else:
-            settings.pop("images_dir", None)
-
-        save_app_settings(settings)
-
-        if db_folder:
-            try:
-                target_dir = Path(db_folder)
-                target_dir.mkdir(parents=True, exist_ok=True)
-                new_db = target_dir / "mushrooms.db"
-                new_ref = target_dir / "reference_values.db"
-                if old_db_path and Path(old_db_path).exists() and Path(old_db_path) != new_db:
-                    Path(old_db_path).replace(new_db)
-                if old_ref_path and Path(old_ref_path).exists() and Path(old_ref_path) != new_ref:
-                    Path(old_ref_path).replace(new_ref)
-            except Exception as exc:
-                QMessageBox.warning(self, "Database Move Failed", str(exc))
-        init_database()
-
-        contrast, contrast_default = self._parse_list_with_default(
-            "Contrast",
-            self.contrast_input.text(),
-            ["BF", "DF", "DIC", "Phase"]
-        )
-        mount, mount_default = self._parse_list_with_default(
-            "Mount",
-            self.mount_input.text(),
-            ["Not set", "Water", "KOH", "Melzer", "Congo Red", "Cotton Blue"]
-        )
-        sample, sample_default = self._parse_list_with_default(
-            "Sample",
-            self.sample_input.text(),
-            ["Not set", "Fresh", "Dried", "Spore print"]
-        )
-        categories, category_default = self._parse_list_with_default(
-            "Measure category",
-            self.measure_input.text(),
-            ["Spores", "Field", "Pleurocystidia", "Cheilocystidia", "Caulocystidia", "Other"]
-        )
-        if categories:
-            categories = [
-                "Spores" if str(c).strip().lower() == "spore" else c
-                for c in categories
-                if str(c).strip().lower() != "basidia"
-            ]
-            if not any(str(c).strip().lower() == "field" for c in categories):
-                categories.insert(1, "Field")
-        if category_default and str(category_default).strip().lower() == "spore":
-            category_default = "Spores"
-
-        if not all([contrast, mount, sample, categories, contrast_default, mount_default, sample_default, category_default]):
-            return
-
-        SettingsDB.set_list_setting("contrast_options", contrast)
-        SettingsDB.set_list_setting("mount_options", mount)
-        SettingsDB.set_list_setting("sample_options", sample)
-        SettingsDB.set_list_setting("measure_categories", categories)
-        SettingsDB.set_setting("contrast_default", contrast_default)
-        SettingsDB.set_setting("mount_default", mount_default)
-        SettingsDB.set_setting("sample_default", sample_default)
-        SettingsDB.set_setting("measure_default", category_default)
-        SettingsDB.set_setting("resize_jpeg_quality", int(self.resize_quality_input.value()))
-        if self.originals_none_radio.isChecked():
-            SettingsDB.set_setting("original_storage_mode", "none")
-        elif self.originals_global_radio.isChecked():
-            SettingsDB.set_setting("original_storage_mode", "global")
-        else:
-            SettingsDB.set_setting("original_storage_mode", "observation")
-        SettingsDB.set_setting("originals_dir", self.originals_global_input.text().strip())
-
-        self.accept()
 
 
 class DatabaseBundleOptionsDialog(QDialog):
@@ -4793,16 +4454,26 @@ class MainWindow(QMainWindow):
 
             objective_name = self.get_objective_name_for_storage()
             calibration_id = CalibrationDB.get_active_calibration_id(objective_name) if objective_name else None
+            contrast_fallback = SettingsDB.get_list_setting(
+                "contrast_options",
+                DatabaseTerms.CONTRAST_METHODS,
+            )
+            contrast_value = SettingsDB.get_setting(DatabaseTerms.last_used_key("contrast"), None)
+            if not contrast_value:
+                contrast_value = SettingsDB.get_setting(
+                    "contrast_default",
+                    contrast_fallback[0] if contrast_fallback else DatabaseTerms.CONTRAST_METHODS[0],
+                )
+            contrast_value = DatabaseTerms.canonicalize("contrast", contrast_value)
+            if not contrast_value:
+                contrast_value = contrast_fallback[0] if contrast_fallback else DatabaseTerms.CONTRAST_METHODS[0]
             image_id = ImageDB.add_image(
                 observation_id=self.active_observation_id,
                 filepath=converted_path,
                 image_type='microscope',
                 scale=self.microns_per_pixel,
                 objective_name=objective_name,
-                contrast=SettingsDB.get_setting(
-                    "contrast_default",
-                    SettingsDB.get_list_setting("contrast_options", ["BF", "DF", "DIC", "Phase"])[0]
-                ),
+                contrast=contrast_value,
                 calibration_id=calibration_id,
                 resample_scale_factor=1.0,
             )
@@ -8250,6 +7921,11 @@ class MainWindow(QMainWindow):
             return
         all_measurements = self.get_gallery_measurements()
         self.update_graph_plots(all_measurements)
+
+    def _set_observations_status(self, message: str, level: str = "info", auto_clear_ms: int = 10000) -> None:
+        if hasattr(self, "observations_tab") and hasattr(self.observations_tab, "set_status_message"):
+            self.observations_tab.set_status_message(message, level=level, auto_clear_ms=auto_clear_ms)
+
     def export_database_bundle(self):
         """Export DB and data folders as a zip file."""
         options_dialog = DatabaseBundleOptionsDialog(self.tr("Export Options"), parent=self)
@@ -8277,9 +7953,16 @@ class MainWindow(QMainWindow):
                 include_calibrations=options["calibrations"],
                 include_reference_values=options["reference_values"],
             )
-            QMessageBox.information(self, "Export Complete", f"Saved to {filename}")
+            self._set_observations_status(
+                self.tr("Export complete: {name}.").format(name=Path(filename).name),
+                level="success",
+            )
         except Exception as exc:
-            QMessageBox.warning(self, "Export Failed", str(exc))
+            self._set_observations_status(
+                self.tr("Export failed: {error}").format(error=exc),
+                level="error",
+                auto_clear_ms=12000,
+            )
 
     def import_database_bundle(self):
         """Import DB and data from a shared zip file."""
@@ -8315,12 +7998,19 @@ class MainWindow(QMainWindow):
                 lines.append(f"Calibrations: {summary.get('calibrations', 0)}")
             if options["reference_values"]:
                 lines.append(f"Reference values: {summary.get('reference_values', 0)}")
-            message = "Imported:\n" + "\n".join(lines) if lines else "No data imported."
-            QMessageBox.information(self, "Import Complete", message)
+            status_message = self.tr("Updated DB.")
+            if lines:
+                status_message += " " + "; ".join(lines)
             if hasattr(self, "observations_tab"):
-                self.observations_tab.refresh_observations()
+                self.observations_tab.refresh_observations(status_message=status_message)
+            else:
+                self._set_observations_status(status_message, level="success")
         except Exception as exc:
-            QMessageBox.warning(self, "Import Failed", str(exc))
+            self._set_observations_status(
+                self.tr("Import failed: {error}").format(error=exc),
+                level="error",
+                auto_clear_ms=12000,
+            )
 
 
 
@@ -8680,16 +8370,26 @@ class MainWindow(QMainWindow):
 
             objective_name = self.get_objective_name_for_storage()
             calibration_id = CalibrationDB.get_active_calibration_id(objective_name) if objective_name else None
+            contrast_fallback = SettingsDB.get_list_setting(
+                "contrast_options",
+                DatabaseTerms.CONTRAST_METHODS,
+            )
+            contrast_value = SettingsDB.get_setting(DatabaseTerms.last_used_key("contrast"), None)
+            if not contrast_value:
+                contrast_value = SettingsDB.get_setting(
+                    "contrast_default",
+                    contrast_fallback[0] if contrast_fallback else DatabaseTerms.CONTRAST_METHODS[0],
+                )
+            contrast_value = DatabaseTerms.canonicalize("contrast", contrast_value)
+            if not contrast_value:
+                contrast_value = contrast_fallback[0] if contrast_fallback else DatabaseTerms.CONTRAST_METHODS[0]
             image_id = ImageDB.add_image(
                 observation_id=self.active_observation_id,
                 filepath=converted_path,
                 image_type='microscope',
                 scale=self.microns_per_pixel,
                 objective_name=objective_name,
-                contrast=SettingsDB.get_setting(
-                    "contrast_default",
-                    SettingsDB.get_list_setting("contrast_options", ["BF", "DF", "DIC", "Phase"])[0]
-                ),
+                contrast=contrast_value,
                 calibration_id=calibration_id,
                 resample_scale_factor=1.0,
             )

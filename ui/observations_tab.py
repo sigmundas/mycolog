@@ -19,6 +19,7 @@ import sqlite3
 import csv
 import shutil
 from database.models import ObservationDB, ImageDB, MeasurementDB, SettingsDB, CalibrationDB
+from database.database_tags import DatabaseTerms
 from database.schema import (
     get_connection,
     get_database_path,
@@ -127,15 +128,18 @@ class MapServiceHelper:
         self.parent = parent
         self._nbic_index: dict[str, int] | None = None
 
+    def _set_status(self, message: str, level: str = "warning") -> None:
+        if self.parent and hasattr(self.parent, "set_status_message"):
+            self.parent.set_status_message(message, level=level)
+
     def _utm_from_latlon(self, lat, lon):
         """Convert WGS84 lat/lon to EUREF89 / UTM 33N."""
         try:
             from pyproj import Transformer
         except Exception as exc:
-            QMessageBox.warning(
-                self.parent,
-                "Missing Dependency",
-                "pyproj is required for UTM conversions. Install it and try again."
+            self._set_status(
+                "pyproj is required for UTM conversions. Install it and try again.",
+                level="error",
             )
             raise exc
         transformer = Transformer.from_crs("EPSG:4326", "EPSG:25833", always_xy=True)
@@ -236,7 +240,7 @@ class MapServiceHelper:
         try:
             url = self._inat_map_link(species_name, lat, lon, 50.0)
         except Exception as exc:
-            QMessageBox.warning(self.parent, "iNaturalist Lookup Failed", str(exc))
+            self._set_status(f"iNaturalist lookup failed: {exc}", level="warning")
             return
         webbrowser.open(url)
 
@@ -245,7 +249,7 @@ class MapServiceHelper:
         try:
             url = self._inat_species_link(species_name)
         except Exception as exc:
-            QMessageBox.warning(self.parent, "iNaturalist Lookup Failed", str(exc))
+            self._set_status(f"iNaturalist lookup failed: {exc}", level="warning")
             return
         webbrowser.open(url)
 
@@ -274,7 +278,7 @@ class MapServiceHelper:
             taxon_id = self._gbif_taxon_id(species_name)
             url = f"https://www.gbif.org/species/{taxon_id}"
         except Exception as exc:
-            QMessageBox.warning(self.parent, "GBIF Lookup Failed", str(exc))
+            self._set_status(f"GBIF lookup failed: {exc}", level="warning")
             return
         webbrowser.open(url)
 
@@ -434,10 +438,9 @@ class MapServiceHelper:
                 else:
                     url = self._artskart_base_link(lat, lon, zoom=12, bg="nibwmts")
             except Exception as exc:
-                QMessageBox.warning(
-                    self.parent,
-                    "Artskart Lookup Failed",
-                    f"{exc}\nOpening map without species filter."
+                self._set_status(
+                    f"Artskart lookup failed: {exc}. Opening map without species filter.",
+                    level="warning",
                 )
                 url = self._artskart_base_link(lat, lon, zoom=12, bg="nibwmts")
             open_url(url)
@@ -493,6 +496,9 @@ class ObservationsTab(QWidget):
         self.selected_observation_id = None
         self.map_helper = MapServiceHelper(self)
         self._ai_suggestions_cache: dict[int, dict] = {}
+        self._status_clear_timer = QTimer(self)
+        self._status_clear_timer.setSingleShot(True)
+        self._status_clear_timer.timeout.connect(lambda: self.set_status_message("", auto_clear_ms=0))
         self.init_ui()
         self.refresh_observations()
 
@@ -529,8 +535,8 @@ class ObservationsTab(QWidget):
         self.upload_artsobs_btn.clicked.connect(self._upload_selected_observation)
         button_layout.addWidget(self.upload_artsobs_btn)
 
-        refresh_btn = QPushButton(self.tr("Refresh DB"))
-        refresh_btn.clicked.connect(self.refresh_observations)
+        refresh_btn = QPushButton(self.tr("Update DB"))
+        refresh_btn.clicked.connect(self._on_refresh_clicked)
         button_layout.addWidget(refresh_btn)
 
         self.search_input = QLineEdit()
@@ -545,6 +551,12 @@ class ObservationsTab(QWidget):
         button_layout.addStretch()
 
         layout.addLayout(button_layout)
+
+        self.status_label = QLabel(self.tr("Ready."))
+        self.status_label.setWordWrap(True)
+        self.status_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.status_label.setStyleSheet("color: #5d6d7e;")
+        layout.addWidget(self.status_label)
 
         # Splitter for table and detail view
         splitter = QSplitter(Qt.Vertical)
@@ -626,7 +638,37 @@ class ObservationsTab(QWidget):
 
         layout.addWidget(splitter)
 
-    def refresh_observations(self):
+    def set_status_message(
+        self,
+        message: str,
+        level: str = "info",
+        auto_clear_ms: int = 8000,
+    ) -> None:
+        text = (message or "").strip()
+        if not text:
+            self.status_label.clear()
+            self.status_label.setStyleSheet("color: #5d6d7e;")
+            if self._status_clear_timer.isActive():
+                self._status_clear_timer.stop()
+            return
+        palette = {
+            "info": "#5d6d7e",
+            "success": "#1e8449",
+            "warning": "#b9770e",
+            "error": "#b03a2e",
+        }
+        color = palette.get(level, palette["info"])
+        self.status_label.setText(text)
+        self.status_label.setStyleSheet(f"color: {color};")
+        if self._status_clear_timer.isActive():
+            self._status_clear_timer.stop()
+        if auto_clear_ms and auto_clear_ms > 0:
+            self._status_clear_timer.start(auto_clear_ms)
+
+    def _on_refresh_clicked(self) -> None:
+        self.refresh_observations(show_status=True)
+
+    def refresh_observations(self, show_status: bool = False, status_message: str | None = None):
         """Load all observations from database."""
         previous_id = self.selected_observation_id
         observations = ObservationDB.get_all_observations()
@@ -750,6 +792,10 @@ class ObservationsTab(QWidget):
                     self.selected_observation_id = previous_id
                     self.on_selection_changed()
                     break
+        if status_message:
+            self.set_status_message(status_message, level="success")
+        elif show_status:
+            self.set_status_message(self.tr("Updated DB."), level="success")
 
     def _get_vernacular_db_for_active_language(self):
         lang = normalize_vernacular_language(SettingsDB.get_setting("vernacular_language", "no"))
@@ -957,25 +1003,14 @@ class ObservationsTab(QWidget):
         box.exec()
         return box.clickedButton() == yes_btn
 
-    def _warn_delete_failures(self, failures: list[str]) -> None:
+    def _warn_delete_failures(self, failures: list[str]) -> int:
         if not failures:
-            return
+            return 0
         paths = [p for p in failures if p]
         if not paths:
-            return
+            return 0
         names = [Path(p).name for p in paths]
-        preview = "\n".join(f"- {name}" for name in names[:5])
-        extra = ""
-        if len(names) > 5:
-            extra = self.tr("\n...and {count} more.").format(count=len(names) - 5)
-        QMessageBox.warning(
-            self,
-            self.tr("Delete Failed"),
-            self.tr("Some files or folders could not be deleted.")
-            + "\n\n"
-            + preview
-            + extra,
-        )
+        return len(names)
 
     def _get_measurements_for_image(self, image_id):
         """Get measurements for a specific image."""
@@ -1014,6 +1049,7 @@ class ObservationsTab(QWidget):
         if confirmed:
             ImageDB.delete_image(image_id)
             self.refresh_observations()
+            self.set_status_message(self.tr("Image deleted."), level="success")
 
     def _on_gallery_image_clicked(self, image_id, _filepath):
         """Handle thumbnail click - emit signal to open in Measure tab."""
@@ -1097,10 +1133,9 @@ class ObservationsTab(QWidget):
 
     def _upload_selected_observation(self):
         if not self.selected_observation_id:
-            QMessageBox.information(
-                self,
-                self.tr("Upload to Artsobs"),
-                self.tr("Select an observation to upload.")
+            self.set_status_message(
+                self.tr("Select an observation to upload."),
+                level="warning",
             )
             return
         self.upload_observation_to_artsobs(self.selected_observation_id)
@@ -1139,29 +1174,24 @@ class ObservationsTab(QWidget):
         try:
             from utils.artsobs_uploaders import get_uploader
         except Exception as exc:
-            QMessageBox.warning(
-                self,
-                self.tr("Upload Unavailable"),
-                self.tr("Missing Artsobservasjoner upload client.\n\n{error}").format(error=exc)
+            self.set_status_message(
+                self.tr("Upload unavailable: {error}").format(error=exc),
+                level="error",
+                auto_clear_ms=12000,
             )
             return
 
         obs = ObservationDB.get_observation(observation_id)
         if not obs:
-            QMessageBox.warning(
-                self,
-                self.tr("Upload Failed"),
-                self.tr("Observation not found.")
-            )
+            self.set_status_message(self.tr("Upload failed: observation not found."), level="error")
             return
 
         lat = obs.get("gps_latitude")
         lon = obs.get("gps_longitude")
         if lat is None or lon is None:
-            QMessageBox.warning(
-                self,
-                self.tr("Upload Failed"),
-                self.tr("This observation is missing GPS coordinates.")
+            self.set_status_message(
+                self.tr("Upload failed: this observation is missing GPS coordinates."),
+                level="warning",
             )
             return
 
@@ -1169,56 +1199,52 @@ class ObservationsTab(QWidget):
 
         taxon_id = self._resolve_artsobs_taxon_id(obs)
         if not taxon_id:
-            QMessageBox.warning(
-                self,
-                self.tr("Upload Failed"),
-                self.tr("Species must be set to upload to Artsobservasjoner.")
+            self.set_status_message(
+                self.tr("Upload failed: species must be set before uploading to Artsobservasjoner."),
+                level="warning",
             )
             return
 
         observed_datetime = obs.get("date")
         if not observed_datetime:
-            QMessageBox.warning(
-                self,
-                self.tr("Upload Failed"),
-                self.tr("Observation date is missing.")
+            self.set_status_message(
+                self.tr("Upload failed: observation date is missing."),
+                level="warning",
             )
             return
 
         try:
             from utils.artsobservasjoner_auto_login import ArtsObservasjonerAuth
         except Exception as exc:
-            QMessageBox.warning(
-                self,
-                self.tr("Upload Failed"),
-                self.tr("Could not load the Artsobservasjoner login helper.\n\n{error}").format(error=exc)
+            self.set_status_message(
+                self.tr("Upload failed: could not load Artsobservasjoner login helper ({error}).").format(error=exc),
+                level="error",
+                auto_clear_ms=12000,
             )
             return
 
         auth = ArtsObservasjonerAuth()
         cookies = auth.get_valid_cookies()
         if not cookies:
-            QMessageBox.information(
-                self,
-                self.tr("Login Required"),
-                self.tr("Please log in via Settings -> Artsobservasjoner before uploading.")
+            self.set_status_message(
+                self.tr("Not logged in to Artsobservasjoner. Log in via Settings -> Artsobservasjoner."),
+                level="warning",
+                auto_clear_ms=12000,
             )
             return
 
         uploader = get_uploader(SettingsDB.get_setting("artsobs_upload_target"))
         if not uploader:
-            QMessageBox.warning(
-                self,
-                self.tr("Upload Failed"),
-                self.tr("No uploader is configured for Artsobservasjoner.")
+            self.set_status_message(
+                self.tr("Upload failed: no uploader is configured for Artsobservasjoner."),
+                level="error",
             )
             return
 
         if uploader.key == "mobile" and not image_paths:
-            QMessageBox.warning(
-                self,
-                self.tr("Upload Failed"),
-                self.tr("No field or microscope images found for this observation.")
+            self.set_status_message(
+                self.tr("Upload failed: no field or microscope images found for this observation."),
+                level="warning",
             )
             return
 
@@ -1261,17 +1287,11 @@ class ObservationsTab(QWidget):
             )
         except Exception as exc:
             progress.close()
-            import traceback
-
-            msg = QMessageBox(self)
-            msg.setIcon(QMessageBox.Warning)
-            msg.setWindowTitle(self.tr("Upload Failed"))
-            msg.setText(
-                self.tr("Upload to Artsobservasjoner failed.\n\n{error}").format(error=exc)
+            self.set_status_message(
+                self.tr("Upload failed: {error}").format(error=exc),
+                level="error",
+                auto_clear_ms=12000,
             )
-            msg.setDetailedText(traceback.format_exc())
-            msg.setStandardButtons(QMessageBox.Ok)
-            msg.exec()
             return
         finally:
             progress.close()
@@ -1283,6 +1303,13 @@ class ObservationsTab(QWidget):
             ObservationDB.update_observation(observation_id, artsdata_id=int(obs_id))
         self.refresh_observations()
         progress.close()
+        if obs_id:
+            self.set_status_message(
+                self.tr("Uploaded to Artsobservasjoner (ID {id}).").format(id=obs_id),
+                level="success",
+            )
+        else:
+            self.set_status_message(self.tr("Upload completed."), level="success")
 
     def edit_observation(self):
         """Edit the selected observation."""
@@ -1350,6 +1377,7 @@ class ObservationsTab(QWidget):
                         self.selected_observation_id = obs_id
                         self.on_selection_changed()
                         break
+                self.set_status_message(self.tr("Observation updated."), level="success")
                 return
 
             if dialog.request_edit_images:
@@ -1457,6 +1485,7 @@ class ObservationsTab(QWidget):
                         self.selected_observation_id = obs_id
                         self.on_selection_changed()
                         break
+                self.set_status_message(self.tr("Observation created."), level="success")
                 return
 
             if dialog.request_edit_images:
@@ -1469,30 +1498,13 @@ class ObservationsTab(QWidget):
         summary = get_export_summary()
 
         if summary['total_annotations'] == 0:
-            QMessageBox.warning(
-                self, "No Annotations",
-                "There are no spore annotations to export.\n\n"
-                "Measure some spores first to create training data."
+            self.set_status_message(
+                self.tr("No spore annotations to export. Measure spores first to create training data."),
+                level="warning",
             )
             return
 
-        # Show summary and ask for confirmation
-        msg = (
-            f"Ready to export ML training data:\n\n"
-            f"  Images with annotations: {summary['images_with_annotations']}\n"
-            f"  Total annotations: {summary['total_annotations']}\n\n"
-            "Select an output directory to continue."
-        )
-
-        reply = QMessageBox.question(
-            self, "Export for ML",
-            msg,
-            QMessageBox.Ok | QMessageBox.Cancel,
-            QMessageBox.Ok
-        )
-
-        if reply != QMessageBox.Ok:
-            return
+        self.set_status_message(self.tr("Select an output directory for ML export."), level="info")
 
         # Select output directory
         output_dir = QFileDialog.getExistingDirectory(
@@ -1500,30 +1512,29 @@ class ObservationsTab(QWidget):
         )
 
         if not output_dir:
+            self.set_status_message(self.tr("ML export cancelled."), level="info")
             return
 
         # Perform export
         try:
             stats = export_coco_format(output_dir)
 
-            # Show success message
-            success_msg = (
-                f"Export completed!\n\n"
-                f"  Images exported: {stats['images_exported']}\n"
-                f"  Annotations exported: {stats['annotations_exported']}\n"
-                f"  Images skipped: {stats['images_skipped']}\n\n"
-                f"Output saved to:\n{output_dir}"
+            status_msg = self.tr(
+                "Export complete. Images: {images}, annotations: {annotations}, skipped: {skipped}."
+            ).format(
+                images=stats['images_exported'],
+                annotations=stats['annotations_exported'],
+                skipped=stats['images_skipped'],
             )
-
             if stats['errors']:
-                success_msg += f"\n\nWarnings: {len(stats['errors'])} issues occurred."
-
-            QMessageBox.information(self, "Export Complete", success_msg)
+                status_msg += " " + self.tr("Warnings: {count}.").format(count=len(stats['errors']))
+            self.set_status_message(status_msg, level="success", auto_clear_ms=12000)
 
         except Exception as e:
-            QMessageBox.critical(
-                self, "Export Failed",
-                f"An error occurred during export:\n\n{str(e)}"
+            self.set_status_message(
+                self.tr("Export failed: {error}").format(error=e),
+                level="error",
+                auto_clear_ms=12000,
             )
 
     def delete_selected_observation(self):
@@ -1563,8 +1574,30 @@ class ObservationsTab(QWidget):
                 for obs_id in obs_ids:
                     failures.extend(ObservationDB.delete_observation(obs_id))
                     self.observation_deleted.emit(obs_id)
-            self._warn_delete_failures(failures)
+            failure_count = self._warn_delete_failures(failures)
             self.refresh_observations()
+            if len(selected_rows) == 1 and failure_count:
+                self.set_status_message(
+                    self.tr("Observation deleted with {count} cleanup issue(s).").format(count=failure_count),
+                    level="warning",
+                    auto_clear_ms=12000,
+                )
+            elif len(selected_rows) == 1:
+                self.set_status_message(self.tr("Observation deleted."), level="success")
+            elif failure_count:
+                self.set_status_message(
+                    self.tr("Deleted {count} observations with {issues} cleanup issue(s).").format(
+                        count=len(selected_rows),
+                        issues=failure_count,
+                    ),
+                    level="warning",
+                    auto_clear_ms=12000,
+                )
+            else:
+                self.set_status_message(
+                    self.tr("Deleted {count} observations.").format(count=len(selected_rows)),
+                    level="success",
+                )
 
     def _build_import_results_from_images(self, images: list[dict]) -> list[ImageImportResult]:
         objectives = load_objectives()
@@ -1643,23 +1676,12 @@ class ObservationsTab(QWidget):
             )
         if missing_paths:
             names = [Path(p).name for p in missing_paths if p]
-            preview = "\n".join(f"- {name}" for name in names[:5])
-            extra = ""
-            if len(names) > 5:
-                extra = self.tr("\n...and {count} more.").format(count=len(names) - 5)
-            QMessageBox.warning(
-                self,
-                self.tr("Missing image files"),
-                self.tr(
-                    "Some image files are missing or were moved. EXIF data could not be read."
-                )
-                + "\n\n"
-                + self.tr("Missing files:")
-                + "\n"
-                + preview
-                + extra
-                + "\n\n"
-                + self.tr("Please relink or remove the missing images."),
+            self.set_status_message(
+                self.tr("Missing image files detected ({count}). Relink or remove them.").format(
+                    count=len(names)
+                ),
+                level="warning",
+                auto_clear_ms=12000,
             )
         return results
 
@@ -2176,29 +2198,23 @@ class ObservationDetailsDialog(QDialog):
         self.selected_image_index = -1
         self.objectives = self._load_objectives()
         self.default_objective = self._get_default_objective()
-        self.contrast_options = SettingsDB.get_list_setting(
-            "contrast_options",
-            ["BF", "DF", "DIC", "Phase"]
+        self.contrast_options = self._load_tag_options("contrast")
+        self.mount_options = self._load_tag_options("mount")
+        self.sample_options = self._load_tag_options("sample")
+        self.contrast_default = self._preferred_tag_value(
+            "contrast",
+            self.contrast_options,
+            DatabaseTerms.CONTRAST_METHODS[0],
         )
-        self.contrast_default = SettingsDB.get_setting(
-            "contrast_default",
-            self.contrast_options[0] if self.contrast_options else "BF"
+        self.mount_default = self._preferred_tag_value(
+            "mount",
+            self.mount_options,
+            DatabaseTerms.MOUNT_MEDIA[0],
         )
-        self.mount_options = SettingsDB.get_list_setting(
-            "mount_options",
-            ["Not set", "Water", "KOH", "Melzer", "Congo Red", "Cotton Blue"]
-        )
-        self.mount_default = SettingsDB.get_setting(
-            "mount_default",
-            self.mount_options[0] if self.mount_options else "Not set"
-        )
-        self.sample_options = SettingsDB.get_list_setting(
-            "sample_options",
-            ["Not set", "Fresh", "Dried", "Spore print"]
-        )
-        self.sample_default = SettingsDB.get_setting(
-            "sample_default",
-            self.sample_options[0] if self.sample_options else "Not set"
+        self.sample_default = self._preferred_tag_value(
+            "sample",
+            self.sample_options,
+            DatabaseTerms.SAMPLE_TYPES[0],
         )
         self.vernacular_db = None
         self._vernacular_model = None
@@ -3054,9 +3070,11 @@ class ObservationDetailsDialog(QDialog):
             # Column 4: Contrast dropdown
             contrast_combo = QComboBox()
             contrast_combo.setEnabled(self.image_settings[row]['image_type'] == 'microscope')
-            for option in self.contrast_options:
-                contrast_combo.addItem(option, option)
-            current_contrast = self.image_settings[row].get('contrast', "BF")
+            self._populate_tag_combo(contrast_combo, "contrast", self.contrast_options)
+            current_contrast = DatabaseTerms.canonicalize(
+                "contrast",
+                self.image_settings[row].get('contrast', self.contrast_default),
+            )
             idx = contrast_combo.findData(current_contrast)
             if idx >= 0:
                 contrast_combo.setCurrentIndex(idx)
@@ -3066,9 +3084,11 @@ class ObservationDetailsDialog(QDialog):
             # Column 5: Mount medium dropdown
             mount_combo = QComboBox()
             mount_combo.setEnabled(self.image_settings[row]['image_type'] == 'microscope')
-            for option in self.mount_options:
-                mount_combo.addItem(option, option)
-            current_mount = self.image_settings[row].get('mount_medium', "Not set")
+            self._populate_tag_combo(mount_combo, "mount", self.mount_options)
+            current_mount = DatabaseTerms.canonicalize(
+                "mount",
+                self.image_settings[row].get('mount_medium', self.mount_default),
+            )
             idx = mount_combo.findData(current_mount)
             if idx >= 0:
                 mount_combo.setCurrentIndex(idx)
@@ -3078,9 +3098,11 @@ class ObservationDetailsDialog(QDialog):
             # Column 6: Sample type dropdown
             sample_combo = QComboBox()
             sample_combo.setEnabled(self.image_settings[row]['image_type'] == 'microscope')
-            for option in self.sample_options:
-                sample_combo.addItem(option, option)
-            current_sample = self.image_settings[row].get('sample_type', "Not set")
+            self._populate_tag_combo(sample_combo, "sample", self.sample_options)
+            current_sample = DatabaseTerms.canonicalize(
+                "sample",
+                self.image_settings[row].get('sample_type', self.sample_default),
+            )
             idx = sample_combo.findData(current_sample)
             if idx >= 0:
                 sample_combo.setCurrentIndex(idx)
@@ -3929,6 +3951,34 @@ class ObservationDetailsDialog(QDialog):
                 "sample_type": item.sample_type
             })
         return entries
+
+    def _load_tag_options(self, category: str) -> list[str]:
+        setting_key = DatabaseTerms.setting_key(category)
+        defaults = DatabaseTerms.default_values(category)
+        options = SettingsDB.get_list_setting(setting_key, defaults)
+        return DatabaseTerms.canonicalize_list(category, options)
+
+    def _preferred_tag_value(self, category: str, options: list[str], fallback: str) -> str:
+        options = options or [fallback]
+        legacy_default_key = {
+            "contrast": "contrast_default",
+            "mount": "mount_default",
+            "sample": "sample_default",
+        }.get(category, "")
+        preferred = SettingsDB.get_setting(DatabaseTerms.last_used_key(category), None)
+        if not preferred and legacy_default_key:
+            preferred = SettingsDB.get_setting(legacy_default_key, None)
+        preferred = DatabaseTerms.canonicalize(category, preferred)
+        if preferred and preferred in options:
+            return preferred
+        if preferred and preferred not in options:
+            options.insert(0, preferred)
+        return options[0] if options else fallback
+
+    def _populate_tag_combo(self, combo: QComboBox, category: str, options: list[str]) -> None:
+        combo.clear()
+        for canonical in options:
+            combo.addItem(DatabaseTerms.translate(category, canonical), canonical)
 
     def _load_objectives(self):
         """Load objectives from JSON file."""

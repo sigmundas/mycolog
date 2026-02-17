@@ -15,7 +15,8 @@ Common categories include **Spores** and **Field**. Categories determine how mea
 - Adjust lines and apply changes in the preview pane.
 - Delete unwanted measurements from the table.
 
-Drag the lines you want to adjust - the spore dimensions are updated instantly
+Drag the lines you want to adjust - the spore dimensions are updated instantly 
+
 ![Spore-preiew](images/spore-preview.png)
 
 ## Analysis
