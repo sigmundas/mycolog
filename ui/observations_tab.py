@@ -1223,21 +1223,21 @@ class ObservationsTab(QWidget):
             )
             return
 
-        auth = ArtsObservasjonerAuth()
-        cookies = auth.get_valid_cookies()
-        if not cookies:
-            self.set_status_message(
-                self.tr("Not logged in to Artsobservasjoner. Log in via Settings -> Artsobservasjoner."),
-                level="warning",
-                auto_clear_ms=12000,
-            )
-            return
-
         uploader = get_uploader(SettingsDB.get_setting("artsobs_upload_target"))
         if not uploader:
             self.set_status_message(
                 self.tr("Upload failed: no uploader is configured for Artsobservasjoner."),
                 level="error",
+            )
+            return
+
+        auth = ArtsObservasjonerAuth()
+        cookies = auth.get_valid_cookies(target=uploader.key)
+        if not cookies:
+            self.set_status_message(
+                self.tr("Not logged in to Artsobservasjoner. Log in via Settings -> Artsobservasjoner."),
+                level="warning",
+                auto_clear_ms=12000,
             )
             return
 

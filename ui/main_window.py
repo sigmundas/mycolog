@@ -583,13 +583,39 @@ class ArtsobservasjonerSettingsDialog(QDialog):
 
     def _open_login(self):
         try:
-            from utils.artsobservasjoner_auto_login import ArtsObservasjonerAuthWidget
+            from utils.artsobservasjoner_auto_login import (
+                ArtsObservasjonerAuth,
+                ArtsObservasjonerAuthWidget,
+            )
         except Exception as exc:
             QMessageBox.warning(
                 self,
                 self.tr("Login Unavailable"),
                 self.tr(f"Could not start the login widget.\n\n{exc}")
             )
+            return
+
+        selected_uploader = None
+        if hasattr(self, "upload_target_combo"):
+            selected = self.upload_target_combo.currentData()
+            for uploader in self._uploaders:
+                if uploader.key == selected:
+                    selected_uploader = uploader
+                    break
+
+        if selected_uploader and selected_uploader.key == "web":
+            auth = ArtsObservasjonerAuth(cookies_file=self.cookies_file)
+            try:
+                cookies = auth.login_web_with_gui(parent=self)
+            except Exception as exc:
+                QMessageBox.warning(
+                    self,
+                    self.tr("Login Failed"),
+                    self.tr("Web login failed.\n\n{error}").format(error=exc)
+                )
+                return
+            if cookies:
+                self._on_login_success(cookies)
             return
 
         dialog = QDialog(self)
@@ -600,14 +626,7 @@ class ArtsobservasjonerSettingsDialog(QDialog):
             self._on_login_success(cookies)
             dialog.accept()
 
-        login_url = None
-        if hasattr(self, "upload_target_combo"):
-            selected = self.upload_target_combo.currentData()
-            for uploader in self._uploaders:
-                if uploader.key == selected:
-                    login_url = uploader.login_url
-                    break
-
+        login_url = selected_uploader.login_url if selected_uploader else None
         self._auth_widget = ArtsObservasjonerAuthWidget(
             on_login_success=_handle_success,
             parent=dialog,

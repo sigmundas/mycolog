@@ -2,10 +2,145 @@
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
+import requests
 from platformdirs import user_data_dir
 from typing import Dict, Optional, Callable
+
+
+def _prompt_web_credentials(parent=None) -> tuple[Optional[str], Optional[str]]:
+    """Show a Qt dialog for Artsobservasjoner web credentials."""
+    from PySide6.QtWidgets import (
+        QDialog,
+        QDialogButtonBox,
+        QFormLayout,
+        QLabel,
+        QLineEdit,
+        QMessageBox,
+        QVBoxLayout,
+    )
+
+    dialog = QDialog(parent)
+    dialog.setWindowTitle("Log in to Artsobservasjoner (web)")
+    dialog.setModal(True)
+    dialog.setMinimumWidth(420)
+
+    layout = QVBoxLayout(dialog)
+    layout.addWidget(QLabel("Enter your Artsobservasjoner email and password:"))
+
+    form = QFormLayout()
+    username_edit = QLineEdit()
+    username_edit.setPlaceholderText("Email")
+    password_edit = QLineEdit()
+    password_edit.setPlaceholderText("Password")
+    password_edit.setEchoMode(QLineEdit.Password)
+    form.addRow("Email:", username_edit)
+    form.addRow("Password:", password_edit)
+    layout.addLayout(form)
+
+    buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+    layout.addWidget(buttons)
+
+    def _accept_if_valid():
+        if not username_edit.text().strip() or not password_edit.text():
+            QMessageBox.warning(
+                dialog,
+                "Missing Information",
+                "Please enter both email and password.",
+            )
+            return
+        dialog.accept()
+
+    buttons.accepted.connect(_accept_if_valid)
+    buttons.rejected.connect(dialog.reject)
+    username_edit.returnPressed.connect(_accept_if_valid)
+    password_edit.returnPressed.connect(_accept_if_valid)
+    username_edit.setFocus()
+
+    if dialog.exec() != QDialog.Accepted:
+        return None, None
+
+    return username_edit.text().strip(), password_edit.text()
+
+
+class ArtsObservasjonerWebLogin:
+    """Handles programmatic login to www.artsobservasjoner.no."""
+
+    BASE_URL = "https://www.artsobservasjoner.no"
+
+    def __init__(self):
+        self.session = requests.Session()
+        self.session.headers.update(
+            {
+                "User-Agent": (
+                    "Mozilla/5.0 (X11; Linux x86_64; rv:147.0) "
+                    "Gecko/20100101 Firefox/147.0"
+                ),
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+        )
+
+    def get_csrf_token(self) -> Optional[str]:
+        """Fetch /Logon and extract __RequestVerificationToken."""
+        response = self.session.get(f"{self.BASE_URL}/Logon", timeout=20)
+        response.raise_for_status()
+
+        match = re.search(
+            r'name="__RequestVerificationToken"[^>]+value="([^"]+)"',
+            response.text,
+        )
+        if match:
+            return match.group(1)
+
+        return self.session.cookies.get("__RequestVerificationToken")
+
+    def login(self, username: str, password: str) -> bool:
+        """Authenticate with username/password."""
+        csrf_token = self.get_csrf_token()
+        if not csrf_token:
+            raise RuntimeError("Failed to get CSRF token from Artsobservasjoner.")
+
+        login_data = {
+            "__RequestVerificationToken": csrf_token,
+            "AuthenticationViewModel.UserName": username,
+            "AuthenticationViewModel.ReturnUrl": "",
+            "AuthenticationViewModel.Password": password,
+            "AuthenticationViewModel.RememberMe": "false",
+            "Shared_LogOn": "Logg inn",
+        }
+
+        response = self.session.post(
+            f"{self.BASE_URL}/LogOn",
+            data=login_data,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Referer": f"{self.BASE_URL}/Logon",
+            },
+            allow_redirects=True,
+            timeout=20,
+        )
+        response.raise_for_status()
+
+        if ".ASPXAUTHNO" not in self.session.cookies:
+            return False
+        return self.check_auth()
+
+    def check_auth(self) -> bool:
+        """Check if session can access MyPages without being redirected to login."""
+        response = self.session.get(
+            f"{self.BASE_URL}/User/MyPages",
+            allow_redirects=True,
+            timeout=10,
+        )
+        if response.status_code != 200:
+            return False
+        url = (response.url or "").lower()
+        return "/logon" not in url and "/account/login" not in url
+
+    def get_cookies_dict(self) -> Dict[str, str]:
+        return requests.utils.dict_from_cookiejar(self.session.cookies)
 
 
 class ArtsObservasjonerAuthWidget:
@@ -186,8 +321,34 @@ class ArtsObservasjonerAuth:
         auth_widget = ArtsObservasjonerAuthWidget(on_login_success=on_success)
         auth_widget.show()
         return auth_widget.get_cookies()
+
+    def login_web_with_gui(self, parent=None, callback: Optional[Callable] = None) -> Optional[Dict[str, str]]:
+        """
+        Prompt for web credentials and authenticate against www.artsobservasjoner.no.
+
+        Returns:
+            Cookie dict on success, None if user cancelled.
+        """
+        username, password = _prompt_web_credentials(parent=parent)
+        if username is None:
+            return None
+
+        web_auth = ArtsObservasjonerWebLogin()
+        success = web_auth.login(username=username, password=password)
+        if not success:
+            raise RuntimeError("Login failed. Please check your email and password.")
+
+        cookies = web_auth.get_cookies_dict()
+        if not cookies:
+            raise RuntimeError("Login succeeded but no cookies were returned.")
+
+        if callback:
+            callback(cookies)
+        else:
+            self.save_cookies(cookies)
+        return cookies
     
-    def get_valid_cookies(self) -> Optional[Dict[str, str]]:
+    def get_valid_cookies(self, target: str = "mobile") -> Optional[Dict[str, str]]:
         """
         Get valid cookies, using cache if available
         
@@ -195,17 +356,21 @@ class ArtsObservasjonerAuth:
         """
         cookies = self.load_cookies()
         
-        if cookies and self._validate_cookies(cookies):
+        if cookies and self._validate_cookies(cookies, target=target):
             return cookies
         
         return None
     
-    def _validate_cookies(self, cookies: Dict[str, str]) -> bool:
+    def _validate_cookies(self, cookies: Dict[str, str], target: str = "mobile") -> bool:
         """
         Test if cookies are still valid
         """
-        import requests
-        
+        target_key = (target or "mobile").lower()
+        if target_key == "web":
+            return self._validate_web_cookies(cookies)
+        return self._validate_mobile_cookies(cookies)
+
+    def _validate_mobile_cookies(self, cookies: Dict[str, str]) -> bool:
         session = requests.Session()
         for name, value in cookies.items():
             session.cookies.set(name, value, domain='mobil.artsobservasjoner.no')
@@ -218,6 +383,27 @@ class ArtsObservasjonerAuth:
                 timeout=5
             )
             return response.status_code == 200
-        except:
+        except requests.RequestException:
             return False
-    print("\nCookies will be cached in ~/.myco_log/artsobservasjoner_cookies.json")
+
+    def _validate_web_cookies(self, cookies: Dict[str, str]) -> bool:
+        if ".ASPXAUTHNO" not in cookies:
+            return False
+
+        session = requests.Session()
+        for name, value in cookies.items():
+            session.cookies.set(name, value, domain=".artsobservasjoner.no")
+
+        try:
+            response = session.get(
+                "https://www.artsobservasjoner.no/User/MyPages",
+                allow_redirects=True,
+                timeout=8,
+            )
+        except requests.RequestException:
+            return False
+
+        if response.status_code != 200:
+            return False
+        url = (response.url or "").lower()
+        return "/logon" not in url and "/account/login" not in url
