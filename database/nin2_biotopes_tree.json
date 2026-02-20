@@ -1,0 +1,2863 @@
+[
+  {
+    "id": 1,
+    "name": "NA M Saltvannsbunnsystemer",
+    "children": [
+      {
+        "id": 2,
+        "name": "NA M1 Eufotisk fast saltvannsbunn",
+        "children": [
+          {
+            "id": 3,
+            "name": "NA M1-1 Svært beskyttet fast algebunn"
+          },
+          {
+            "id": 4,
+            "name": "NA M1-2 Beskyttet-eksponert sublitoral fastbunn"
+          },
+          {
+            "id": 5,
+            "name": "NA M1-3 Beskyttet infralitoral fastbunn"
+          },
+          {
+            "id": 6,
+            "name": "NA M1-4 Beskyttet øvre circalitoral fastbunn"
+          },
+          {
+            "id": 7,
+            "name": "NA M1-5 Nokså eksponert infralitoral fastbunn"
+          },
+          {
+            "id": 8,
+            "name": "NA M1-6 Nokså eksponert øvre circalitoral fastbunn"
+          },
+          {
+            "id": 9,
+            "name": "NA M1-7 Svært eksponert eufotisk fastbunn"
+          },
+          {
+            "id": 10,
+            "name": "NA M1-8 Nokså brakk svært beskyttet fast algebunn"
+          },
+          {
+            "id": 11,
+            "name": "NA M1-9 Nokså brakk beskyttet-eksponert sublitoral fastbunn"
+          },
+          {
+            "id": 12,
+            "name": "NA M1-10 Nokså brakk beskyttet infralitoral fastbunn"
+          },
+          {
+            "id": 13,
+            "name": "NA M1-11 Nokså brakk beskyttet øvre circalitoral fastbunn"
+          },
+          {
+            "id": 14,
+            "name": "NA M1-12 Nokså brakk nokså eksponert infralitoral fastbunn"
+          },
+          {
+            "id": 15,
+            "name": "NA M1-13 Nokså brakk nokså eksponert øvre circalitoral fastbunn"
+          },
+          {
+            "id": 16,
+            "name": "NA M1-14 Svært brakk svært beskyttet fast algebunn"
+          },
+          {
+            "id": 17,
+            "name": "NA M1-15 Svært brakk beskyttet-eksponert fast tareskogs-algebunn"
+          },
+          {
+            "id": 18,
+            "name": "NA M1-16 Svært beskyttet bergvegg under sublitoral"
+          },
+          {
+            "id": 19,
+            "name": "NA M1-17 Beskyttet-eksponert sublitoral bergvegg"
+          },
+          {
+            "id": 20,
+            "name": "NA M1-18 Beskyttet-eksponert bergvegg under sublitoral"
+          },
+          {
+            "id": 21,
+            "name": "NA M1-19 Svært eksponert bergvegg"
+          },
+          {
+            "id": 22,
+            "name": "NA M1-20 Svært beskyttet nokså brakk bergvegg"
+          },
+          {
+            "id": 23,
+            "name": "NA M1-21 Beskyttet-eksponert nokså brakk bergvegg i sublitoral"
+          },
+          {
+            "id": 24,
+            "name": "NA M1-22 Beskyttet-eksponert nokså brakk bergvegg under sublitoral"
+          },
+          {
+            "id": 25,
+            "name": "NA M1-23 Svært brakk bergvegg"
+          },
+          {
+            "id": 26,
+            "name": "NA M1-24 Svært beskyttet blokkdominert bunn under sublitoral"
+          },
+          {
+            "id": 27,
+            "name": "NA M1-25 Beskyttet-eksponert blokkdominert bunn i sublitoral"
+          },
+          {
+            "id": 28,
+            "name": "NA M1-26 Beskyttet-eksponert blokkdominert bunn under sublitoral"
+          },
+          {
+            "id": 29,
+            "name": "NA M1-27 Svært eksponert blokkdominert bunn"
+          },
+          {
+            "id": 30,
+            "name": "NA M1-28 Beskyttet-eksponert nokså brakk blokkdominert bunn under sublitoral"
+          },
+          {
+            "id": 31,
+            "name": "NA M1-29 Blokkdominert bunn preget av disruptiv isforstyrrelse"
+          }
+        ]
+      },
+      {
+        "id": 32,
+        "name": "NA M2 Afotisk fast saltvannsbunn",
+        "children": [
+          {
+            "id": 33,
+            "name": "NA M2-1 Svært beskyttet afotisk fastbunn i øvre sublitoral"
+          },
+          {
+            "id": 34,
+            "name": "NA M2-2 Svært beskyttet fastbunn i atlantisk vann"
+          },
+          {
+            "id": 35,
+            "name": "NA M2-3 Svært beskyttet fastbunn i intermediært vann"
+          },
+          {
+            "id": 36,
+            "name": "NA M2-4 Svært beskyttet fastbunn i bathyal"
+          },
+          {
+            "id": 37,
+            "name": "NA M2-5 Svært beskyttet fastbunn i abyssal"
+          },
+          {
+            "id": 38,
+            "name": "NA M2-6 Nokså beskyttet afotisk fastbunn i øvre sublitoral"
+          },
+          {
+            "id": 39,
+            "name": "NA M2-7 Nokså beskyttet fastbunn i atlantisk vann"
+          },
+          {
+            "id": 40,
+            "name": "NA M2-8 Nokså beskyttet fastbunn i intermediært vann"
+          },
+          {
+            "id": 41,
+            "name": "NA M2-9 Nokså beskyttet fastbunn i bathyal"
+          },
+          {
+            "id": 42,
+            "name": "NA M2-10 Nokså beskyttet fastbunn i abyssal"
+          },
+          {
+            "id": 43,
+            "name": "NA M2-11 Nokså eksponert ultramafisk fastbunn i atlantisk vann"
+          },
+          {
+            "id": 44,
+            "name": "NA M2-12 Nokså eksponert ultramafisk fastbunn i abyssal"
+          },
+          {
+            "id": 45,
+            "name": "NA M2-13 Beskyttet afotisk bergvegg i øvre sublitoral"
+          },
+          {
+            "id": 46,
+            "name": "NA M2-14 Nokså eksponert bergvegg  i øvre sublitoral "
+          },
+          {
+            "id": 47,
+            "name": "NA M2-15 Beskyttet bergvegg i atlantisk vann"
+          },
+          {
+            "id": 48,
+            "name": "NA M2-16 Nokså eksponert bergvegg i nedre sublitoral"
+          },
+          {
+            "id": 49,
+            "name": "NA M2-17 Beskyttet bergvegg i intermediært vann"
+          },
+          {
+            "id": 50,
+            "name": "NA M2-18 Nokså eksponert bergvegg i intermediært vann"
+          },
+          {
+            "id": 51,
+            "name": "NA M2-19 Beskyttet til nokså eksponert bathyal bergvegg"
+          },
+          {
+            "id": 52,
+            "name": "NA M2-20 Beskyttet til nokså eksponert abyssal bergvegg"
+          }
+        ]
+      },
+      {
+        "id": 53,
+        "name": "NA M3 Fast fjærebeltebunn",
+        "children": [
+          {
+            "id": 54,
+            "name": "NA M3-1 Grisetangbunn"
+          },
+          {
+            "id": 55,
+            "name": "NA M3-2 Grønnalge-spiraltangbunn"
+          },
+          {
+            "id": 56,
+            "name": "NA M3-3 Grønnalge-rurbunn"
+          },
+          {
+            "id": 57,
+            "name": "NA M3-4 Blæretangbunn"
+          },
+          {
+            "id": 58,
+            "name": "NA M3-5 Spiraltangbunn"
+          },
+          {
+            "id": 59,
+            "name": "NA M3-6 Sauetang-blåskjellbunn"
+          },
+          {
+            "id": 60,
+            "name": "NA M3-7 Remtangbunn"
+          },
+          {
+            "id": 61,
+            "name": "NA M3-8 Strandsnegl-blåskjellbunn"
+          },
+          {
+            "id": 62,
+            "name": "NA M3-9 Strandsnegl-blåskjell-rurbunn"
+          },
+          {
+            "id": 63,
+            "name": "NA M3-10 Bunn dominert av filamentøse alger"
+          },
+          {
+            "id": 64,
+            "name": "NA M3-11 Mesohalin svært beskyttet-intermediær fastbunn i hydrolitoral"
+          },
+          {
+            "id": 65,
+            "name": "NA M3-12 Mesohalin beskyttet-intermediær fastbunn i geolitoral"
+          },
+          {
+            "id": 66,
+            "name": "NA M3-13 Svært brakk fastbunn"
+          },
+          {
+            "id": 67,
+            "name": "NA M3-14 Beskyttet nedre fjæresone-bergvegg"
+          },
+          {
+            "id": 68,
+            "name": "NA M3-15 Beskyttet øvre fjæresone-bergvegg"
+          },
+          {
+            "id": 69,
+            "name": "NA M3-16 Intermediær fjæresone-bergvegg"
+          },
+          {
+            "id": 70,
+            "name": "NA M3-17 Eksponert fjæresone-bergvegg"
+          },
+          {
+            "id": 71,
+            "name": "NA M3-18 Brakk fjæresone-bergvegg"
+          },
+          {
+            "id": 72,
+            "name": "NA M3-19 Isskurt fjæresone-fastbunn"
+          }
+        ]
+      },
+      {
+        "id": 73,
+        "name": "NA M4 Eufotisk marin sedimentbunn",
+        "children": [
+          {
+            "id": 74,
+            "name": "NA M4-1 Grunn sandbunn"
+          },
+          {
+            "id": 75,
+            "name": "NA M4-2 Grunn løs mudderbunn"
+          },
+          {
+            "id": 76,
+            "name": "NA M4-3 Grunn fin til middels grusbunn"
+          },
+          {
+            "id": 77,
+            "name": "NA M4-4 Grunn grovere blandet sandbunn"
+          },
+          {
+            "id": 78,
+            "name": "NA M4-5 Grunn finsedimentbunn"
+          },
+          {
+            "id": 79,
+            "name": "NA M4-6 Grunn grus- og steinbunn"
+          },
+          {
+            "id": 80,
+            "name": "NA M4-7 Grunn grus- og steinbunn med finmateriale"
+          },
+          {
+            "id": 81,
+            "name": "NA M4-8 Grunn fastleirebunn"
+          },
+          {
+            "id": 82,
+            "name": "NA M4-9 Grunn algegytjebunn"
+          },
+          {
+            "id": 83,
+            "name": "NA M4-10 Grunn skjellsandbunn"
+          },
+          {
+            "id": 84,
+            "name": "NA M4-11 Grunn ruglbunn"
+          },
+          {
+            "id": 85,
+            "name": "NA M4-12 Sandbunn i rødalgebeltet"
+          },
+          {
+            "id": 86,
+            "name": "NA M4-13 Løs mudderbunn i rødalgebeltet"
+          },
+          {
+            "id": 87,
+            "name": "NA M4-14 Grus- og steinbunn i rødalgebeltet"
+          },
+          {
+            "id": 88,
+            "name": "NA M4-15 Finmaterialerik sedimentbunn i rødalgebeltet"
+          },
+          {
+            "id": 89,
+            "name": "NA M4-16  Finsedimentbunn i rødalgebeltet"
+          },
+          {
+            "id": 90,
+            "name": "NA M4-17 Fastleirebunn i rødalgebeltet"
+          },
+          {
+            "id": 91,
+            "name": "NA M4-18 Algegytjebunn i rødalgebeltet"
+          },
+          {
+            "id": 92,
+            "name": "NA M4-19 Skjellsandbunn i rødalgebeltet"
+          },
+          {
+            "id": 93,
+            "name": "NA M4-20 Ruglbunn i rødalgebeltet"
+          },
+          {
+            "id": 94,
+            "name": "NA M4-21 Brakk sandbunn"
+          },
+          {
+            "id": 95,
+            "name": "NA M4-22 Brakk løs mudderbunn"
+          },
+          {
+            "id": 96,
+            "name": "NA M4-23 Brakk  fin til middels grusbunn"
+          },
+          {
+            "id": 97,
+            "name": "NA M4-24 Brakk grov silt- til fast leirbunn"
+          },
+          {
+            "id": 98,
+            "name": "NA M4-25 Brakk fin grus- til steinbunn"
+          },
+          {
+            "id": 99,
+            "name": "NA M4-26 Brakk grus- og steinbunn med finmateriale"
+          },
+          {
+            "id": 100,
+            "name": "NA M4-27 Brakk algegytjebunn"
+          },
+          {
+            "id": 101,
+            "name": "NA M4-28 Brakk løs kalkmudderbunn"
+          },
+          {
+            "id": 102,
+            "name": "NA M4-29 Hydrolitoral sandbunn"
+          },
+          {
+            "id": 103,
+            "name": "NA M4-30 Hydrolitoral løs mudderbunn"
+          },
+          {
+            "id": 104,
+            "name": "NA M4-31 Hydrolitoral fin til middels grusbunn"
+          },
+          {
+            "id": 105,
+            "name": "NA M4-32 Hydrolitoral siltbunn"
+          },
+          {
+            "id": 106,
+            "name": "NA M4-33 Hydrolitoral middels grusbunn"
+          },
+          {
+            "id": 107,
+            "name": "NA M4-34 Hydrolitoral grov grus- til steinbunn"
+          },
+          {
+            "id": 108,
+            "name": "NA M4-35 Hydrolitoral leirbunn"
+          },
+          {
+            "id": 109,
+            "name": "NA M4-36 Hydrolitoral algegytjebunn"
+          },
+          {
+            "id": 110,
+            "name": "NA M4-37 Hydrolitoral skjellsandbunn"
+          },
+          {
+            "id": 111,
+            "name": "NA M4-38 Brakk hydrolitoral sandbunn"
+          },
+          {
+            "id": 112,
+            "name": "NA M4-39 Brakk hydrolitoral løs mudderbunn"
+          },
+          {
+            "id": 113,
+            "name": "NA M4-40 Brakk hydrolitoral fin til middels grusbunn"
+          },
+          {
+            "id": 114,
+            "name": "NA M4-41 Brakk hydrolitoral siltbunn"
+          },
+          {
+            "id": 115,
+            "name": "NA M4-42 Brakk hydrolitoral leirbunn"
+          },
+          {
+            "id": 116,
+            "name": "NA M4-43 Brakk hydrolitoral algegytjebunn"
+          },
+          {
+            "id": 117,
+            "name": "NA M4-44 Sedimentbunn preget av stor massetransport"
+          }
+        ]
+      },
+      {
+        "id": 118,
+        "name": "NA M5 Afotisk marin sedimentbunn",
+        "children": [
+          {
+            "id": 119,
+            "name": "NA M5-1 Sandbunn i øvre sublitoral"
+          },
+          {
+            "id": 120,
+            "name": "NA M5-2 Løs mudderbunn i øvre sublitoral"
+          },
+          {
+            "id": 121,
+            "name": "NA M5-3 Fin grus- til steinbunn i øvre sublitoral"
+          },
+          {
+            "id": 122,
+            "name": "NA M5-4 Finmaterialerik sedimentbunn i øvre sublitoral"
+          },
+          {
+            "id": 123,
+            "name": "NA M5-5 Finsedimentbunn i øvre sublitoral"
+          },
+          {
+            "id": 124,
+            "name": "NA M5-6 Fastleirebunn i øvre sublitoral"
+          },
+          {
+            "id": 125,
+            "name": "NA M5-7 Algegytjebunn i øvre sublitoral"
+          },
+          {
+            "id": 126,
+            "name": "NA M5-8 Skjellsandbunn i øvre sublitoral"
+          },
+          {
+            "id": 127,
+            "name": "NA M5-9 Svampspikelbunn i øvre sublitoral"
+          },
+          {
+            "id": 128,
+            "name": "NA M5-10 Korallgrusbunn i øvre sublitoral"
+          },
+          {
+            "id": 129,
+            "name": "NA M5-11 Sandbunn i atlantisk vann"
+          },
+          {
+            "id": 130,
+            "name": "NA M5-12 Løs mudderbunn i atlantisk vann"
+          },
+          {
+            "id": 131,
+            "name": "NA M5-13 Fin grus- til steinbunn i atlantisk vann"
+          },
+          {
+            "id": 132,
+            "name": "NA M5-14 Finmaterialerik sedimentbunn i atlantisk vann"
+          },
+          {
+            "id": 133,
+            "name": "NA M5-15 Finsedimentbunn i atlantisk vann"
+          },
+          {
+            "id": 134,
+            "name": "NA M5-16 Fastleirebunn i atlantisk vann"
+          },
+          {
+            "id": 135,
+            "name": "NA M5-17 Algegytjebunn i atlantisk vann"
+          },
+          {
+            "id": 136,
+            "name": "NA M5-18 Svampspikelbunn i atlantisk vann"
+          },
+          {
+            "id": 137,
+            "name": "NA M5-19 Korallgrusbunn i atlantisk vann"
+          },
+          {
+            "id": 138,
+            "name": "NA M5-20 Sandbunn i intermediært vann"
+          },
+          {
+            "id": 139,
+            "name": "NA M5-21 Løs mudderbunn i intermediært vann"
+          },
+          {
+            "id": 140,
+            "name": "NA M5-22 Fin grus- til steinbunn i intermediært vann"
+          },
+          {
+            "id": 141,
+            "name": "NA M5-23 Finmaterialerik sedimentbunn i intermediært vann"
+          },
+          {
+            "id": 142,
+            "name": "NA M5-24 Finsedimentbunn i intermediært vann"
+          },
+          {
+            "id": 143,
+            "name": "NA M5-25 Fast leirbunn i intermediært vann"
+          },
+          {
+            "id": 144,
+            "name": "NA M5-26 Svampspikelbunn i intermediært vann"
+          },
+          {
+            "id": 145,
+            "name": "NA M5-27 Bathyal sandbunn"
+          },
+          {
+            "id": 146,
+            "name": "NA M5-28 Bathyal løs mudderbunn"
+          },
+          {
+            "id": 147,
+            "name": "NA M5-29 Bathyal fin grus- til steinbunn"
+          },
+          {
+            "id": 148,
+            "name": "NA M5-30 Bathyal finsedimentbunn"
+          },
+          {
+            "id": 149,
+            "name": "NA M5-31 Bathyal fast leirbunn"
+          },
+          {
+            "id": 150,
+            "name": "NA M5-32 Bathyal svampspikelbunn"
+          },
+          {
+            "id": 151,
+            "name": "NA M5-33 Abyssal sandbunn"
+          },
+          {
+            "id": 152,
+            "name": "NA M5-34 Abyssal løs mudderbunn"
+          },
+          {
+            "id": 153,
+            "name": "NA M5-35 Abyssal fin grus- til steinbunn"
+          },
+          {
+            "id": 154,
+            "name": "NA M5-36 Abyssal finsedimentbunn"
+          },
+          {
+            "id": 155,
+            "name": "NA M5-37 Abyssal fast leirbunn"
+          },
+          {
+            "id": 156,
+            "name": "NA M5-38 Abyssal svampspikelbunn"
+          }
+        ]
+      },
+      {
+        "id": 157,
+        "name": "NA M6 Korallrev-bunn",
+        "children": [
+          {
+            "id": 158,
+            "name": "NA M6-1 Kysttilknyttet korallrev-bunn"
+          },
+          {
+            "id": 159,
+            "name": "NA M6-2 Havtilknyttet korallrev-bunn"
+          }
+        ]
+      },
+      {
+        "id": 160,
+        "name": "NA M7 Marin undervannseng",
+        "children": [
+          {
+            "id": 161,
+            "name": "NA M7-1 Brakk undervannseng i hydrolitoral"
+          },
+          {
+            "id": 162,
+            "name": "NA M7-2 Brakk undervannseng i sublitoral"
+          },
+          {
+            "id": 163,
+            "name": "NA M7-3 Salt undervannseng i hydrolitoral"
+          },
+          {
+            "id": 164,
+            "name": "NA M7-4 Salt undervannseng i sublitoral"
+          }
+        ]
+      },
+      {
+        "id": 165,
+        "name": "NA M8 Helofytt-saltvannssump",
+        "children": []
+      },
+      {
+        "id": 166,
+        "name": "NA M9 Litoralbasseng-bunn",
+        "children": [
+          {
+            "id": 167,
+            "name": "NA M9-1 Stort litoralbasseng i geolitoralen"
+          },
+          {
+            "id": 168,
+            "name": "NA M9-2 Stort litoralbasseng i nedre og midtre supralitoral"
+          },
+          {
+            "id": 169,
+            "name": "NA M9-3 Stort litoralbasseng i øvre supralitoral"
+          },
+          {
+            "id": 170,
+            "name": "NA M9-4 Lite litoralbasseng i geolitoralen"
+          },
+          {
+            "id": 171,
+            "name": "NA M9-5 Lite litoralbasseng i nedre og midtre supralitoral"
+          },
+          {
+            "id": 172,
+            "name": "NA M9-6 Lite litoralbasseng i øvre supralitoral"
+          },
+          {
+            "id": 173,
+            "name": "NA M9-7 Temporært litoralbasseng i supralitoral"
+          },
+          {
+            "id": 174,
+            "name": "NA M9-8 Stort litoralbasseng i geolitoralen med klart sedimentasjonspreg"
+          },
+          {
+            "id": 175,
+            "name": "NA M9-9 Lite litoralbasseng i geolitoralen med klart sedimentasjonspreg"
+          }
+        ]
+      },
+      {
+        "id": 176,
+        "name": "NA M10 Marin grotte og overheng",
+        "children": [
+          {
+            "id": 177,
+            "name": "NA M10-1 Brenningsgrotte, ytre del"
+          },
+          {
+            "id": 178,
+            "name": "NA M10-2 Marin gruntvannsgrotte, ytre del"
+          },
+          {
+            "id": 179,
+            "name": "NA M10-3 Marin dypgrotte"
+          },
+          {
+            "id": 180,
+            "name": "NA M10-4 Brenningsgrotte, indre del"
+          },
+          {
+            "id": 181,
+            "name": "NA M10-5 Marin gruntvannsgrotte, indre del"
+          }
+        ]
+      },
+      {
+        "id": 182,
+        "name": "NA M11 Kaldt gassoppkomme",
+        "children": [
+          {
+            "id": 183,
+            "name": "NA M11-1 Ustabil kilde på sublitoral sokkel"
+          },
+          {
+            "id": 184,
+            "name": "NA M11-2 Stabil kilde på sublitoral sokkel"
+          },
+          {
+            "id": 185,
+            "name": "NA M11-3 Ustabil kilde i nedre sublitoral"
+          },
+          {
+            "id": 186,
+            "name": "NA M11-4 Stabil kilde i nedre sublitoral"
+          },
+          {
+            "id": 187,
+            "name": "NA M11-5 Ustabil dyphavskilde"
+          },
+          {
+            "id": 188,
+            "name": "NA M11-6 Stabil dyphavskilde"
+          },
+          {
+            "id": 189,
+            "name": "NA M11-7 Muddervulkan"
+          }
+        ]
+      },
+      {
+        "id": 190,
+        "name": "NA M12 Varm havkilde",
+        "children": [
+          {
+            "id": 191,
+            "name": "NA M12-1 Klart jordvarmeinfluert kilde på sublitoral sokkel"
+          },
+          {
+            "id": 192,
+            "name": "NA M12-2 Klart jordvarmeinfluert kilde i nedre sublitoral"
+          },
+          {
+            "id": 193,
+            "name": "NA M12-3 Klart jordvarmeinfluert kilde i dyphavet"
+          },
+          {
+            "id": 194,
+            "name": "NA M12-4 Sterkt jordvarmeinfluert kilde på sublitoral sokkel"
+          },
+          {
+            "id": 195,
+            "name": "NA M12-5 Sterkt jordvarmeinfluert kilde i nedre sublitoral"
+          },
+          {
+            "id": 196,
+            "name": "NA M12-6 Sterkt jordvarmeinfluert kilde i dyphavet"
+          },
+          {
+            "id": 197,
+            "name": "NA M12-7 Disruptiv jordvarmeinfluert kilde"
+          }
+        ]
+      },
+      {
+        "id": 198,
+        "name": "NA M13 Marin sedimentbunn preget av oksygenmangel",
+        "children": [
+          {
+            "id": 199,
+            "name": "NA M13-1 Periodisk anoksisk sedimentbunn i eufotisk sone"
+          },
+          {
+            "id": 200,
+            "name": "NA M13-2 Periodisk anoksisk sedimentbunn i afotisk sone"
+          },
+          {
+            "id": 201,
+            "name": "NA M13-3 Anoksisk sedimentbunn i eufotisk sone"
+          },
+          {
+            "id": 202,
+            "name": "NA M13-4 Anoksisk sedimentbunn i afotisk sone"
+          }
+        ]
+      },
+      {
+        "id": 203,
+        "name": "NA M14 Sterkt endret eller ny fast saltvannsbunn",
+        "children": [
+          {
+            "id": 204,
+            "name": "NA M14-1 Sterkt endret eller ny fast saltvannsbunn i tidevannssonen"
+          },
+          {
+            "id": 205,
+            "name": "NA M14-2 Sterkt endret eller ny fast saltvannsbunn i eufotisk sone"
+          },
+          {
+            "id": 206,
+            "name": "NA M14-3 Sterkt endret eller ny fast saltvannsbunn i afotisk sone"
+          }
+        ]
+      },
+      {
+        "id": 207,
+        "name": "NA M15 Sterkt endret eller ny marin sedimentbunn",
+        "children": [
+          {
+            "id": 208,
+            "name": "NA M15-1 Sterkt endret sand- og grusbunn"
+          },
+          {
+            "id": 209,
+            "name": "NA M15-2 Sterkt endret løsbunn"
+          },
+          {
+            "id": 210,
+            "name": "NA M15-3 Sterkt endret steinbunn"
+          },
+          {
+            "id": 211,
+            "name": "NA M15-4 Sterkt forurenset løsbunn"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": 212,
+    "name": "NA L Ferskvannsbunnsystemer",
+    "children": [
+      {
+        "id": 213,
+        "name": "NA L1 Eufotisk fast ferskvannsbunn",
+        "children": [
+          {
+            "id": 214,
+            "name": "NA L1-1 Svært kalkfattig fast innsjø- og rolig elvebunn"
+          },
+          {
+            "id": 215,
+            "name": "NA L1-2 Nokså kalkfattig fast innsjø- og rolig elvebunn"
+          },
+          {
+            "id": 216,
+            "name": "NA L1-3 Kalkrik fast innsjø- og rolig elvebunn"
+          },
+          {
+            "id": 217,
+            "name": "NA L1-4 Svært kalkfattig fast elvebunn med sterk strøm"
+          },
+          {
+            "id": 218,
+            "name": "NA L1-5 Nokså kalkfattig fast elvebunn med sterk strøm"
+          },
+          {
+            "id": 219,
+            "name": "NA L1-6 Kalkrik fast elvebunn med sterk strøm"
+          },
+          {
+            "id": 220,
+            "name": "NA L1-7 Klar til humøs svært kalkfattig fast innsjø- og rolig elvebunn"
+          }
+        ]
+      },
+      {
+        "id": 221,
+        "name": "NA L2 Eufotisk limnisk sedimentbunn",
+        "children": [
+          {
+            "id": 222,
+            "name": "NA L2-1 Svært kalkfattig sand- og grusbunn"
+          },
+          {
+            "id": 223,
+            "name": "NA L2-2 Svært kalkfattig løsbunn"
+          },
+          {
+            "id": 224,
+            "name": "NA L2-3 Svært kalkfattig steinbunn"
+          },
+          {
+            "id": 225,
+            "name": "NA L2-4 Svært kalkfattig organisk løsbunn"
+          },
+          {
+            "id": 226,
+            "name": "NA L2-5 Svært kalkfattig myrtorvbunn"
+          },
+          {
+            "id": 227,
+            "name": "NA L2-6 Svært kalkfattig myrtorvbunn med nedbørvann"
+          },
+          {
+            "id": 228,
+            "name": "NA L2-7 Nokså kalkfattig sand- og grusbunn"
+          },
+          {
+            "id": 229,
+            "name": "NA L2-8 Nokså kalkfattig løsbunn"
+          },
+          {
+            "id": 230,
+            "name": "NA L2-9 Nokså kalkfattig leirbunn"
+          },
+          {
+            "id": 231,
+            "name": "NA L2-10 Nokså kalkfattig steinbunn"
+          },
+          {
+            "id": 232,
+            "name": "NA L2-11 Nokså kalkfattig organisk løsbunn"
+          },
+          {
+            "id": 233,
+            "name": "NA L2-12 Nokså kalkfattig myrtorvbunn"
+          },
+          {
+            "id": 234,
+            "name": "NA L2-13 Nokså kalkrik sand- og grusbunn"
+          },
+          {
+            "id": 235,
+            "name": "NA L2-14 Nokså kalkrik løsbunn"
+          },
+          {
+            "id": 236,
+            "name": "NA L2-15 Nokså kalkrik leirbunn"
+          },
+          {
+            "id": 237,
+            "name": "NA L2-16 Nokså kalkrik steinbunn"
+          },
+          {
+            "id": 238,
+            "name": "NA L2-17 Disruptiv sedimentasjonsbunn"
+          },
+          {
+            "id": 239,
+            "name": "NA L2-18 Nokså kalkrik organisk løsbunn"
+          },
+          {
+            "id": 240,
+            "name": "NA L2-19 Nokså kalkrik myrtorvbunn"
+          }
+        ]
+      },
+      {
+        "id": 241,
+        "name": "NA L3 Afotisk limnisk sedimentbunn",
+        "children": [
+          {
+            "id": 242,
+            "name": "NA L3-1 kalkfattig dyp sedimentbunn"
+          },
+          {
+            "id": 243,
+            "name": "NA L3-2 kalkrik dyp sedimentbunn"
+          }
+        ]
+      },
+      {
+        "id": 244,
+        "name": "NA L4 Helofytt-ferskvannssump",
+        "children": [
+          {
+            "id": 245,
+            "name": "NA L4-1 Kalkfattig helofytt-ferskvannssump"
+          },
+          {
+            "id": 246,
+            "name": "NA L4-2 Litt kalkfattig til intermediær helofytt-ferskvannssump"
+          },
+          {
+            "id": 247,
+            "name": "NA L4-3 Kalkrik helofytt-ferskvannssump"
+          }
+        ]
+      },
+      {
+        "id": 248,
+        "name": "NA L5 Ferskvannskildebunn",
+        "children": [
+          {
+            "id": 249,
+            "name": "NA L5-1 Intermediær grunnkilde"
+          },
+          {
+            "id": 250,
+            "name": "NA L5-2 Intermediær torvmarkskilde"
+          },
+          {
+            "id": 251,
+            "name": "NA L5-3 Intermediær innsjø- og elvekilde"
+          },
+          {
+            "id": 252,
+            "name": "NA L5-4 Kalkrik grunnkilde"
+          }
+        ]
+      },
+      {
+        "id": 253,
+        "name": "NA L6 Oksygenfattig limnisk sedimentbunn",
+        "children": [
+          {
+            "id": 254,
+            "name": "NA L6-1 Afotisk limnisk periodisk anoksisk sedimentbunn"
+          },
+          {
+            "id": 255,
+            "name": "NA L6-2 Afotisk limnisk anoksisk sedimentbunn"
+          }
+        ]
+      },
+      {
+        "id": 256,
+        "name": "NA L7 Sterkt endret eller ny fast ferskvannsbunn",
+        "children": [
+          {
+            "id": 257,
+            "name": "NA L7-1 Sterkt regulert fast innsjøbunn"
+          },
+          {
+            "id": 258,
+            "name": "NA L7-2 Sterkt regulert fast elvebunn"
+          },
+          {
+            "id": 259,
+            "name": "NA L7-3 Neddemt nakent berg"
+          }
+        ]
+      },
+      {
+        "id": 260,
+        "name": "NA L8 Sterkt endret eller ny limnisk sedimentbunn",
+        "children": [
+          {
+            "id": 261,
+            "name": "NA L8-1 Innsjøbunn som er sterkt endret ved deponering eller uttak av masser"
+          },
+          {
+            "id": 262,
+            "name": "NA L8-2 Elvebunn som er sterkt endret ved deponering eller uttak av masser"
+          },
+          {
+            "id": 263,
+            "name": "NA L8-3 Bunn med sterkt avvikende kjemisk sammensetning"
+          },
+          {
+            "id": 264,
+            "name": "NA L8-4 Sterkt endret grunnkildebunn"
+          },
+          {
+            "id": 265,
+            "name": "NA L8-5 Sterkt regulert innsjøbunn"
+          },
+          {
+            "id": 266,
+            "name": "NA L8-6 Sterkt regulert elvebunn"
+          },
+          {
+            "id": 267,
+            "name": "NA L8-7 Neddemt jorddekt fastmark og andre løsmasser"
+          },
+          {
+            "id": 268,
+            "name": "NA L8-8 Neddemt torvmark"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": 269,
+    "name": "NA T Fastmarkssystemer",
+    "children": [
+      {
+        "id": 270,
+        "name": "NA T1 Nakent berg",
+        "children": [
+          {
+            "id": 271,
+            "name": "NA T1-C-1  Lite tørkeutsatte svært og temmelig kalkfattige nakne berg "
+          },
+          {
+            "id": 272,
+            "name": "NA T1-C-2 Tørkeutsatte svært og temmelig kalkfattige berg, bergvegger og knauser"
+          },
+          {
+            "id": 273,
+            "name": "NA T1-C-3 Lite tørkeutsatte litt kalkfattige og svakt intermediære nakne berg "
+          },
+          {
+            "id": 274,
+            "name": "NA T1-C-4 Tørkeutsatte litt kalkfattige og svakt intermediære berg, bergvegger og knauser"
+          },
+          {
+            "id": 275,
+            "name": "NA T1-C-5 Lite tørkeutsatte sterkt intermediære og litt kalkrike nakne berg "
+          },
+          {
+            "id": 276,
+            "name": "NA T1-C-6 Tørkeutsatte sterkt intermediære og litt kalkrike berg, bergvegger og knauser "
+          },
+          {
+            "id": 277,
+            "name": "NA T1-C-7 Lite tørkeutsatte temmelig til ekstremt kalkrike nakne berg "
+          },
+          {
+            "id": 278,
+            "name": "NA T1-C-8 Tørkeutsatte temmelig til ekstremt kalkrike berg, bergvegger og knauser "
+          },
+          {
+            "id": 279,
+            "name": "NA T1-C-9 Svakt intermediært og kalkfattig forblåst berg"
+          },
+          {
+            "id": 280,
+            "name": "NA T1-C-10 Sterkt intermediært til ekstremt kalkrikt forblåst berg"
+          },
+          {
+            "id": 281,
+            "name": "NA T1-C-11 Svakt intermediært og kalkfattig snøleieberg"
+          },
+          {
+            "id": 282,
+            "name": "NA T1-C-12 Sterkt intermediært til ekstremt kalkrikt snøleieberg"
+          }
+        ]
+      },
+      {
+        "id": 283,
+        "name": "NA T2 Åpen grunnlendt mark",
+        "children": [
+          {
+            "id": 284,
+            "name": "NA T2-C-1 Åpen kalkfattig grunnlendt lyngmark"
+          },
+          {
+            "id": 285,
+            "name": "NA T2-C-2 Åpen kalkfattig grunnlendt lavmark"
+          },
+          {
+            "id": 286,
+            "name": "NA T2-C-3 Åpen intermediær grunnlendt lyngmark"
+          },
+          {
+            "id": 287,
+            "name": "NA T2-C-4 Åpen intermediær grunnlendt lavmark"
+          },
+          {
+            "id": 288,
+            "name": "NA T2-C-5 Åpen svakt kalkrik grunnlendt lyngmark"
+          },
+          {
+            "id": 289,
+            "name": "NA T2-C-6 Åpen svakt kalkrik grunnlendt lavmark"
+          },
+          {
+            "id": 290,
+            "name": "NA T2-C-7 Åpen sterkt kalkrik grunnlendt lyngmark"
+          },
+          {
+            "id": 291,
+            "name": "NA T2-C-8 Åpen sterkt kalkrik grunnlendt lavmark"
+          }
+        ]
+      },
+      {
+        "id": 292,
+        "name": "NA T3 Fjellhei, leside og tundra",
+        "children": [
+          {
+            "id": 293,
+            "name": "NA T3-C-1 Kalkfattig leside"
+          },
+          {
+            "id": 294,
+            "name": "NA T3-C-2 Kalkfattig fjell-lynghei"
+          },
+          {
+            "id": 295,
+            "name": "NA T3-C-3 Kalkfattig fjell-lavhei"
+          },
+          {
+            "id": 296,
+            "name": "NA T3-C-4 Intermediær leside"
+          },
+          {
+            "id": 297,
+            "name": "NA T3-C-5 Intermediær fjell-lynghei"
+          },
+          {
+            "id": 298,
+            "name": "NA T3-C-6 Intermediær fjell-lavhei"
+          },
+          {
+            "id": 299,
+            "name": "NA T3-C-7 Svakt kalkrik leside"
+          },
+          {
+            "id": 300,
+            "name": "NA T3-C-8 Svakt kalkrik fjell-lynghei"
+          },
+          {
+            "id": 301,
+            "name": "NA T3-C-9 Svakt kalkrik fjell-lavhei"
+          },
+          {
+            "id": 302,
+            "name": "NA T3-C-10 Sterkt kalkrik leside"
+          },
+          {
+            "id": 303,
+            "name": "NA T3-C-11 Sterkt kalkrik fjell-lynghei"
+          },
+          {
+            "id": 304,
+            "name": "NA T3-C-12 Sterkt kalkrik fjell-lavhei"
+          },
+          {
+            "id": 305,
+            "name": "NA T3-C-13 Intermediær kildepåvirket fjellhei"
+          },
+          {
+            "id": 306,
+            "name": "NA T3-C-14 Kalkrik kildepåvirket fjellhei"
+          }
+        ]
+      },
+      {
+        "id": 307,
+        "name": "NA T4 Skogsmark",
+        "children": [
+          {
+            "id": 308,
+            "name": "NA T4-C-1 Blåbærskog"
+          },
+          {
+            "id": 309,
+            "name": "NA T4-C-2 Svak lågurtskog"
+          },
+          {
+            "id": 310,
+            "name": "NA T4-C-3 Lågurtskog"
+          },
+          {
+            "id": 311,
+            "name": "NA T4-C-4 Kalklågurtskog"
+          },
+          {
+            "id": 312,
+            "name": "NA T4-C-5 Bærlyngskog"
+          },
+          {
+            "id": 313,
+            "name": "NA T4-C-6 Svak bærlyng-lågurtskog"
+          },
+          {
+            "id": 314,
+            "name": "NA T4-C-7 Bærlyng-lågurtskog"
+          },
+          {
+            "id": 315,
+            "name": "NA T4-C-8 Bærlyng-kalklågurtskog"
+          },
+          {
+            "id": 316,
+            "name": "NA T4-C-9 Lyngskog"
+          },
+          {
+            "id": 317,
+            "name": "NA T4-C-10 Svak lyng-lågurtskog"
+          },
+          {
+            "id": 318,
+            "name": "NA T4-C-11 Lyng-lågurtskog"
+          },
+          {
+            "id": 319,
+            "name": "NA T4-C-12 Lyng-kalklågurtskog"
+          },
+          {
+            "id": 320,
+            "name": "NA T4-C-13 Lavskog"
+          },
+          {
+            "id": 321,
+            "name": "NA T4-C-14 Svak lav-lågurtskog"
+          },
+          {
+            "id": 322,
+            "name": "NA T4-C-15 Lav-lågurtskog"
+          },
+          {
+            "id": 323,
+            "name": "NA T4-C-16 Lav-kalklågurtskog"
+          },
+          {
+            "id": 324,
+            "name": "NA T4-C-17 Storbregneskog"
+          },
+          {
+            "id": 325,
+            "name": "NA T4-C-18 Høgstaudeskog"
+          },
+          {
+            "id": 326,
+            "name": "NA T4-C-19 Litt tørkeutsatt høgstaudeskog"
+          },
+          {
+            "id": 327,
+            "name": "NA T4-C-20 Tørkeutsatt høgstaudeskog"
+          }
+        ]
+      },
+      {
+        "id": 328,
+        "name": "NA T5 Grotte og overheng",
+        "children": [
+          {
+            "id": 329,
+            "name": "NA T5-C-1 Kalkfattige til svakt kalkrike tørkeutsatte grotter og overheng "
+          },
+          {
+            "id": 330,
+            "name": "NA T5-C-2 Sterkt kalkrike ikke tørkeutsatte grotter og overheng "
+          },
+          {
+            "id": 331,
+            "name": "NA T5-C-3 Mindre kalkrikt grottedyp"
+          },
+          {
+            "id": 332,
+            "name": "NA T5-C-4 Indre del av dyp karstgrotte"
+          },
+          {
+            "id": 333,
+            "name": "NA T5-C-5 Tørt kalkfattig overheng"
+          },
+          {
+            "id": 334,
+            "name": "NA T5-C-6 Tørt intermediært og svakt kalkrikt overheng"
+          },
+          {
+            "id": 335,
+            "name": "NA T5-C-7 Tørt sterkt kalkrikt overheng"
+          }
+        ]
+      },
+      {
+        "id": 336,
+        "name": "NA T6 Strandberg",
+        "children": [
+          {
+            "id": 337,
+            "name": "NA T6-C-1 Kalkfattige strandberg"
+          },
+          {
+            "id": 338,
+            "name": "NA T6-C-2 Kalkrik bergknaus i bølgesprutsonen"
+          }
+        ]
+      },
+      {
+        "id": 339,
+        "name": "NA T7 Snøleie",
+        "children": [
+          {
+            "id": 340,
+            "name": "NA T7-C-1 Svært kalkfattig moderat snøleie"
+          },
+          {
+            "id": 341,
+            "name": "NA T7-C-2 Svakt kalkfattig moderat snøleie"
+          },
+          {
+            "id": 342,
+            "name": "NA T7-C-3 Intermediært moderat snøleie"
+          },
+          {
+            "id": 343,
+            "name": "NA T7-C-4 Intermediært seint snøleie"
+          },
+          {
+            "id": 344,
+            "name": "NA T7-C-5 Intermediært ekstremsnøleie"
+          },
+          {
+            "id": 345,
+            "name": "NA T7-C-6 Svakt kalkrikt moderat snøleie"
+          },
+          {
+            "id": 346,
+            "name": "NA T7-C-7 Svakt kalkrikt seint snøleie"
+          },
+          {
+            "id": 347,
+            "name": "NA T7-C-8 Sterkt kalkrikt moderat snøleie"
+          },
+          {
+            "id": 348,
+            "name": "NA T7-C-9 Sterkt kalkrikt seint snøleie"
+          },
+          {
+            "id": 349,
+            "name": "NA T7-C-10 Kalkrikt ekstremsnøleie"
+          },
+          {
+            "id": 350,
+            "name": "NA T7-C-11 Vegetasjonsfritt snøleie"
+          },
+          {
+            "id": 351,
+            "name": "NA T7-C-12 Kildepåvirket intermediært snøleie"
+          },
+          {
+            "id": 352,
+            "name": "NA T7-C-13 Kildepåvirket svakt kalkrikt snøleie"
+          },
+          {
+            "id": 353,
+            "name": "NA T7-C-14 Kildepåvirket kalksnøleie"
+          }
+        ]
+      },
+      {
+        "id": 354,
+        "name": "NA T8 Fuglefjell-eng og fugletopp",
+        "children": [
+          {
+            "id": 355,
+            "name": "NA T8-C-1 Fuglefjell-høgstaude-enger     "
+          },
+          {
+            "id": 356,
+            "name": "NA T8-C-2 Kildepåvirket fuglefjell-eng"
+          },
+          {
+            "id": 357,
+            "name": "NA T8-C-3 Fugletopp"
+          }
+        ]
+      },
+      {
+        "id": 358,
+        "name": "NA T9 Mosetundra",
+        "children": [
+          {
+            "id": 359,
+            "name": "NA T9-C-1 Fattig-intermediær mosetundra"
+          },
+          {
+            "id": 360,
+            "name": "NA T9-C-2 Kalkrik mosetundra"
+          }
+        ]
+      },
+      {
+        "id": 361,
+        "name": "NA T10 Arktisk steppe",
+        "children": [
+          {
+            "id": 362,
+            "name": "NA T10-C-1 Arktiske stepper "
+          }
+        ]
+      },
+      {
+        "id": 363,
+        "name": "NA T11 Saltanrikingsmark i fjæresonen",
+        "children": [
+          {
+            "id": 364,
+            "name": "NA T11-C-1 Saltanrikingsmarker i geolitoral "
+          },
+          {
+            "id": 365,
+            "name": "NA T11-C-2 Øvre saltanrikingsmark på grus"
+          }
+        ]
+      },
+      {
+        "id": 366,
+        "name": "NA T12 Strandeng",
+        "children": [
+          {
+            "id": 367,
+            "name": "NA T12-C-1 Strandenger i nedre og midtre geolitoral "
+          },
+          {
+            "id": 368,
+            "name": "NA T12-C-2 Strandenger i øvre geolitoral og supralitoral "
+          }
+        ]
+      },
+      {
+        "id": 369,
+        "name": "NA T13 Rasmark",
+        "children": [
+          {
+            "id": 370,
+            "name": "NA T13-C-1 Kalkfattig grov ur"
+          },
+          {
+            "id": 371,
+            "name": "NA T13-C-2 Kalkfattig ur"
+          },
+          {
+            "id": 372,
+            "name": "NA T13-C-3 Kalkfattig grus- og sanddominert rasmark"
+          },
+          {
+            "id": 373,
+            "name": "NA T13-C-4 Intermediær og svakt kalkrik grov ur"
+          },
+          {
+            "id": 374,
+            "name": "NA T13-C-5 Intermediær og svakt kalkrik ur"
+          },
+          {
+            "id": 375,
+            "name": "NA T13-C-6 Intermediær og svakt kalkrik grus- og sanddominert rasmark"
+          },
+          {
+            "id": 376,
+            "name": "NA T13-C-7 Sterkt kalkrik grov ur"
+          },
+          {
+            "id": 377,
+            "name": "NA T13-C-8 Sterkt kalkrik ur"
+          },
+          {
+            "id": 378,
+            "name": "NA T13-C-9 Sterkt kalkrik grus- og sanddominert rasmark"
+          },
+          {
+            "id": 379,
+            "name": "NA T13-C-10 Kalkfattig fuktig grov ur"
+          },
+          {
+            "id": 380,
+            "name": "NA T13-C-11 Kalkfattig fuktig ur"
+          },
+          {
+            "id": 381,
+            "name": "NA T13-C-12 Intermediær og svakt kalkrik fuktig grov ur"
+          },
+          {
+            "id": 382,
+            "name": "NA T13-C-13 Intermediær og svakt kalkrik fuktig ur"
+          },
+          {
+            "id": 383,
+            "name": "NA T13-C-14 Sterkt kalkrik fuktig grov ur"
+          },
+          {
+            "id": 384,
+            "name": "NA T13-C-15 Sterkt kalkrik fuktig ur"
+          }
+        ]
+      },
+      {
+        "id": 385,
+        "name": "NA T14 Rabbe",
+        "children": [
+          {
+            "id": 386,
+            "name": "NA T14-C-1 Kalkfattig og intermediær rabbe"
+          },
+          {
+            "id": 387,
+            "name": "NA T14-C-2 Kalkrik rabbe"
+          }
+        ]
+      },
+      {
+        "id": 388,
+        "name": "NA T15 Fosse-eng",
+        "children": [
+          {
+            "id": 389,
+            "name": "NA T15-C-1 Kalkfattig og intermediær fosse-eng"
+          },
+          {
+            "id": 390,
+            "name": "NA T15-C-2 Kalkrik fosse-eng"
+          }
+        ]
+      },
+      {
+        "id": 391,
+        "name": "NA T16 Rasmarkhei og -eng",
+        "children": [
+          {
+            "id": 392,
+            "name": "NA T16-C-1 Kalkfattig rasmarkeng og -hei"
+          },
+          {
+            "id": 393,
+            "name": "NA T16-C-2 Intermediær rasmarkeng og -hei"
+          },
+          {
+            "id": 394,
+            "name": "NA T16-C-3 Svakt kalkrik rasmarkeng og -hei"
+          },
+          {
+            "id": 395,
+            "name": "NA T16-C-4 Sterkt kalkrik rasmarkeng og -hei"
+          },
+          {
+            "id": 396,
+            "name": "NA T16-C-5 Kildepåvirket intermediær rasmarkeng og -hei"
+          },
+          {
+            "id": 397,
+            "name": "NA T16-C-6 Kildepåvirket kalkrik rasmarkeng og -hei"
+          },
+          {
+            "id": 398,
+            "name": "NA T16-C-7 Sterkt raspreget rasmarkeng og -hei"
+          }
+        ]
+      },
+      {
+        "id": 399,
+        "name": "NA T17 Aktiv skredmark",
+        "children": [
+          {
+            "id": 400,
+            "name": "NA T17-C-1 Jordskred"
+          },
+          {
+            "id": 401,
+            "name": "NA T17-C-2 Grus- og sandskred "
+          },
+          {
+            "id": 402,
+            "name": "NA T17-C-3 Silt- og leirskred"
+          }
+        ]
+      },
+      {
+        "id": 403,
+        "name": "NA T18 Åpen flomfastmark",
+        "children": [
+          {
+            "id": 404,
+            "name": "NA T18-C-1 Åpne flomfastmarker på sand, grus og stein    "
+          },
+          {
+            "id": 405,
+            "name": "NA T18-C-2 Åpen flomfastmark på silt og leire"
+          },
+          {
+            "id": 406,
+            "name": "NA T18-C-3 Åpen flomfastmark på kalkrik grus og stein"
+          },
+          {
+            "id": 407,
+            "name": "NA T18-C-4 Åpen flomfastmark på sand med klart erosjonspreg"
+          }
+        ]
+      },
+      {
+        "id": 408,
+        "name": "NA T19 Oppfrysingsmark",
+        "children": [
+          {
+            "id": 409,
+            "name": "NA T19-C-1 Kalkfattige finjordsflekker"
+          },
+          {
+            "id": 410,
+            "name": "NA T19-C-2 Kalkrike finjordsflekker"
+          }
+        ]
+      },
+      {
+        "id": 411,
+        "name": "NA T20 Isinnfrysingsmark",
+        "children": [
+          {
+            "id": 412,
+            "name": "NA T20-C-1 Kalkfattig og intermediær isinnfrysingsmark"
+          },
+          {
+            "id": 413,
+            "name": "NA T20-C-2 Kalkrik isinnfrysingsmark"
+          }
+        ]
+      },
+      {
+        "id": 414,
+        "name": "NA T21 Sanddynemark",
+        "children": [
+          {
+            "id": 415,
+            "name": "NA T21-C-1 Forstrand og primærdyner  "
+          },
+          {
+            "id": 416,
+            "name": "NA T21-C-2 Kvite og grå dyner  "
+          },
+          {
+            "id": 417,
+            "name": "NA T21-C-3 Brune dyner og dynehei "
+          },
+          {
+            "id": 418,
+            "name": "NA T21-C-4 Dynetrau"
+          }
+        ]
+      },
+      {
+        "id": 419,
+        "name": "NA T22 Fjellgrashei og grastundra",
+        "children": [
+          {
+            "id": 420,
+            "name": "NA T22-C-1 Kalkfattig og intermediær fjellgrashei"
+          },
+          {
+            "id": 421,
+            "name": "NA T22-C-2 Kalkfattig og intermediær grassnøleie"
+          },
+          {
+            "id": 422,
+            "name": "NA T22-C-3 Kalkrik fjellgrashei"
+          },
+          {
+            "id": 423,
+            "name": "NA T22-C-4 Kalkrikt grassnøleie"
+          }
+        ]
+      },
+      {
+        "id": 424,
+        "name": "NA T23 Ferskvannsdriftvoll",
+        "children": [
+          {
+            "id": 425,
+            "name": "NA T23-C-1 Ferskvannsdriftvoll"
+          }
+        ]
+      },
+      {
+        "id": 426,
+        "name": "NA T24 Driftvoll",
+        "children": [
+          {
+            "id": 427,
+            "name": "NA T24-C-1 Beskyttede og moderat eksponerte driftvoller  "
+          },
+          {
+            "id": 428,
+            "name": "NA T24-C-2 Ettårsdriftvoll"
+          }
+        ]
+      },
+      {
+        "id": 429,
+        "name": "NA T25 Historisk skredmark",
+        "children": [
+          {
+            "id": 430,
+            "name": "NA T25-C-1 Historisk jordskred"
+          },
+          {
+            "id": 431,
+            "name": "NA T25-C-2 Historiske grus- og sandskred "
+          },
+          {
+            "id": 432,
+            "name": "NA T25-C-3 Historisk silt- og leirskred"
+          }
+        ]
+      },
+      {
+        "id": 433,
+        "name": "NA T26 Breforland og snøavsmeltingsområde",
+        "children": [
+          {
+            "id": 434,
+            "name": "NA T26-C-1 Fjellhei-initialer "
+          },
+          {
+            "id": 435,
+            "name": "NA T26-C-2 Snøleie-initialer "
+          },
+          {
+            "id": 436,
+            "name": "NA T26-C-3 Grus- og steindominert breforland i pionerfasen"
+          },
+          {
+            "id": 437,
+            "name": "NA T26-C-4 Breforland og snøavsmeltingsområder i pionérfase, dominert av fin grus, sand, silt til leire "
+          }
+        ]
+      },
+      {
+        "id": 438,
+        "name": "NA T27 Blokkmark",
+        "children": [
+          {
+            "id": 439,
+            "name": "NA T27-C-1 Kalkfattig og intermediær blokkmark"
+          },
+          {
+            "id": 440,
+            "name": "NA T27-C-2 Kalkfattig og intermediær snøleie-blokkmark"
+          },
+          {
+            "id": 441,
+            "name": "NA T27-C-3 Kalkrik blokkmark"
+          },
+          {
+            "id": 442,
+            "name": "NA T27-C-4 Kalkrik snøleie-blokkmark"
+          },
+          {
+            "id": 443,
+            "name": "NA T27-C-5 Blokkmark i vegetasjonsfritt snøleie"
+          },
+          {
+            "id": 444,
+            "name": "NA T27-C-6 Kalkfattig og intermediær rabbepreget blokkmark"
+          },
+          {
+            "id": 445,
+            "name": "NA T27-C-7 Kalkrik rabbepreget blokkmark"
+          }
+        ]
+      },
+      {
+        "id": 446,
+        "name": "NA T28 Polarørken",
+        "children": [
+          {
+            "id": 447,
+            "name": "NA T28-C-1 Kalkfattig polarørken"
+          },
+          {
+            "id": 448,
+            "name": "NA T28-C-2 Intermediær og svakt kalkrik polarørken"
+          },
+          {
+            "id": 449,
+            "name": "NA T28-C-3 Sterkt kalkrik polarørken"
+          }
+        ]
+      },
+      {
+        "id": 450,
+        "name": "NA T29 Grus- og steindominert strand og strandlinje",
+        "children": [
+          {
+            "id": 451,
+            "name": "NA T29-C-1 Stein- og grusstrender og strandlinjer i pionérfase på epilitoral fastmark "
+          },
+          {
+            "id": 452,
+            "name": "NA T29-C-2 Stein- og grusstrender og strandlinjer i etablerings- og konsolideringsfase på epilitoral fastmark "
+          },
+          {
+            "id": 453,
+            "name": "NA T29-C-3 Øvre skjellsandstrand med pionervegetasjon"
+          },
+          {
+            "id": 454,
+            "name": "NA T29-C-4 Øvre skjellsandstrand uten pionervegetasjon"
+          },
+          {
+            "id": 455,
+            "name": "NA T29-C-5 Stein- og grusstrender og strandlinjer i pionérfase i supralitoral "
+          },
+          {
+            "id": 456,
+            "name": "NA T29-C-6 Nedre skjellsandstrand med pionervegetasjon"
+          }
+        ]
+      },
+      {
+        "id": 457,
+        "name": "NA T30 Flomskogsmark",
+        "children": [
+          {
+            "id": 458,
+            "name": "NA T30-C-1 Flomskogsmarker på grus og stein    "
+          },
+          {
+            "id": 459,
+            "name": "NA T30-C-2 Flomskogsmarker på finmateriale "
+          },
+          {
+            "id": 460,
+            "name": "NA T30-C-3 Kildepåvirkede flomskogsmarker på finmateriale "
+          },
+          {
+            "id": 461,
+            "name": "NA T30-C-4 Erosjonspregede flomskogsmarker på finmateriale "
+          }
+        ]
+      },
+      {
+        "id": 462,
+        "name": "NA T31 Boreal hei",
+        "children": [
+          {
+            "id": 463,
+            "name": "NA T31-C-1 Kalkfattig boreal frisk hei"
+          },
+          {
+            "id": 464,
+            "name": "NA T31-C-2 Kalkfattig boreal lynghei"
+          },
+          {
+            "id": 465,
+            "name": "NA T31-C-3 Kalkfattig boreal lavhei"
+          },
+          {
+            "id": 466,
+            "name": "NA T31-C-4 Intermediær boreal frisk hei"
+          },
+          {
+            "id": 467,
+            "name": "NA T31-C-5 Intermediær boreal lynghei"
+          },
+          {
+            "id": 468,
+            "name": "NA T31-C-6 Intermediær boreal lavhei"
+          },
+          {
+            "id": 469,
+            "name": "NA T31-C-7 Svakt kalkrik boreal frisk hei"
+          },
+          {
+            "id": 470,
+            "name": "NA T31-C-8 Svakt kalkrik boreal lynghei"
+          },
+          {
+            "id": 471,
+            "name": "NA T31-C-9 Svakt kalkrik boreal lavhei"
+          },
+          {
+            "id": 472,
+            "name": "NA T31-C-10 Sterkt kalkrik boreal frisk hei"
+          },
+          {
+            "id": 473,
+            "name": "NA T31-C-11 Sterkt kalkrik boreal lynghei"
+          },
+          {
+            "id": 474,
+            "name": "NA T31-C-12 Sterkt kalkrik boreal lavhei"
+          },
+          {
+            "id": 475,
+            "name": "NA T31-C-13 Intermediær kildepåvirket boreal frisk hei"
+          },
+          {
+            "id": 476,
+            "name": "NA T31-C-14 Kalkrik kildepåvirket boreal frisk hei"
+          }
+        ]
+      },
+      {
+        "id": 477,
+        "name": "NA T32 Semi-naturlig eng",
+        "children": [
+          {
+            "id": 478,
+            "name": "NA T32-C-1 Kalkfattig eng med mindre hevdpreg"
+          },
+          {
+            "id": 479,
+            "name": "NA T32-C-2 Kalkfattig eng med klart hevdpreg"
+          },
+          {
+            "id": 480,
+            "name": "NA T32-C-3 Intermediær eng med mindre hevdpreg"
+          },
+          {
+            "id": 481,
+            "name": "NA T32-C-4 Intermediære enger med ekstensivt og svakt intensivt hevdpreg "
+          },
+          {
+            "id": 482,
+            "name": "NA T32-C-5 Svakt kalkrik eng med mindre hevdpreg"
+          },
+          {
+            "id": 483,
+            "name": "NA T32-C-6 Svakt kalkrike enger med ekstensivt og svakt intensivt hevdpreg "
+          },
+          {
+            "id": 484,
+            "name": "NA T32-C-7 Sterkt kalkrik eng med mindre hevdpreg"
+          },
+          {
+            "id": 485,
+            "name": "NA T32-C-8 Sterkt kalkrik eng med ekstensivt hevdpreg"
+          },
+          {
+            "id": 486,
+            "name": "NA T32-C-9 Kalkrik fukteng med mindre hevdpreg"
+          },
+          {
+            "id": 487,
+            "name": "NA T32-C-10 Kalkrik fukteng med klart hevdpreg og gjødselpåvirkning"
+          },
+          {
+            "id": 488,
+            "name": "NA T32-C-11 Kalkfattig tørreng med mindre hevdpreg"
+          },
+          {
+            "id": 489,
+            "name": "NA T32-C-12 Kalkfattig tørreng med klart hevdpreg"
+          },
+          {
+            "id": 490,
+            "name": "NA T32-C-13 Intermediær tørreng med mindre hevdpreg"
+          },
+          {
+            "id": 491,
+            "name": "NA T32-C-14 Intermediær tørreng med klart hevdpreg og gjødselpåvirkning"
+          },
+          {
+            "id": 492,
+            "name": "NA T32-C-15 Svakt kalkrik tørreng med mindre hevdpreg"
+          },
+          {
+            "id": 493,
+            "name": "NA T32-C-16 Svakt kalkrik tørreng med klart hevdpreg og gjødselpåvirkning"
+          },
+          {
+            "id": 494,
+            "name": "NA T32-C-17 Sterkt kalkrik tørreng med mindre hevdpreg"
+          },
+          {
+            "id": 495,
+            "name": "NA T32-C-18 Sterkt kalkrik tørreng med klart hevdpreg"
+          },
+          {
+            "id": 496,
+            "name": "NA T32-C-19 Sanddyne-eng med klart hevdpreg og gjødselpåvirkning"
+          }
+        ]
+      },
+      {
+        "id": 497,
+        "name": "NA T33 Semi-naturlig strandeng",
+        "children": [
+          {
+            "id": 498,
+            "name": "NA T33-C-1 Nedre semi-naturlig strandeng"
+          },
+          {
+            "id": 499,
+            "name": "NA T33-C-2 Øvre semi-naturlig strandeng"
+          }
+        ]
+      },
+      {
+        "id": 500,
+        "name": "NA T34 Kystlynghei",
+        "children": [
+          {
+            "id": 501,
+            "name": "NA T34-C-1 Kalkfattig bakli-hei"
+          },
+          {
+            "id": 502,
+            "name": "NA T34-C-2 Kalkfattige kystlyngheier   "
+          },
+          {
+            "id": 503,
+            "name": "NA T34-C-3 Intermediær bakli-hei"
+          },
+          {
+            "id": 504,
+            "name": "NA T34-C-4 Intermediære kystlyngheier   "
+          },
+          {
+            "id": 505,
+            "name": "NA T34-C-5 Svakt kalkrike kystlyngheier   "
+          },
+          {
+            "id": 506,
+            "name": "NA T34-C-6 Sterkt kalkrike kystlyngheier   "
+          }
+        ]
+      },
+      {
+        "id": 507,
+        "name": "NA T35 Løs sterkt endret fastmark",
+        "children": [
+          {
+            "id": 508,
+            "name": "NA T35-C-1 Sterkt endret fastmark med jorddekke"
+          },
+          {
+            "id": 509,
+            "name": "NA T35-C-2 Sterkt endrede fastmarker med dekke av sand eller grus "
+          },
+          {
+            "id": 510,
+            "name": "NA T35-C-3 Sterkt endret fastmark med dekke av silt og leire"
+          }
+        ]
+      },
+      {
+        "id": 511,
+        "name": "NA T36 Tørrlagte våtmarks- og ferskvannssystemer",
+        "children": [
+          {
+            "id": 512,
+            "name": "NA T36-C-1 Sterkt endret tidligere våtmark"
+          },
+          {
+            "id": 513,
+            "name": "NA T36-C-2 Tørrlagt elvebunn"
+          },
+          {
+            "id": 514,
+            "name": "NA T36-C-3 Tørrlagt innsjøbunn"
+          }
+        ]
+      },
+      {
+        "id": 515,
+        "name": "NA T37 Ny løs fastmark",
+        "children": [
+          {
+            "id": 516,
+            "name": "NA T37-C-1 Slagghauger og deponier for fast kjemisk avfall"
+          },
+          {
+            "id": 517,
+            "name": "NA T37-C-2 Asfalt, løs betong o.l."
+          },
+          {
+            "id": 518,
+            "name": "NA T37-C-3 Avfallsdeponi o.l."
+          }
+        ]
+      },
+      {
+        "id": 519,
+        "name": "NA T38 Treplantasje",
+        "children": [
+          {
+            "id": 520,
+            "name": "NA T38-C-1 Treplantasje"
+          }
+        ]
+      },
+      {
+        "id": 521,
+        "name": "NA T39 Hard sterkt endret fastmark",
+        "children": [
+          {
+            "id": 522,
+            "name": "NA T39-C-1 Blokkdeponier   "
+          },
+          {
+            "id": 523,
+            "name": "NA T39-C-2 Blottlagt fast fjell   "
+          },
+          {
+            "id": 524,
+            "name": "NA T39-C-3 Fast fjell blottlagt ved tørrlegging eller nedtapping "
+          },
+          {
+            "id": 525,
+            "name": "NA T39-C-4 Sterkt modifiserte eller syntetiske, overveiende uorganisk faste substrater "
+          }
+        ]
+      },
+      {
+        "id": 526,
+        "name": "NA T40 Eng-liknende sterkt endret fastmark",
+        "children": [
+          {
+            "id": 527,
+            "name": "NA T40-C-1 Eng-liknende sterkt endret fastmark"
+          }
+        ]
+      },
+      {
+        "id": 528,
+        "name": "NA T41 Eng-liknende oppdyrket mark",
+        "children": [
+          {
+            "id": 529,
+            "name": "NA T41-C-1 Eng-liknende oppdyrket mark"
+          }
+        ]
+      },
+      {
+        "id": 530,
+        "name": "NA T42 Blomsterbed og liknende",
+        "children": [
+          {
+            "id": 531,
+            "name": "NA T42-C-1 Blomsterbed og liknende"
+          }
+        ]
+      },
+      {
+        "id": 532,
+        "name": "NA T43 Plener, parker og liknende",
+        "children": [
+          {
+            "id": 533,
+            "name": "NA T43-C-1 Plener, parker og liknende"
+          }
+        ]
+      },
+      {
+        "id": 534,
+        "name": "NA T44 Åker",
+        "children": [
+          {
+            "id": 535,
+            "name": "NA T44-C-1 Åker"
+          }
+        ]
+      },
+      {
+        "id": 536,
+        "name": "NA T45 Oppdyrket varig eng",
+        "children": [
+          {
+            "id": 537,
+            "name": "NA T45-C-1 Oppdyrkede varige enger med lite intensivt hevdpreg "
+          },
+          {
+            "id": 538,
+            "name": "NA T45-C-2 Oppdyrket intensiv slåtteeng"
+          },
+          {
+            "id": 539,
+            "name": "NA T45-C-3 Oppdyrket svært intensiv slåtteeng"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": 540,
+    "name": "NA V Våtmarkssystemer",
+    "children": [
+      {
+        "id": 541,
+        "name": "NA V1 Åpen jordvannsmyr",
+        "children": [
+          {
+            "id": 542,
+            "name": "NA V1-C-1 Svært og temmelig kalkfattige myrflater"
+          },
+          {
+            "id": 543,
+            "name": "NA V1-C-2 Litt kalkfattige og svakt intermediære myrflater"
+          },
+          {
+            "id": 544,
+            "name": "NA V1-C-3 Sterkt intermediære og litt kalkrike myrflater "
+          },
+          {
+            "id": 545,
+            "name": "NA V1-C-4 Temmelig til ekstremt kalkrike myrflater "
+          },
+          {
+            "id": 546,
+            "name": "NA V1-C-5 Svært og temmelig kalkfattige myrkanter "
+          },
+          {
+            "id": 547,
+            "name": "NA V1-C-6 Litt kalkfattige og svakt intermediære myrkanter "
+          },
+          {
+            "id": 548,
+            "name": "NA V1-C-7 Sterkt intermediære og litt kalkrike myrkanter "
+          },
+          {
+            "id": 549,
+            "name": "NA V1-C-8 Temmelig til ekstremt kalkrike myrkanter"
+          },
+          {
+            "id": 550,
+            "name": "NA V1-C-9 Saltpåvirket myrkant"
+          }
+        ]
+      },
+      {
+        "id": 551,
+        "name": "NA V2 Myr- og sumpskogsmark",
+        "children": [
+          {
+            "id": 552,
+            "name": "NA V2-C-1 Kalkfattige og svakt intermediære myr- og sumpskogsmarker     "
+          },
+          {
+            "id": 553,
+            "name": "NA V2-C-2 Sterkt intermediære litt kalkrike myr- og sumpskog-marker "
+          },
+          {
+            "id": 554,
+            "name": "NA V2-C-3 Temmelig til ekstremt kalkrike myr- og sumpskogsmarker     "
+          }
+        ]
+      },
+      {
+        "id": 555,
+        "name": "NA V3 Nedbørsmyr",
+        "children": [
+          {
+            "id": 556,
+            "name": "NA V3-C-1 Ombrotrofe myrflater"
+          },
+          {
+            "id": 557,
+            "name": "NA V3-C-2 Ombrotrof myrkant"
+          }
+        ]
+      },
+      {
+        "id": 558,
+        "name": "NA V4 Kaldkilde",
+        "children": [
+          {
+            "id": 559,
+            "name": "NA V4-C-1 Litt kalkfattig og svakt intermediær svakkilde"
+          },
+          {
+            "id": 560,
+            "name": "NA V4-C-2 Sterkt intermediære og litt kalkrike kilder    "
+          },
+          {
+            "id": 561,
+            "name": "NA V4-C-3 Temmelig til ekstremt kalkrike kilder    "
+          },
+          {
+            "id": 562,
+            "name": "NA V4-C-4 Sterkt intermediære og litt kalkrike torvmarkskilder"
+          },
+          {
+            "id": 563,
+            "name": "NA V4-C-5 Temmelig til ekstremt kalkrike torvmarkskilder    "
+          }
+        ]
+      },
+      {
+        "id": 564,
+        "name": "NA V5 Varm kilde",
+        "children": [
+          {
+            "id": 565,
+            "name": "NA V5-C-1 Svak varmkilde"
+          },
+          {
+            "id": 566,
+            "name": "NA V5-C-2 Klar varmkilde"
+          }
+        ]
+      },
+      {
+        "id": 567,
+        "name": "NA V6 Våtsnøleie og snøleiekilde",
+        "children": [
+          {
+            "id": 568,
+            "name": "NA V6-C-1 Kalkfattig og intermediært moderat våtsnøleie"
+          },
+          {
+            "id": 569,
+            "name": "NA V6-C-2 Kalkrikt moderat våtsnøleie"
+          },
+          {
+            "id": 570,
+            "name": "NA V6-C-3 Kalkfattig og intermediært seint våtsnøleie"
+          },
+          {
+            "id": 571,
+            "name": "NA V6-C-4 Kalkrikt seint våtsnøleie"
+          },
+          {
+            "id": 572,
+            "name": "NA V6-C-5 Kalkfattig og intermediært ekstrem-våtsnøleie"
+          },
+          {
+            "id": 573,
+            "name": "NA V6-C-6 Kalkrikt ekstrem-våtsnøleie"
+          },
+          {
+            "id": 574,
+            "name": "NA V6-C-7 Kalkfattig og intermediært seint kildesnøleie"
+          },
+          {
+            "id": 575,
+            "name": "NA V6-C-8 Kalkrikt seint kildesnøleie"
+          },
+          {
+            "id": 576,
+            "name": "NA V6-C-9 Ekstrem-kildesnøleie"
+          }
+        ]
+      },
+      {
+        "id": 577,
+        "name": "NA V7 Arktisk permafrost-våtmark",
+        "children": [
+          {
+            "id": 578,
+            "name": "NA V7-C-1 Kalkfattig og intermediær permafrost-våtmark"
+          },
+          {
+            "id": 579,
+            "name": "NA V7-C-2 Kalkrik permafrost-våtmark"
+          }
+        ]
+      },
+      {
+        "id": 580,
+        "name": "NA V8 Strandsumpskogsmark",
+        "children": [
+          {
+            "id": 581,
+            "name": "NA V8-C-1 Kalkfattig og intermediær strand- og sumpskogsmark"
+          },
+          {
+            "id": 582,
+            "name": "NA V8-C-2 Kalkrik strand- og sumpskogsmark"
+          },
+          {
+            "id": 583,
+            "name": "NA V8-C-3 Saltpåvirket strand- og sumpskogsmark"
+          }
+        ]
+      },
+      {
+        "id": 584,
+        "name": "NA V9 Semi-naturlig myr",
+        "children": [
+          {
+            "id": 585,
+            "name": "NA V9-C-1 Kalkfattig semi-naturlig myr"
+          },
+          {
+            "id": 586,
+            "name": "NA V9-C-2 Intermediær semi-naturlig myr"
+          },
+          {
+            "id": 587,
+            "name": "NA V9-C-3 Kalkrik semi-naturlig myr"
+          }
+        ]
+      },
+      {
+        "id": 588,
+        "name": "NA V10 Semi-naturlig våteng",
+        "children": [
+          {
+            "id": 589,
+            "name": "NA V10-C-1 Intermediær våteng"
+          },
+          {
+            "id": 590,
+            "name": "NA V10-C-2 Kalkrik våteng"
+          },
+          {
+            "id": 591,
+            "name": "NA V10-C-3 Kildevannspåvirket våteng"
+          }
+        ]
+      },
+      {
+        "id": 592,
+        "name": "NA V11 Torvtak",
+        "children": [
+          {
+            "id": 593,
+            "name": "NA V11-C-1 Kalkfattig torvtak"
+          },
+          {
+            "id": 594,
+            "name": "NA V11-C-2 Kalkrikt torvtak"
+          }
+        ]
+      },
+      {
+        "id": 595,
+        "name": "NA V12 Grøftet torvmark",
+        "children": [
+          {
+            "id": 596,
+            "name": "NA V12-C-1 Grøftet kalkfattig jordvannsmyr"
+          },
+          {
+            "id": 597,
+            "name": "NA V12-C-2 Grøftet kalkrik jordvannsmyr"
+          },
+          {
+            "id": 598,
+            "name": "NA V12-C-3 Grøftet nedbørsmyr"
+          }
+        ]
+      },
+      {
+        "id": 599,
+        "name": "NA V13 Ny våtmark",
+        "children": [
+          {
+            "id": 600,
+            "name": "NA V13-C-1 Nye våtmarker med opprinnelse i sterkt endrede fastmarkssystemer "
+          },
+          {
+            "id": 601,
+            "name": "NA V13-C-2 Nye våtmarker med opprinnelse i jordbruksmark på fastmark "
+          },
+          {
+            "id": 602,
+            "name": "NA V13-C-3 Nye våtmarker med opprinnelse i neddemt skogsmark "
+          },
+          {
+            "id": 603,
+            "name": "NA V13-C-4 Nye våtmarker med opprinnelse i ferskvannsbunn   "
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": 604,
+    "name": "NA H Marine vannmasser",
+    "children": [
+      {
+        "id": 605,
+        "name": "NA H1 Havvannmasser",
+        "children": [
+          {
+            "id": 606,
+            "name": "NA H1-1 Epipelagiale havvannmasser"
+          },
+          {
+            "id": 607,
+            "name": "NA H1-2 Mesopelagiale havvannmasser"
+          },
+          {
+            "id": 608,
+            "name": "NA H1-3 Bathypelagiale havvannmasser"
+          },
+          {
+            "id": 609,
+            "name": "NA H1-4 Abyssopelagiale havvannmasser"
+          },
+          {
+            "id": 610,
+            "name": "NA H1-5 Epipelagiale kystvannmasser"
+          }
+        ]
+      },
+      {
+        "id": 611,
+        "name": "NA H2 Sirkulerende vannmasser i fysisk avgrensede saltvannsforekomster",
+        "children": [
+          {
+            "id": 612,
+            "name": "NA H2-1 Fjord"
+          },
+          {
+            "id": 613,
+            "name": "NA H2-2 Stor poll"
+          },
+          {
+            "id": 614,
+            "name": "NA H2-3 Middels stor eller liten poll"
+          },
+          {
+            "id": 615,
+            "name": "NA H2-4 Stort litoralbasseng"
+          },
+          {
+            "id": 616,
+            "name": "NA H2-5 Lite litoralbasseng"
+          },
+          {
+            "id": 617,
+            "name": "NA H2-6 Temporært litoralbasseng"
+          },
+          {
+            "id": 618,
+            "name": "NA H2-7 Stor brakkvannspoll"
+          },
+          {
+            "id": 619,
+            "name": "NA H2-8 Middels stor eller liten brakkvannspoll"
+          }
+        ]
+      },
+      {
+        "id": 620,
+        "name": "NA H3 Ikke-sirkulerende marine vannmasser i fysisk avgrensede saltvannsforekomster"
+      },
+      {
+        "id": 621,
+        "name": "NA H4 Sterkt endrete marine vannmasser",
+        "children": [
+          {
+            "id": 622,
+            "name": "NA H4-1 Vannmasser sterkt endret gjennom fysiske inngrep"
+          },
+          {
+            "id": 623,
+            "name": "NA H4-2 Vannmasser sterkt endret gjennom kjemiske inngrep"
+          },
+          {
+            "id": 624,
+            "name": "NA H4-3 Vannmasser sterkt endret gjennom biologiske inngrep"
+          },
+          {
+            "id": 625,
+            "name": "NA H4-4 Nye marine vannmasser"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": 626,
+    "name": "NA F Limniske vannmasser",
+    "children": [
+      {
+        "id": 627,
+        "name": "NA F1 Elvevannmasser",
+        "children": [
+          {
+            "id": 628,
+            "name": "NA F1-1 Kalkfattige elvevannmasser"
+          },
+          {
+            "id": 629,
+            "name": "NA F1-2 Kalkfattige humøse elvevannmasser"
+          },
+          {
+            "id": 630,
+            "name": "NA F1-3 Vannmasser i stryk og fosser"
+          },
+          {
+            "id": 631,
+            "name": "NA F1-4 Humøse vannmasser i stryk og fosser"
+          },
+          {
+            "id": 632,
+            "name": "NA F1-5 Kalkrike elvevannmasser"
+          },
+          {
+            "id": 633,
+            "name": "NA F1-6 Kalkrike humøse elvevannmasser"
+          }
+        ]
+      },
+      {
+        "id": 634,
+        "name": "NA F2 Sirkulerende innsjøvannmasser",
+        "children": [
+          {
+            "id": 635,
+            "name": "NA F2-1 Klare kalkfattige innsjømasser i dype innsjøer med sjikting"
+          },
+          {
+            "id": 636,
+            "name": "NA F2-2 Klare intermediære innsjømasser i dype innsjøer med sjikting"
+          },
+          {
+            "id": 637,
+            "name": "NA F2-3 Klare kalkrike innsjømasser i dype innsjøer med sjikting"
+          },
+          {
+            "id": 638,
+            "name": "NA F2-4 Klare kalkfattige innsjømasser i små og/eller grunne innsjøer"
+          },
+          {
+            "id": 639,
+            "name": "NA F2-5 Klare intermediære innsjømasser i små og/eller grunne innsjøer"
+          },
+          {
+            "id": 640,
+            "name": "NA F2-6 Klare kalkrike innsjømasser i små og/eller grunne innsjøer"
+          },
+          {
+            "id": 641,
+            "name": "NA F2-7 Klare kalkfattige innsjømasser i dammer eller pytter"
+          },
+          {
+            "id": 642,
+            "name": "NA F2-8 Klare intermediære innsjømasser i dammer eller pytter"
+          },
+          {
+            "id": 643,
+            "name": "NA F2-9 Klare kalkrike innsjømasser i dammer eller pytter"
+          },
+          {
+            "id": 644,
+            "name": "NA F2-10 Temporære vannforekomster"
+          },
+          {
+            "id": 645,
+            "name": "NA F2-11 Turbide innsjømasser i dype innsjøer med sjikting"
+          },
+          {
+            "id": 646,
+            "name": "NA F2-12 Klare kalkfattige turbide innsjømasser i små og/eller grunne innsjøer"
+          },
+          {
+            "id": 647,
+            "name": "NA F2-13 Humøse kalkfattige innsjømasser i dype innsjøer med sjikting"
+          },
+          {
+            "id": 648,
+            "name": "NA F2-14 Humøse intermediære innsjømasser i dype innsjøer med sjikting"
+          },
+          {
+            "id": 649,
+            "name": "NA F2-15 Humøse kalkrike innsjømasser i dype innsjøer med sjikting"
+          },
+          {
+            "id": 650,
+            "name": "NA F2-16 Humøse kalkfattige innsjømasser i små og/eller grunne innsjøer"
+          },
+          {
+            "id": 651,
+            "name": "NA F2-17 Humøse intermediære innsjømasser i små og/eller grunne innsjøer"
+          },
+          {
+            "id": 652,
+            "name": "NA F2-18 Humøse kalkrike innsjømasser i små og/eller grunne innsjøer"
+          },
+          {
+            "id": 653,
+            "name": "NA F2-19 Humøse kalkfattige innsjømasser i dammer eller pytter"
+          },
+          {
+            "id": 654,
+            "name": "NA F2-20 Humøse intermediære innsjømasser i dammer eller pytter"
+          },
+          {
+            "id": 655,
+            "name": "NA F2-21 Humøse kalkrike innsjømasser i dammer eller pytter"
+          }
+        ]
+      },
+      {
+        "id": 656,
+        "name": "NA F3 Ikke-sirkulerende innsjøvannmasser"
+      },
+      {
+        "id": 657,
+        "name": "NA F4 Sterkt endrete elvevannmasser",
+        "children": [
+          {
+            "id": 658,
+            "name": "NA F4-1 Elvevannmasser sterkt endret gjennom fysisk inngrep"
+          },
+          {
+            "id": 659,
+            "name": "NA F4-2 Elvevannmasser sterkt endret gjennom kjemisk inngrep"
+          },
+          {
+            "id": 660,
+            "name": "NA F4-3 Elvevannmasser sterkt endret gjennom biologisk inngrep"
+          }
+        ]
+      },
+      {
+        "id": 661,
+        "name": "NA F5 Sterkt endrete innsjøvannmasser",
+        "children": [
+          {
+            "id": 662,
+            "name": "NA F5-1 Innsjøvannmasser sterkt endret gjennom fysisk inngrep"
+          },
+          {
+            "id": 663,
+            "name": "NA F5-2 Innsjøvannmasser sterkt endret gjennom kjemisk inngrep"
+          },
+          {
+            "id": 664,
+            "name": "NA F5-3 Innsjøvannmasser sterkt endret gjennom biologisk inngrep"
+          },
+          {
+            "id": 665,
+            "name": "NA F5-4 Nye innsjøvannmasser"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": 666,
+    "name": "NA I Snø- og issystemer",
+    "children": [
+      {
+        "id": 667,
+        "name": "NA I1 Snø- og isdekt fastmark"
+      },
+      {
+        "id": 668,
+        "name": "NA I2 Polar havis"
+      }
+    ]
+  }
+]

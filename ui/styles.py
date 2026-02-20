@@ -80,6 +80,16 @@ QLineEdit:focus {
     border: 2px solid #3498db;
 }
 
+/* Inline editors in item views need tighter padding to avoid clipped text. */
+QAbstractItemView QLineEdit {
+    margin: 0px;
+    padding: 1px 4px;
+    border: 1px solid #6aa9e9;
+    border-radius: 3px;
+    background-color: white;
+    color: #2c3e50;
+}
+
 QTextEdit {
     background-color: white;
     border: 2px solid #e0e0e0;
@@ -91,6 +101,37 @@ QTextEdit {
 
 QLabel {
     color: #2c3e50;
+}
+
+QLabel[hint_interactive="true"] {
+    color: #2c3e50;
+}
+
+QTableView,
+QTableWidget,
+QTreeView,
+QListView,
+QListWidget {
+    selection-background-color: #d9e9f8;
+    selection-color: #1f2d3d;
+}
+
+QTableView::item:selected,
+QTableWidget::item:selected,
+QTreeView::item:selected,
+QListView::item:selected,
+QListWidget::item:selected {
+    background-color: #d9e9f8;
+    color: #1f2d3d;
+}
+
+QTableView::item:selected:!active,
+QTableWidget::item:selected:!active,
+QTreeView::item:selected:!active,
+QListView::item:selected:!active,
+QListWidget::item:selected:!active {
+    background-color: #eaf3ff;
+    color: #1f2d3d;
 }
 
 QLabel#imageLabel {

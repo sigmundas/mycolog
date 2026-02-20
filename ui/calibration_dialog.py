@@ -1600,8 +1600,8 @@ class CalibrationDialog(QDialog):
         self.history_table.setMinimumHeight(150)
         self.history_table.setMaximumHeight(220)
         self.history_table.setStyleSheet(
-            "QTableWidget::item:selected { background: #2d89ef; color: #ffffff; }"
-            "QTableWidget::item:selected:!active { background: #9bbce5; color: #000000; }"
+            "QTableWidget::item:selected { background: #d9e9f8; color: #1f2d3d; }"
+            "QTableWidget::item:selected:!active { background: #eaf3ff; color: #1f2d3d; }"
         )
         # Click row to view calibration
         self.history_table.cellClicked.connect(self._on_history_row_clicked)

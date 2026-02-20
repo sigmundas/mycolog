@@ -124,8 +124,21 @@ def migrate_database():
             cursor.execute("ALTER TABLE observations ADD COLUMN citation TEXT")
         if "data_provider" not in columns:
             cursor.execute("ALTER TABLE observations ADD COLUMN data_provider TEXT")
+        if "unspontaneous" not in columns:
+            cursor.execute("ALTER TABLE observations ADD COLUMN unspontaneous INTEGER DEFAULT 0")
+        if "determination_method" not in columns:
+            cursor.execute("ALTER TABLE observations ADD COLUMN determination_method INTEGER")
+        if "mushroomobserver_id" not in columns:
+            cursor.execute("ALTER TABLE observations ADD COLUMN mushroomobserver_id INTEGER")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_observations_species ON observations(genus, species)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_observations_source ON observations(source_type)")
+
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='images'")
+    if cursor.fetchone():
+        cursor.execute("PRAGMA table_info(images)")
+        columns = {col[1] for col in cursor.fetchall()}
+        if "artsobs_web_unpublished" not in columns:
+            cursor.execute("ALTER TABLE images ADD COLUMN artsobs_web_unpublished INTEGER DEFAULT 0")
 
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='calibrations'")
     if cursor.fetchone():

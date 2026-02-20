@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QEvent
 from PySide6.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -14,10 +14,11 @@ from PySide6.QtWidgets import (
     QLabel,
     QSpinBox,
     QMessageBox,
-    QToolBox,
+    QTabWidget,
     QListWidget,
     QListWidgetItem,
     QWidget,
+    QSizePolicy,
 )
 
 from database.models import SettingsDB
@@ -29,6 +30,7 @@ from database.schema import (
     init_database,
 )
 from database.database_tags import DatabaseTerms
+from .hint_status import HintStatusController
 
 
 class DatabaseSettingsDialog(QDialog):
@@ -40,6 +42,12 @@ class DatabaseSettingsDialog(QDialog):
         ("sample", "Sample types"),
         ("measure", "Measure categories"),
     )
+    CONTRAST_HINTS = {
+        "bf": "BF - Brightfield",
+        "df": "DF - Darkfield",
+        "dic": "DIC - Differential interference contrast",
+        "phase": "Phase - Phase contrast",
+    }
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -49,6 +57,10 @@ class DatabaseSettingsDialog(QDialog):
         self.setMinimumHeight(580)
         self._tag_lists: dict[str, QListWidget] = {}
         self._category_order: list[str] = [category for category, _ in self.TAG_CATEGORIES]
+        self._default_hint_text = self.tr(
+            "Predefined tags can be toggled on/off. Add custom tags as you like"
+        )
+        self._hint_controller: HintStatusController | None = None
         self.init_ui()
 
     def init_ui(self):
@@ -88,21 +100,11 @@ class DatabaseSettingsDialog(QDialog):
         tags_label.setStyleSheet("font-weight: bold;")
         layout.addWidget(tags_label)
 
-        hint = QLabel(
-            self.tr(
-                "One category is visible at a time. "
-                "Use Add/Remove custom tag for the active category."
-            )
-        )
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
-        layout.addWidget(hint)
-
-        self.tag_toolbox = QToolBox()
+        self.tag_tabs = QTabWidget()
         for category, label in self.TAG_CATEGORIES:
             page = self._build_tag_page(category)
-            self.tag_toolbox.addItem(page, self.tr(label))
-        layout.addWidget(self.tag_toolbox, 1)
+            self.tag_tabs.addTab(page, self.tr(label))
+        layout.addWidget(self.tag_tabs, 1)
 
         custom_row = QHBoxLayout()
         self.add_custom_btn = QPushButton(self.tr("Add custom tag"))
@@ -114,16 +116,26 @@ class DatabaseSettingsDialog(QDialog):
         custom_row.addStretch()
         layout.addLayout(custom_row)
 
-        buttons = QHBoxLayout()
-        buttons.addStretch()
+        bottom_row = QHBoxLayout()
+        self.hint_bar = QLabel("")
+        self.hint_bar.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.hint_bar.setWordWrap(True)
+        self.hint_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.hint_bar.setStyleSheet(
+            "background: transparent; border: none; color: #222222; font-size: 9pt;"
+        )
+        bottom_row.addWidget(self.hint_bar, 1)
+        self._hint_controller = HintStatusController(self.hint_bar, self)
+        self.set_hint(self._default_hint_text)
+
         save_btn = QPushButton(self.tr("Save"))
         save_btn.setObjectName("primaryButton")
         save_btn.clicked.connect(self._save)
         cancel_btn = QPushButton(self.tr("Cancel"))
         cancel_btn.clicked.connect(self.reject)
-        buttons.addWidget(save_btn)
-        buttons.addWidget(cancel_btn)
-        layout.addLayout(buttons)
+        bottom_row.addWidget(save_btn)
+        bottom_row.addWidget(cancel_btn)
+        layout.addLayout(bottom_row)
 
         self._load_settings()
 
@@ -133,24 +145,23 @@ class DatabaseSettingsDialog(QDialog):
         page_layout.setContentsMargins(8, 8, 8, 8)
         page_layout.setSpacing(6)
 
-        info = QLabel(
-            self.tr(
-                "Predefined tags can be toggled on/off. "
-                "Custom tags are editable and saved as canonical values."
-            )
-        )
-        info.setWordWrap(True)
-        info.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
-        page_layout.addWidget(info)
-
         tag_list = QListWidget()
         tag_list.setAlternatingRowColors(True)
+        tag_list.setMouseTracking(True)
+        tag_list.viewport().setMouseTracking(True)
+        tag_list.itemEntered.connect(self._on_tag_item_hovered)
+        tag_list.viewport().installEventFilter(self)
+        tag_list.setStyleSheet(
+            "QListWidget::item:selected { background: #d9e9f8; color: #1f2d3d; }"
+            "QListWidget::item:selected:!active { background: #d9e9f8; color: #1f2d3d; }"
+            "QListWidget::item:hover { background: #edf5fd; color: #1f2d3d; }"
+        )
         page_layout.addWidget(tag_list, 1)
         self._tag_lists[category] = tag_list
         return page
 
     def _active_category(self) -> str:
-        idx = self.tag_toolbox.currentIndex()
+        idx = self.tag_tabs.currentIndex()
         if idx < 0 or idx >= len(self._category_order):
             return self._category_order[0]
         return self._category_order[idx]
@@ -171,6 +182,10 @@ class DatabaseSettingsDialog(QDialog):
             item.setCheckState(Qt.Checked if canonical in enabled else Qt.Unchecked)
             item.setData(Qt.UserRole, canonical)
             item.setData(Qt.UserRole + 1, "predefined")
+            if category == "contrast":
+                contrast_hint = self.CONTRAST_HINTS.get(str(canonical).strip().lower())
+                if contrast_hint:
+                    item.setData(Qt.UserRole + 2, self.tr(contrast_hint))
             tag_list.addItem(item)
 
         for canonical in current_tags:
@@ -223,6 +238,25 @@ class DatabaseSettingsDialog(QDialog):
         if item.data(Qt.UserRole + 1) != "custom":
             return
         tag_list.takeItem(tag_list.row(item))
+
+    def set_hint(self, text: str | None, tone: str = "info") -> None:
+        if self._hint_controller is not None:
+            self._hint_controller.set_hint(text, tone=tone)
+
+    def _on_tag_item_hovered(self, item: QListWidgetItem) -> None:
+        hint_text = item.data(Qt.UserRole + 2) if item is not None else None
+        if isinstance(hint_text, str) and hint_text.strip():
+            self.set_hint(hint_text)
+        else:
+            self.set_hint(self._default_hint_text)
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Leave:
+            for tag_list in self._tag_lists.values():
+                if watched is tag_list.viewport():
+                    self.set_hint(self._default_hint_text)
+                    break
+        return super().eventFilter(watched, event)
 
     def _load_settings(self):
         settings = get_app_settings()

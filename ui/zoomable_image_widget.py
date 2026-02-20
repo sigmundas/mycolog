@@ -68,6 +68,10 @@ class ZoomableImageLabel(QLabel):
         self.crop_box = None
         self.crop_preview = None
         self.crop_aspect_ratio = None
+        self.crop_hovered = False
+        self.crop_dragging = False
+        self.crop_drag_start = None
+        self.crop_drag_initial_box = None
 
     def set_image_sources(self, pixmap, full_path=None, preview_scaled=False):
         """Set image with optional full-resolution source."""
@@ -377,12 +381,21 @@ class ZoomableImageLabel(QLabel):
         if not self.crop_mode:
             self.crop_start = None
             self.crop_preview = None
+            self.crop_hovered = False
+            self.crop_dragging = False
+            self.crop_drag_start = None
+            self.crop_drag_initial_box = None
         self.setCursor(Qt.CrossCursor if self.crop_mode else Qt.ArrowCursor)
         self.update()
 
     def set_crop_box(self, box):
         """Set current crop box (x1, y1, x2, y2) in image coords."""
         self.crop_box = box
+        if not box:
+            self.crop_hovered = False
+            self.crop_dragging = False
+            self.crop_drag_start = None
+            self.crop_drag_initial_box = None
         self.update()
 
     def set_crop_aspect_ratio(self, ratio):
@@ -392,6 +405,12 @@ class ZoomableImageLabel(QLabel):
     def clear_crop_box(self):
         """Clear current crop box."""
         self.crop_box = None
+        self.crop_preview = None
+        self.crop_start = None
+        self.crop_hovered = False
+        self.crop_dragging = False
+        self.crop_drag_start = None
+        self.crop_drag_initial_box = None
         self.update()
 
     def set_preview_line(self, start_point):
@@ -591,6 +610,16 @@ class ZoomableImageLabel(QLabel):
     def mousePressEvent(self, event):
         """Handle mouse press for panning or clicking."""
         if event.button() == Qt.LeftButton:
+            if self.original_pixmap and self.crop_box:
+                start = self.screen_to_image(event.position())
+                if start and self._point_in_crop_box(start, self.crop_box):
+                    self.crop_dragging = True
+                    self.crop_drag_start = QPointF(start)
+                    self.crop_drag_initial_box = tuple(self.crop_box)
+                    self.crop_hovered = True
+                    self.setCursor(Qt.ClosedHandCursor)
+                    self.update()
+                    return
             if self.crop_mode:
                 if self.original_pixmap:
                     start = self.screen_to_image(event.position())
@@ -618,17 +647,41 @@ class ZoomableImageLabel(QLabel):
 
     def mouseMoveEvent(self, event):
         """Handle mouse move for panning and preview line."""
-        if self.crop_mode and self.crop_start and self.original_pixmap:
-            current = self.screen_to_image(event.position())
-            if current:
-                if self.crop_aspect_ratio:
-                    current = self._constrain_crop_point(self.crop_start, current, self.crop_aspect_ratio)
-                self.crop_preview = (self.crop_start, current)
+        if self.crop_dragging and self.original_pixmap:
+            image_pos = self.screen_to_image(event.position())
+            if image_pos and self.crop_drag_start and self.crop_drag_initial_box:
+                x1, y1, x2, y2 = self.crop_drag_initial_box
+                dx = image_pos.x() - self.crop_drag_start.x()
+                dy = image_pos.y() - self.crop_drag_start.y()
+                width = float(self.original_pixmap.width())
+                height = float(self.original_pixmap.height())
+                dx = max(-x1, min(dx, width - x2))
+                dy = max(-y1, min(dy, height - y2))
+                moved_box = (x1 + dx, y1 + dy, x2 + dx, y2 + dy)
+                if moved_box != self.crop_box:
+                    self.crop_box = moved_box
+                    self.update()
+            return
+        if self.crop_mode:
+            image_pos = self.screen_to_image(event.position()) if self.original_pixmap else None
+            if self.crop_start and self.original_pixmap:
+                current = image_pos
+                if current:
+                    if self.crop_aspect_ratio:
+                        current = self._constrain_crop_point(self.crop_start, current, self.crop_aspect_ratio)
+                    self.crop_preview = (self.crop_start, current)
+                    self.update()
+                return
+            hovered = bool(image_pos and self.crop_box and self._point_in_crop_box(image_pos, self.crop_box))
+            if hovered != self.crop_hovered:
+                self.crop_hovered = hovered
                 self.update()
+            self.setCursor(Qt.OpenHandCursor if hovered else Qt.CrossCursor)
             return
         # Track mouse position for preview line
         if self.original_pixmap:
             self.current_mouse_pos = self.screen_to_image(event.position())
+            self._update_crop_hover(event.position())
             self._update_hover_rect(event.position())
             self._update_hover_lines(event.position())
 
@@ -642,6 +695,8 @@ class ZoomableImageLabel(QLabel):
             # Update cursor for shift+hover
             if event.modifiers() & Qt.ShiftModifier:
                 self.setCursor(Qt.OpenHandCursor)
+            elif self.crop_hovered and self.crop_box:
+                self.setCursor(Qt.OpenHandCursor)
             else:
                 self.setCursor(Qt.ArrowCursor)
 
@@ -651,6 +706,18 @@ class ZoomableImageLabel(QLabel):
 
     def mouseReleaseEvent(self, event):
         """Handle mouse release."""
+        if event.button() == Qt.LeftButton and self.crop_dragging:
+            self.crop_dragging = False
+            self.crop_drag_start = None
+            self.crop_drag_initial_box = None
+            if self.crop_box:
+                self.cropChanged.emit(self.crop_box)
+            if self.crop_mode:
+                self.setCursor(Qt.OpenHandCursor if self.crop_hovered else Qt.CrossCursor)
+            else:
+                self.setCursor(Qt.OpenHandCursor if self.crop_hovered else Qt.ArrowCursor)
+            self.update()
+            return
         if event.button() == Qt.LeftButton and self.is_panning:
             self.is_panning = False
             self.setCursor(Qt.ArrowCursor)
@@ -707,6 +774,27 @@ class ZoomableImageLabel(QLabel):
             new_x = max(0.0, min(w, new_x))
             new_y = max(0.0, min(h, new_y))
         return QPointF(new_x, new_y)
+
+    @staticmethod
+    def _point_in_crop_box(point: QPointF, crop_box: tuple[float, float, float, float]) -> bool:
+        x1, y1, x2, y2 = crop_box
+        left = min(x1, x2)
+        top = min(y1, y2)
+        right = max(x1, x2)
+        bottom = max(y1, y2)
+        return left <= point.x() <= right and top <= point.y() <= bottom
+
+    def _update_crop_hover(self, screen_pos) -> None:
+        if not self.original_pixmap or not self.crop_box:
+            if self.crop_hovered:
+                self.crop_hovered = False
+                self.update()
+            return
+        image_pos = self.screen_to_image(screen_pos)
+        hovered = bool(image_pos and self._point_in_crop_box(image_pos, self.crop_box))
+        if hovered != self.crop_hovered:
+            self.crop_hovered = hovered
+            self.update()
 
     def _update_hover_rect(self, screen_pos):
         """Update which measurement rectangle is under the cursor."""
@@ -1086,10 +1174,22 @@ class ZoomableImageLabel(QLabel):
             right = display_rect.x() + max(x1, x2) * self.zoom_level
             bottom = display_rect.y() + max(y1, y2) * self.zoom_level
             crop_color = QColor(243, 156, 18)
-            crop_pen = QPen(crop_color, 2)
-            crop_pen.setStyle(Qt.DashLine)
-            painter.setPen(crop_pen)
-            painter.setBrush(Qt.NoBrush)
+            is_highlighted = bool(self.crop_hovered or self.crop_dragging)
+            if is_highlighted:
+                glow_color = QColor(192, 57, 43, 110)
+                outline_color = QColor(211, 84, 0)
+                painter.setPen(QPen(glow_color, 6))
+                painter.setBrush(QColor(192, 57, 43, 20))
+                painter.drawRect(QRectF(left, top, right - left, bottom - top))
+                crop_pen = QPen(outline_color, 2)
+                crop_pen.setStyle(Qt.SolidLine)
+                painter.setPen(crop_pen)
+                painter.setBrush(Qt.NoBrush)
+            else:
+                crop_pen = QPen(crop_color, 2)
+                crop_pen.setStyle(Qt.DashLine)
+                painter.setPen(crop_pen)
+                painter.setBrush(Qt.NoBrush)
             painter.drawRect(QRectF(left, top, right - left, bottom - top))
 
             tag_text = "Crop"

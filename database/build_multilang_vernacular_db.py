@@ -1,17 +1,42 @@
 #!/usr/bin/env python3
 """
-Build a multi-language SQLite DB from a CSV of vernacular names.
+Build a multi-language SQLite DB of *accepted* scientific names and vernacular names.
 
-CSV columns:
-  scientificName,en,de,fr,es,da,sv,no,fi,pl,pt,it
+Inputs
+------
+1) iNaturalist-derived CSV with columns:
+     scientificName,en,de,fr,es,da,sv,no,fi,pl,pt,it
+   - Multiple names separated by ';' in each cell.
+   - This CSV may contain names not present in the Artsdatabanken backbone; those are skipped.
 
-Multiple names are separated by ';' in each cell.
+2) Artsdatabanken artsnavnebase (optional but strongly recommended):
+   - taxon.txt
+   - vernacularname.txt
 
-Norwegian (no) names come from Artsdatabanken artsnavnebase:
-https://ipt.artsdatabanken.no/resource?r=artsnavnebase
-The source files (taxon.txt + vernacularname.txt) are merged here. The other
-10 languages come from iNaturalist via the CSV produced by
-inat_common_names_from_taxon.py.
+Behavior
+--------
+- The SQLite table `taxon_min.taxon_id` is the *Artsdatabanken taxonID* (from taxon.txt "id").
+- Only *accepted species* from Artsdatabanken are included (taxonRank=species, taxonomicStatus=valid).
+- Synonyms are ignored. (If you need synonym resolution later, add a separate alias table.)
+- Norwegian names ("no") are taken from Artsdatabanken vernacularname.txt when provided; otherwise
+  Norwegian names from the CSV are used.
+
+Output schema
+-------------
+taxon_min:
+  taxon_id (INTEGER PRIMARY KEY)   -- Artsdatabanken taxonID
+  parent_taxon_id (INTEGER)        -- optional, parentNameUsageID
+  genus (TEXT)
+  specific_epithet (TEXT)
+  family (TEXT)
+
+vernacular_min:
+  vernacular_id (INTEGER PRIMARY KEY AUTOINCREMENT)
+  taxon_id (INTEGER FK->taxon_min)
+  language_code (TEXT)
+  vernacular_name (TEXT)
+  is_preferred_name (INTEGER 0/1)
+
 """
 
 from __future__ import annotations
@@ -20,7 +45,7 @@ import argparse
 import csv
 import sqlite3
 from pathlib import Path
-from typing import Iterable
+from typing import Dict, Iterable, List, Optional, Tuple
 
 
 DEFAULT_LANGS = ["en", "de", "fr", "es", "da", "sv", "no", "fi", "pl", "pt", "it"]
@@ -34,13 +59,13 @@ def _set_csv_field_limit() -> None:
     try:
         csv.field_size_limit(1024 * 1024 * 10)
     except OverflowError:
-        csv.field_size_limit(2147483647)
+        csv.field_size_limit(2_147_483_647)
 
 
-def _split_names(raw: str) -> list[str]:
+def _split_names(raw: str) -> List[str]:
     if not raw:
         return []
-    items = []
+    items: List[str] = []
     for part in raw.split(";"):
         name = part.strip()
         if name:
@@ -48,7 +73,11 @@ def _split_names(raw: str) -> list[str]:
     return items
 
 
-def _parse_scientific_name(value: str) -> tuple[str, str] | None:
+def _parse_scientific_name(value: str) -> Optional[Tuple[str, str]]:
+    """
+    Parse "Genus species ..." -> (Genus, species).
+    Ignores authorships, rank markers, etc.
+    """
     if not value:
         return None
     text = value.strip()
@@ -64,7 +93,7 @@ def _parse_scientific_name(value: str) -> tuple[str, str] | None:
     return genus, species
 
 
-def _normalize_taxon(genus: str, species: str) -> tuple[str, str]:
+def _normalize_taxon(genus: str, species: str) -> Tuple[str, str]:
     genus = genus.strip()
     species = species.strip()
     if genus:
@@ -72,6 +101,12 @@ def _normalize_taxon(genus: str, species: str) -> tuple[str, str]:
     if species:
         species = species.lower()
     return genus, species
+
+
+def _parse_bool(value: Optional[str]) -> bool:
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
 
 
 def create_schema(conn: sqlite3.Connection) -> None:
@@ -85,8 +120,8 @@ def create_schema(conn: sqlite3.Connection) -> None:
         DROP TABLE IF EXISTS taxon_min;
 
         CREATE TABLE taxon_min (
-            taxon_id         INTEGER PRIMARY KEY,
-            AdbTaxonId       INTEGER,
+            taxon_id         INTEGER PRIMARY KEY,  -- Artsdatabanken taxonID
+            parent_taxon_id  INTEGER,
             genus            TEXT NOT NULL,
             specific_epithet TEXT NOT NULL,
             family           TEXT
@@ -106,14 +141,18 @@ def create_schema(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX idx_taxon_genus ON taxon_min(genus);
         CREATE INDEX idx_taxon_genus_species ON taxon_min(genus, specific_epithet);
-        CREATE INDEX idx_taxon_adb_id ON taxon_min(AdbTaxonId);
+        CREATE INDEX idx_taxon_parent ON taxon_min(parent_taxon_id);
+
         CREATE INDEX idx_vern_lang_name ON vernacular_min(language_code, vernacular_name);
         CREATE INDEX idx_vern_taxon_lang ON vernacular_min(taxon_id, language_code);
         """
     )
 
 
-def _insert_vernacular_rows(conn: sqlite3.Connection, rows: list[tuple[int, str, str, int]]) -> None:
+def _insert_vernacular_rows(
+    conn: sqlite3.Connection,
+    rows: List[Tuple[int, str, str, int]],
+) -> None:
     if not rows:
         return
     conn.executemany(
@@ -132,107 +171,163 @@ def _insert_vernacular_rows(conn: sqlite3.Connection, rows: list[tuple[int, str,
     )
 
 
-def _insert_taxon(
+def _insert_taxa_bulk(
+    conn: sqlite3.Connection,
+    taxa_rows: Iterable[Tuple[int, Optional[int], str, str, Optional[str]]],
+) -> None:
+    """
+    Bulk insert taxa. Uses INSERT OR IGNORE and then an UPDATE to fill missing family/parent.
+    """
+    conn.executemany(
+        """
+        INSERT OR IGNORE INTO taxon_min
+            (taxon_id, parent_taxon_id, genus, specific_epithet, family)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        taxa_rows,
+    )
+
+
+def _ensure_taxon(
     conn: sqlite3.Connection,
     taxon_id: int,
     genus: str,
     species: str,
-    family: str | None,
-    adb_taxon_id: int | None,
+    family: Optional[str],
+    parent_taxon_id: Optional[int],
 ) -> None:
+    """
+    Ensure a taxon row exists. Update missing family/parent if the row already exists.
+    """
     conn.execute(
         """
-        INSERT INTO taxon_min
-            (taxon_id, AdbTaxonId, genus, specific_epithet, family)
+        INSERT OR IGNORE INTO taxon_min
+            (taxon_id, parent_taxon_id, genus, specific_epithet, family)
         VALUES (?, ?, ?, ?, ?)
         """,
-        (taxon_id, adb_taxon_id, genus, species, family),
+        (taxon_id, parent_taxon_id, genus, species, family),
     )
-
-
-def _parse_bool(value: str | None) -> bool:
-    if value is None:
-        return False
-    return str(value).strip().lower() in {"1", "true", "yes", "y"}
+    # Fill in missing metadata if we inserted earlier with NULLs
+    if family is not None or parent_taxon_id is not None:
+        conn.execute(
+            """
+            UPDATE taxon_min
+            SET
+              family = COALESCE(family, ?),
+              parent_taxon_id = COALESCE(parent_taxon_id, ?)
+            WHERE taxon_id = ?
+            """,
+            (family, parent_taxon_id, taxon_id),
+        )
 
 
 def _load_art_taxa(
     taxon_path: Path,
-) -> tuple[dict[str, tuple[str, str, str | None, int | None]], dict[tuple[str, str], int], int, int]:
-    taxa: dict[str, tuple[str, str, str | None, int | None]] = {}
-    adb_by_taxon: dict[tuple[str, str], int] = {}
+) -> Tuple[
+    Dict[int, Tuple[str, str, Optional[str], Optional[int]]],
+    Dict[Tuple[str, str], int],
+    int,
+    int,
+]:
+    """
+    Load accepted species from Artsdatabanken taxon.txt.
+
+    Returns:
+      taxa_by_id: taxonID -> (genus, species, family, parent_taxon_id)
+      accepted_id_by_name: (genus,species) -> taxonID
+      total_rows, valid_species_rows
+    """
+    taxa_by_id: Dict[int, Tuple[str, str, Optional[str], Optional[int]]] = {}
+    accepted_id_by_name: Dict[Tuple[str, str], int] = {}
+
     total = 0
     valid = 0
+
     with taxon_path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
         for row in reader:
             total += 1
-            taxon_id = (row.get("id") or "").strip()
-            if not taxon_id:
+
+            raw_id = (row.get("id") or "").strip()
+            if not raw_id:
                 continue
+            try:
+                taxon_id = int(raw_id)
+            except ValueError:
+                continue
+
+            # We only keep accepted *species*
             if (row.get("taxonRank") or "").strip().lower() != "species":
                 continue
             status = (row.get("taxonomicStatus") or "").strip().lower()
             if status != "valid":
                 continue
+
             genus = (row.get("genus") or "").strip()
             species = (row.get("specificEpithet") or "").strip()
             if not genus or not species:
                 continue
             genus, species = _normalize_taxon(genus, species)
+
             family = (row.get("family") or "").strip() or None
-            adb_raw = (row.get("parentNameUsageID") or "").strip()
+
+            parent_raw = (row.get("parentNameUsageID") or "").strip()
             try:
-                adb_taxon_id = int(adb_raw) if adb_raw else None
+                parent_taxon_id = int(parent_raw) if parent_raw else None
             except ValueError:
-                adb_taxon_id = None
-            taxa[taxon_id] = (genus, species, family, adb_taxon_id)
-            if adb_taxon_id:
-                adb_by_taxon[(genus, species)] = adb_taxon_id
+                parent_taxon_id = None
+
+            taxa_by_id[taxon_id] = (genus, species, family, parent_taxon_id)
+            accepted_id_by_name[(genus, species)] = taxon_id
             valid += 1
-    return taxa, adb_by_taxon, total, valid
+
+    return taxa_by_id, accepted_id_by_name, total, valid
 
 
 def _merge_norwegian_from_arts(
     conn: sqlite3.Connection,
-    get_taxon_id,
-    taxon_path: Path,
     vernacular_path: Path,
-    art_taxa: dict[str, tuple[str, str, str | None, int | None]] | None = None,
-) -> None:
-    if not taxon_path.exists() or not vernacular_path.exists():
-        print("Norwegian source files not found, skipping merge.")
-        return
+    art_taxa_by_id: Dict[int, Tuple[str, str, Optional[str], Optional[int]]],
+) -> int:
+    """
+    Insert Norwegian vernacular names from Artsdatabanken vernacularname.txt.
+    Returns number of inserted/updated vernacular rows (attempted rows).
+    """
+    inserted = 0
+    batch: List[Tuple[int, str, str, int]] = []
 
-    if art_taxa is None:
-        art_taxa, _, total, valid = _load_art_taxa(taxon_path)
-        print(f"Artsnavnebase taxa: {valid} valid entries out of {total} total")
-    else:
-        total = valid = 0
-    if not art_taxa:
-        print("No taxa loaded from artsnavnebase taxon.txt")
-        return
-
-    batch: list[tuple[int, str, str, int]] = []
     conn.execute("BEGIN;")
     with vernacular_path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
         for row in reader:
-            taxon_id = (row.get("id") or "").strip()
-            if not taxon_id:
+            raw_id = (row.get("id") or "").strip()
+            if not raw_id:
                 continue
+            try:
+                taxon_id = int(raw_id)
+            except ValueError:
+                continue
+
+            # Only Norwegian
             if (row.get("countryCode") or "").strip().upper() != "NO":
                 continue
+
             name = (row.get("vernacularName") or "").strip()
             if not name:
                 continue
-            taxon = art_taxa.get(taxon_id)
+
+            taxon = art_taxa_by_id.get(taxon_id)
             if not taxon:
+                # vernacular row for a taxon we didn't load (e.g. non-species / non-valid), ignore
                 continue
-            genus, species, family, adb_taxon_id = taxon
-            db_taxon_id = get_taxon_id(genus, species, family, adb_taxon_id)
+
+            genus, species, family, parent_taxon_id = taxon
+            _ensure_taxon(conn, taxon_id, genus, species, family, parent_taxon_id)
+
             is_pref = 1 if _parse_bool(row.get("isPreferredName")) else 0
-            batch.append((db_taxon_id, "no", name, is_pref))
+            batch.append((taxon_id, "no", name, is_pref))
+            inserted += 1
+
             if len(batch) >= 5000:
                 _insert_vernacular_rows(conn, batch)
                 batch.clear()
@@ -242,56 +337,47 @@ def _merge_norwegian_from_arts(
         batch.clear()
 
     conn.commit()
+    return inserted
 
 
-def build_db(csv_path: Path, out_db: Path, no_taxon: Path | None, no_names: Path | None) -> None:
+def build_db(csv_path: Path, out_db: Path, no_taxon: Optional[Path], no_names: Optional[Path]) -> None:
     _set_csv_field_limit()
+
     if out_db.exists():
         out_db.unlink()
+
+    if not no_taxon or not no_taxon.exists():
+        raise SystemExit(
+            "Missing Artsdatabanken taxon.txt. This script now requires it, "
+            "because taxon_id must be the Artsdatabanken taxonID."
+        )
 
     conn = sqlite3.connect(out_db)
     conn.row_factory = sqlite3.Row
     try:
         create_schema(conn)
-        taxon_cache: dict[tuple[str, str], int] = {}
-        next_taxon_id = 1
-        art_taxa: dict[str, tuple[str, str, str | None, int | None]] | None = None
-        adb_taxon_lookup: dict[tuple[str, str], int] = {}
-        if no_taxon and no_taxon.exists():
-            art_taxa, adb_taxon_lookup, total, valid = _load_art_taxa(no_taxon)
-            print(f"Artsnavnebase taxa: {valid} valid entries out of {total} total")
 
-        def get_taxon_id(
-            genus: str,
-            species: str,
-            family: str | None = None,
-            adb_taxon_id: int | None = None,
-        ) -> int:
-            nonlocal next_taxon_id
-            key = (genus, species)
-            if key in taxon_cache:
-                if family:
-                    conn.execute(
-                        "UPDATE taxon_min SET family = COALESCE(family, ?) WHERE taxon_id = ?",
-                        (family, taxon_cache[key]),
-                    )
-                if adb_taxon_id:
-                    conn.execute(
-                        "UPDATE taxon_min SET AdbTaxonId = COALESCE(AdbTaxonId, ?) WHERE taxon_id = ?",
-                        (adb_taxon_id, taxon_cache[key]),
-                    )
-                return taxon_cache[key]
-            taxon_id = next_taxon_id
-            next_taxon_id += 1
-            _insert_taxon(conn, taxon_id, genus, species, family, adb_taxon_id)
-            taxon_cache[key] = taxon_id
-            return taxon_id
+        # -------- Load accepted taxa from Artsdatabanken --------
+        art_taxa_by_id, accepted_id_by_name, total, valid = _load_art_taxa(no_taxon)
+        print(f"Artsdatabanken taxon.txt: {valid} valid species out of {total} total rows")
 
-        # -------- CSV import --------
-        use_arts_no = bool(no_taxon and no_names and no_taxon.exists() and no_names.exists())
+        # Insert *all* accepted taxa up front (so DB is a complete accepted-name backbone)
+        conn.execute("BEGIN;")
+        _insert_taxa_bulk(
+            conn,
+            (
+                (taxon_id, parent_taxon_id, genus, species, family)
+                for taxon_id, (genus, species, family, parent_taxon_id) in art_taxa_by_id.items()
+            ),
+        )
+        conn.commit()
+
+        # -------- CSV import (non-Norwegian by default) --------
+        use_arts_no = bool(no_names and no_names.exists())
 
         total_rows = 0
-        valid_rows = 0
+        parsed_rows = 0
+        skipped_not_in_arts = 0
         empty_rows = 0
 
         with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
@@ -307,7 +393,7 @@ def build_db(csv_path: Path, out_db: Path, no_taxon: Path | None, no_names: Path
             if not lang_columns:
                 lang_columns = list(DEFAULT_LANGS)
 
-            batch: list[tuple[int, str, str, int]] = []
+            batch: List[Tuple[int, str, str, int]] = []
             BATCH = 5000
 
             conn.execute("BEGIN;")
@@ -317,13 +403,22 @@ def build_db(csv_path: Path, out_db: Path, no_taxon: Path | None, no_names: Path
                 parsed = _parse_scientific_name(sci)
                 if not parsed:
                     continue
-                valid_rows += 1
                 genus, species = _normalize_taxon(*parsed)
-                adb_taxon_id = adb_taxon_lookup.get((genus, species))
-                taxon_id = get_taxon_id(genus, species, None, adb_taxon_id)
+                parsed_rows += 1
 
+                taxon_id = accepted_id_by_name.get((genus, species))
+                if taxon_id is None:
+                    skipped_not_in_arts += 1
+                    continue
+
+                # If Norwegian should come from Arts, skip 'no' from CSV.
                 has_any = False
                 for lang in lang_columns:
+                    lang_code = (lang or "").strip().lower()
+                    if not lang_code:
+                        continue
+                    if lang_code == "no" and use_arts_no:
+                        continue
                     if _split_names((row.get(lang) or "")):
                         has_any = True
                         break
@@ -336,11 +431,14 @@ def build_db(csv_path: Path, out_db: Path, no_taxon: Path | None, no_names: Path
                         continue
                     if lang_code == "no" and use_arts_no:
                         continue
+
                     names = _split_names((row.get(lang) or ""))
                     if not names:
                         continue
+
                     for idx, name in enumerate(names):
                         batch.append((taxon_id, lang_code, name, 1 if idx == 0 else 0))
+
                     if len(batch) >= BATCH:
                         _insert_vernacular_rows(conn, batch)
                         batch.clear()
@@ -351,14 +449,16 @@ def build_db(csv_path: Path, out_db: Path, no_taxon: Path | None, no_names: Path
 
             conn.commit()
 
-        print(f"CSV rows: {total_rows} total, {valid_rows} valid scientific names")
-        print(f"CSV rows without any translations: {empty_rows}")
+        print(f"CSV rows: {total_rows} total, {parsed_rows} parsed scientific names")
+        print(f"CSV skipped (not in Arts accepted backbone): {skipped_not_in_arts}")
+        print(f"CSV rows without any kept translations: {empty_rows}")
 
-        # -------- Norwegian merge from artsnavnebase --------
-        if use_arts_no:
-            _merge_norwegian_from_arts(conn, get_taxon_id, no_taxon, no_names, art_taxa=art_taxa)
+        # -------- Norwegian merge from Artsdatabanken --------
+        if use_arts_no and no_names:
+            inserted = _merge_norwegian_from_arts(conn, no_names, art_taxa_by_id)
+            print(f"Norwegian merge: processed {inserted} vernacular rows from Artsdatabanken")
         else:
-            print("Norwegian sources not found, skipping merge.")
+            print("Norwegian vernacularname.txt not found; using CSV 'no' column (if present).")
 
         conn.execute("VACUUM;")
 
@@ -381,12 +481,12 @@ def main() -> None:
     ap.add_argument(
         "--no-taxon",
         default=DEFAULT_NO_TAXON,
-        help="Artsdatabanken taxon.txt (optional, preferred Norwegian source)",
+        help="Artsdatabanken taxon.txt (REQUIRED; source of taxon_id)",
     )
     ap.add_argument(
         "--no-vernacular",
         default=DEFAULT_NO_VERNACULAR,
-        help="Artsdatabanken vernacularname.txt (optional, preferred Norwegian source)",
+        help="Artsdatabanken vernacularname.txt (optional; preferred Norwegian source)",
     )
     args = ap.parse_args()
 
@@ -397,6 +497,8 @@ def main() -> None:
 
     if not csv_path.exists():
         raise SystemExit(f"Missing CSV: {csv_path}")
+    if not no_taxon or not no_taxon.exists():
+        raise SystemExit(f"Missing Artsdatabanken taxon.txt: {no_taxon}")
 
     build_db(csv_path, out_db, no_taxon, no_names)
 

@@ -1,60 +1,103 @@
-# Artsobservasjoner Login and Upload
+# Online Publishing (Artsobservasjoner + iNaturalist)
 
-This guide explains how to log in to Artsobservasjoner and upload observations from MycoLog.
+This guide explains login and upload from MycoLog using:
+
+- **Artsobservasjoner (mobile)**
+- **Artsobservasjoner (web)**
+- **iNaturalist**
+
+All publishing settings are in **Settings -> Online publishing**.
 
 ## Login
 
-1. Open **Settings -> Artsobservasjoner**.
-2. Click **Log in to Artsobservasjoner** and complete the login in the embedded browser window.
-3. After a successful login, MycoLog stores cookies so you stay logged in between restarts.
+1. Open **Settings -> Online publishing**.
+2. Select a target in the **Websites** table.
+3. Click **Log in**.
+4. **Log out** only logs out the currently selected service.
 
-Cookies are cached in the MycoLog app data folder as `artsobservasjoner_cookies.json`:
+### Artsobservasjoner (mobile)
 
-- Windows: `%APPDATA%\\MycoLog\\artsobservasjoner_cookies.json`
-- macOS: `~/Library/Application Support/MycoLog/artsobservasjoner_cookies.json`
-- Linux: `~/.local/share/MycoLog/artsobservasjoner_cookies.json`
+- Uses embedded browser login.
+- Cookies are cached in the MycoLog app data folder.
 
-If cookies expire, return to **Settings -> Artsobservasjoner** and re-authenticate.
+### Artsobservasjoner (web)
 
-## Upload an observation
+- Uses username/password prompt.
+- Optional **Save login info on this device**.
+- Username is stored in app settings.
+- Password is stored via OS keyring (not plain text) when available.
 
-1. Go to the **Observations** tab.
-2. Select the observation you want to upload.
-3. Click **Upload to Artsobs**.
+### iNaturalist
 
-The progress dialog will show which step is running and the image count (for example, "Uploading image 2/3").
+- Click **Log in** and complete sign-in in your web browser.
+- After a successful sign-in, MycoLog keeps you signed in so you do not need to sign in every day.
+- If you click **Log out**, only the selected service is logged out.
+
+## iNaturalist sign-in
+
+1. Open **Settings -> Online publishing**.
+2. Select **iNaturalist**.
+3. Click **Log in**.
+4. In the browser window, sign in to your iNaturalist account and approve access.
+5. Return to MycoLog and continue publishing as normal.
+
+If MycoLog asks for app credentials:
+
+- Regular users should not create these.
+- Use the values provided with the app, or contact the app maintainer.
+
+## Cached files
+
+Common paths:
+
+- Windows: `%APPDATA%\\MycoLog\\...`
+- macOS: `~/Library/Application Support/MycoLog/...`
+- Linux: `~/.local/share/MycoLog/...`
+
+Files:
+
+- `artsobservasjoner_cookies_mobile.json`
+- `artsobservasjoner_cookies_web.json`
+- `inaturalist_oauth_tokens.json`
+
+## Upload observations
+
+1. Go to **Observations**.
+2. Select one or more rows.
+3. Click **Publish** and choose target.
+
+Notes:
+
+- Artsobservasjoner targets are disabled for observations already uploaded to Artsobservasjoner.
+- iNaturalist can still be used for those observations.
 
 ## Requirements
 
-Uploads require:
+### Artsobservasjoner
 
-- Genus and species set (so an Artsdatabanken taxon id is available).
+- Genus and species set (for Artsdatabanken taxon id).
 - Observation date.
-- GPS coordinates (lat/lon).
-- At least one image of type **Field** or **Microscope**.
+- GPS coordinates.
+- At least one image.
 
-## Upload target
+### iNaturalist
 
-In **Settings -> Artsobservasjoner**, you can choose the upload target:
-
-- **Artsobservasjoner (mobile)**: Uses the mobile API and supports image uploads.
-- **Artsobservasjoner (web)**: Uses the web form endpoints and submits habitat + notes (images are not uploaded yet).
-
-The web uploader uses your existing Artsobservasjoner web session. If the site id
-cannot be resolved, open the web form once and select a site, then try again.
-
-## Adding new uploaders
-
-Upload targets are registered in `utils/artsobs_uploaders.py`. Add a new class
-with a unique `key`, `label`, and `login_url`, and implement `upload(...)`.
-
-See the existing `ArtsobsMobileUploader` and `ArtsobsWebUploader` classes for
-examples.
+- Observation date.
+- GPS coordinates.
+- At least one image.
+- Active iNaturalist sign-in.
 
 ## After upload
 
-- MycoLog stores the Artsobservasjoner sighting id in the observation (`artsdata_id`).
-- The Observations table shows an **Artsobs** link that opens the uploaded sighting.
+- Artsobservasjoner ID is stored in `observations.artsdata_id`.
+- iNaturalist ID is stored in `observations.inaturalist_id`.
+- Observations table Artsobs web link opens:
+  `https://www.artsobservasjoner.no/ReviewSighting`
+
+## Add new uploaders
+
+Upload targets are registered in `utils/artsobs_uploaders.py`.
+Each uploader implements `upload(...)` with a unique `key`, `label`, and `login_url`.
 
 ## See also
 
@@ -62,5 +105,3 @@ examples.
 - [Taxonomy integration](docs/taxonomy-integration.md)
 - [Field photography](docs/field-photography.md)
 - [Microscopy workflow](docs/microscopy-workflow.md)
-- [Spore measurements](docs/spore-measurements.md)
-- [Integration notes](utils/MYCO_LOG_INTEGRATION.md)

@@ -5,6 +5,23 @@
 - Enter a common name and MycoLog will look up matching taxonomy.
 - Genus and species fields provide suggestions as you type.
 
+## Taxon DB Build (Brief)
+
+`database/build_multilang_vernacular_db.py` builds `database/vernacular_multilanguage.sqlite3` from:
+
+- `database/taxon.txt` (required): only accepted species (`taxonRank=species`, `taxonomicStatus=valid`) are kept.
+- `database/vernacular_inat_11lang.csv`: vernacular names are linked to accepted taxa only.
+- `database/vernacularname.txt` (optional): Norwegian (`no`) names from Artsdatabanken override CSV Norwegian names.
+
+`taxon.txt` and `vernacularname.txt` are downloaded from:
+`https://ipt.artsdatabanken.no/resource?r=artsnavnebase&v=1.252`
+
+Result:
+
+- `taxon_min` contains the accepted species backbone.
+- `vernacular_min` contains multilingual common names linked by taxon.
+- Names not present in accepted `taxon.txt` are skipped.
+
 ## AI Suggestions
 
 MycoLog can query Artsdatabanken (Artsorakelet) to suggest species based on images.

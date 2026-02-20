@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional
 import math
 import json
+import shutil
 
 from PySide6.QtCore import (
     Qt,
@@ -18,8 +19,9 @@ from PySide6.QtCore import (
     QThread,
     QTimer,
     QEvent,
+    QSize,
 )
-from PySide6.QtGui import QPixmap, QKeySequence, QShortcut, QImageReader, QColor
+from PySide6.QtGui import QPixmap, QKeySequence, QShortcut, QImageReader, QColor, QIcon, QFont
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -49,6 +51,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QAbstractItemView,
     QCheckBox,
+    QToolButton,
 )
 
 from database.schema import (
@@ -67,7 +70,8 @@ from utils.heic_converter import maybe_convert_heic
 from .image_gallery_widget import ImageGalleryWidget
 from .zoomable_image_widget import ZoomableImageLabel
 from .spore_preview_widget import SporePreviewWidget
-from .calibration_dialog import get_resolution_status, format_resolution_summary
+from .calibration_dialog import get_resolution_status
+from .hint_status import HintLabel, HintStatusController
 
 
 @dataclass
@@ -403,7 +407,7 @@ class ImageImportDialog(QDialog):
         self.target_sampling_pct = float(
             SettingsDB.get_setting("target_sampling_pct", 120.0)
         )
-        self._resize_preview_enabled = False
+        self._resize_preview_enabled = bool(self.resize_to_optimal_default)
 
         self.image_paths: list[str] = []
         self.import_results: list[ImageImportResult] = []
@@ -444,6 +448,8 @@ class ImageImportDialog(QDialog):
         self._ai_thread: QThread | None = None
         self._scale_bar_dialog: ScaleBarImportDialog | None = None
         self._last_objective_key: str | None = None
+        self._hint_controller: HintStatusController | None = None
+        self._pending_hint_widgets: list[tuple[QWidget, str, str]] = []
 
         self._build_ui()
         if hasattr(self, "objective_combo"):
@@ -492,6 +498,18 @@ class ImageImportDialog(QDialog):
         self.ai_crop_shortcut = QShortcut(QKeySequence("C"), self)
         self.ai_crop_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
         self.ai_crop_shortcut.activated.connect(self._on_ai_crop_clicked)
+        self.field_shortcut = QShortcut(QKeySequence("F"), self)
+        self.field_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self.field_shortcut.activated.connect(lambda: self._apply_image_type_shortcut("field"))
+        self.micro_shortcut = QShortcut(QKeySequence("M"), self)
+        self.micro_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self.micro_shortcut.activated.connect(lambda: self._apply_image_type_shortcut("micro"))
+        self.apply_all_shortcut = QShortcut(QKeySequence("A"), self)
+        self.apply_all_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self.apply_all_shortcut.activated.connect(self._apply_to_all)
+        self.scale_shortcut = QShortcut(QKeySequence("S"), self)
+        self.scale_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self.scale_shortcut.activated.connect(self._on_scale_shortcut)
 
         center_splitter = QSplitter(Qt.Vertical)
         center_splitter.setChildrenCollapsible(False)
@@ -502,11 +520,48 @@ class ImageImportDialog(QDialog):
         center_splitter.setSizes([700, 220])
 
         center_layout.addWidget(center_splitter, 1)
-        content_row.addWidget(center_container, 1)
-
         self.details_panel = self._build_right_panel()
-        content_row.addWidget(self.details_panel, 0)
+        main_splitter = QSplitter(Qt.Horizontal)
+        main_splitter.setChildrenCollapsible(False)
+        main_splitter.addWidget(center_container)
+        main_splitter.addWidget(self.details_panel)
+        main_splitter.setStretchFactor(0, 1)
+        main_splitter.setStretchFactor(1, 0)
+        main_splitter.setSizes([980, 400])
+        content_row.addWidget(main_splitter, 1)
         main_layout.addLayout(content_row, 1)
+
+        bottom_row = QHBoxLayout()
+        bottom_row.setContentsMargins(0, 0, 0, 0)
+        bottom_row.setSpacing(8)
+        self.hint_bar = QLabel("")
+        self.hint_bar.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.hint_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.hint_bar.setStyleSheet("background: transparent; border: none; color: #222222; font-size: 9pt;")
+        hint_font = self.hint_bar.font()
+        hint_font.setWeight(QFont.Weight.Medium)
+        self.hint_bar.setFont(hint_font)
+        bottom_row.addWidget(self.hint_bar, 1)
+        self._hint_controller = HintStatusController(self.hint_bar, self)
+        if self._pending_hint_widgets:
+            for widget, hint, tone in self._pending_hint_widgets:
+                if widget is not None:
+                    self._hint_controller.register_widget(widget, hint, tone=tone)
+            self._pending_hint_widgets.clear()
+
+        self.button_box = QDialogButtonBox(Qt.Horizontal, self)
+        self.cancel_btn = self.button_box.addButton(
+            self.tr("Cancel"),
+            QDialogButtonBox.RejectRole,
+        )
+        self.next_btn = self.button_box.addButton(
+            self.tr("Continue"),
+            QDialogButtonBox.AcceptRole,
+        )
+        self.button_box.rejected.connect(self.reject)
+        self.button_box.accepted.connect(self._accept_continue)
+        bottom_row.addWidget(self.button_box, 0, Qt.AlignRight | Qt.AlignVCenter)
+        main_layout.addLayout(bottom_row)
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -604,8 +659,8 @@ class ImageImportDialog(QDialog):
         type_group = QGroupBox(self.tr("Image type"))
         type_layout = QHBoxLayout(type_group)
         self.image_type_group = QButtonGroup(self)
-        self.field_radio = QRadioButton(self.tr("Field"))
-        self.micro_radio = QRadioButton(self.tr("Micro"))
+        self.field_radio = QRadioButton(self.tr("Field (F)"))
+        self.micro_radio = QRadioButton(self.tr("Micro (M)"))
         self.image_type_group.addButton(self.field_radio)
         self.image_type_group.addButton(self.micro_radio)
         self.field_radio.setChecked(True)
@@ -621,9 +676,9 @@ class ImageImportDialog(QDialog):
         self._populate_objectives()
         self.objective_combo.currentIndexChanged.connect(self._on_settings_changed)
         scale_layout.addWidget(self.objective_combo)
-        calibrate_btn = QPushButton(self.tr("Set scale..."))
-        calibrate_btn.clicked.connect(self._open_calibration_dialog)
-        scale_layout.addWidget(calibrate_btn)
+        self.calibrate_btn = QPushButton(self.tr("Set from scalebar"))
+        self.calibrate_btn.clicked.connect(self._open_calibration_dialog)
+        scale_layout.addWidget(self.calibrate_btn)
         self.scale_warning_label = QLabel("")
         self.scale_warning_label.setWordWrap(True)
         self.scale_warning_label.setStyleSheet("color: #e74c3c; font-weight: bold; font-size: 9pt;")
@@ -662,12 +717,8 @@ class ImageImportDialog(QDialog):
         layout.addWidget(self.sample_group)
 
         layout.addStretch()
-        self.settings_hint_label = QLabel("")
-        self.settings_hint_label.setWordWrap(True)
-        self.settings_hint_label.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
-        layout.addWidget(self.settings_hint_label)
         apply_row = QHBoxLayout()
-        self.apply_all_btn = QPushButton(self.tr("Apply to all"))
+        self.apply_all_btn = QPushButton(self.tr("Apply to all (A)"))
         self.apply_all_btn.clicked.connect(self._apply_to_all)
         apply_row.addWidget(self.apply_all_btn)
         layout.addLayout(apply_row)
@@ -686,6 +737,21 @@ class ImageImportDialog(QDialog):
         self.preview.set_pan_without_shift(True)
         self.preview.clicked.connect(self._on_preview_clicked)
         self.preview.cropChanged.connect(self._on_ai_crop_changed)
+        self.preview.installEventFilter(self)
+
+        self.rotate_preview_btn = QToolButton(self.preview)
+        self.rotate_preview_btn.setIcon(QIcon(str(Path(__file__).parent.parent / "assets" / "icons" / "rotate.svg")))
+        self.rotate_preview_btn.setIconSize(QSize(20, 20))
+        self.rotate_preview_btn.setToolTip(self.tr("Rotate 90 deg clockwise"))
+        self.rotate_preview_btn.setStyleSheet(
+            "QToolButton { background-color: rgba(255, 255, 255, 200); border: 1px solid #d0d0d0; border-radius: 4px; }"
+            "QToolButton:hover { background-color: rgba(236, 240, 241, 230); }"
+            "QToolButton:disabled { background-color: rgba(220, 220, 220, 140); }"
+        )
+        self.rotate_preview_btn.setFixedSize(26, 26)
+        self.rotate_preview_btn.move(8, 8)
+        self.rotate_preview_btn.clicked.connect(self._on_rotate_current_image_clicked)
+        self.rotate_preview_btn.raise_()
 
         self.preview_message = QLabel(self.tr("Multiple images selected"))
         self.preview_message.setAlignment(Qt.AlignCenter)
@@ -694,13 +760,13 @@ class ImageImportDialog(QDialog):
         self.preview_stack.addWidget(self.preview)
         self.preview_stack.addWidget(self.preview_message)
         layout.addLayout(self.preview_stack, 1)
+        self._update_rotate_button_state()
         return panel
 
     def _build_right_panel(self) -> QWidget:
         panel = QGroupBox(self.tr("Import details"))
-        panel.setMinimumWidth(300)
-        panel.setMaximumWidth(380)
-        panel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        panel.setMinimumWidth(340)
+        panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         layout = QVBoxLayout(panel)
 
         current_group = QGroupBox(self.tr("Current image"))
@@ -712,8 +778,6 @@ class ImageImportDialog(QDialog):
         self.exif_aperture_label = QLabel("--")
         self.exif_lat_label = QLabel("Lat: --")
         self.exif_lon_label = QLabel("Lon: --")
-        self.exif_sampling_label = QLabel("--")
-        self.exif_sampling_label.setWordWrap(True)
         self.exif_map_btn = QPushButton(self.tr("Map"))
         self.exif_map_btn.clicked.connect(self._open_current_image_map)
         self.exif_map_btn.setEnabled(False)
@@ -731,18 +795,11 @@ class ImageImportDialog(QDialog):
         gps_row.addLayout(gps_values, 1)
         gps_row.addWidget(self.exif_map_btn)
         current_layout.addRow(self.tr("GPS:"), gps_row)
-        current_layout.addRow(self.tr("Sampling:"), self.exif_sampling_label)
         layout.addWidget(current_group)
 
         obs_group = QGroupBox(self.tr("Time and GPS"))
         obs_layout = QFormLayout(obs_group)
 
-        datetime_container = QWidget()
-        datetime_layout = QVBoxLayout(datetime_container)
-        datetime_layout.setContentsMargins(0, 0, 0, 0)
-        datetime_layout.setSpacing(4)
-        datetime_row = QHBoxLayout()
-        datetime_label = QLabel(self.tr("Date & time:"))
         self.datetime_input = QDateTimeEdit()
         self.datetime_input.setMinimumDateTime(self._unset_datetime)
         self.datetime_input.setSpecialValueText("--")
@@ -750,40 +807,48 @@ class ImageImportDialog(QDialog):
         self.datetime_input.setDisplayFormat("yyyy-MM-dd HH:mm")
         self.datetime_input.dateTimeChanged.connect(self._on_metadata_changed)
         self.datetime_input.setDateTime(self._unset_datetime)
-        datetime_row.addWidget(datetime_label)
-        datetime_row.addWidget(self.datetime_input, 1)
-        datetime_layout.addLayout(datetime_row)
-        datetime_layout.addSpacing(6)
-        obs_layout.addRow("", datetime_container)
+        obs_layout.addRow(self.tr("Date & time:"), self.datetime_input)
 
         gps_container = QWidget()
         gps_container_layout = QVBoxLayout(gps_container)
         gps_container_layout.setContentsMargins(0, 0, 0, 0)
         gps_container_layout.setSpacing(4)
+
         gps_lat_row = QHBoxLayout()
+        gps_lat_row.setContentsMargins(0, 0, 0, 0)
+        gps_lat_row.setSpacing(6)
         self.lat_input = QDoubleSpinBox()
         self.lat_input.setRange(-90.0, 90.0)
         self.lat_input.setDecimals(6)
+        self.lat_input.setAlignment(Qt.AlignLeft)
         self.lat_input.setSpecialValueText("--")
         self.lat_input.setValue(self.lat_input.minimum())
         self.lat_input.valueChanged.connect(self._on_metadata_changed)
         gps_lat_row.addWidget(QLabel(self.tr("Lat:")))
-        gps_lat_row.addWidget(self.lat_input)
+        gps_lat_row.addWidget(self.lat_input, 0)
+        gps_lat_row.addStretch(1)
         gps_container_layout.addLayout(gps_lat_row)
+
         gps_lon_row = QHBoxLayout()
+        gps_lon_row.setContentsMargins(0, 0, 0, 0)
+        gps_lon_row.setSpacing(6)
         self.lon_input = QDoubleSpinBox()
         self.lon_input.setRange(-180.0, 180.0)
         self.lon_input.setDecimals(6)
+        self.lon_input.setAlignment(Qt.AlignLeft)
         self.lon_input.setSpecialValueText("--")
         self.lon_input.setValue(self.lon_input.minimum())
         self.lon_input.valueChanged.connect(self._on_metadata_changed)
         gps_lon_row.addWidget(QLabel(self.tr("Lon:")))
-        gps_lon_row.addWidget(self.lon_input)
+        gps_lon_row.addWidget(self.lon_input, 0)
+        gps_lon_row.addStretch(1)
         gps_container_layout.addLayout(gps_lon_row)
-        gps_container_layout.addSpacing(6)
+
+        gps_container_layout.addSpacing(4)
         self.set_from_image_btn = QPushButton(self.tr("Set from current image"))
         self.set_from_image_btn.clicked.connect(self._set_observation_gps_from_image)
-        gps_container_layout.addWidget(self.set_from_image_btn, alignment=Qt.AlignLeft)
+        self.set_from_image_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        gps_container_layout.addWidget(self.set_from_image_btn)
         obs_layout.addRow(self.tr("GPS:"), gps_container)
 
         layout.addWidget(obs_group)
@@ -792,14 +857,16 @@ class ImageImportDialog(QDialog):
         self.resize_group = resize_group
         resize_layout = QVBoxLayout(resize_group)
         resize_layout.setContentsMargins(6, 6, 6, 6)
-        self.resize_optimal_checkbox = QCheckBox(self.tr("Resize to optimal sampling"))
+        self.resize_optimal_checkbox = QCheckBox(
+            self.tr("Resize to optimal sampling (P preview)")
+        )
         self.resize_optimal_checkbox.setChecked(self.resize_to_optimal_default)
         self.resize_optimal_checkbox.toggled.connect(self._on_resize_settings_changed)
+        resize_hint = self.tr(
+            "Enable optimal downsampling for microscope images. Keyboard shortcut P toggles preview."
+        )
+        self._register_hint_widget(self.resize_optimal_checkbox, resize_hint)
         resize_layout.addWidget(self.resize_optimal_checkbox)
-        self.resize_preview_hint = QLabel(self.tr("Keyboard shortcut P to toggle preview of resize"))
-        self.resize_preview_hint.setWordWrap(True)
-        self.resize_preview_hint.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
-        resize_layout.addWidget(self.resize_preview_hint)
 
         resize_info = QFormLayout()
         self.target_sampling_input = QDoubleSpinBox()
@@ -809,8 +876,18 @@ class ImageImportDialog(QDialog):
         self.target_sampling_input.setValue(float(self.target_sampling_pct))
         self.target_sampling_input.valueChanged.connect(self._on_target_sampling_changed)
         self.target_sampling_input.installEventFilter(self)
-        self.current_resolution_label = QLabel("--")
-        self.target_resolution_label = QLabel("--")
+        self.current_resolution_label = HintLabel(
+            "--",
+            self.tr("Current pixel dimensions and megapixels for this image."),
+            self.set_hint,
+            self,
+        )
+        self.target_resolution_label = HintLabel(
+            "--",
+            self.tr("Ideal output resolution from objective scale, NA, and target sampling."),
+            self.set_hint,
+            self,
+        )
         resize_info.addRow(
             self.tr("Ideal sampling (% Nyquist):"),
             self.target_sampling_input,
@@ -825,31 +902,18 @@ class ImageImportDialog(QDialog):
         ai_crop_group = QGroupBox(self.tr("AI crop"))
         ai_crop_layout = QVBoxLayout(ai_crop_group)
         ai_crop_layout.setContentsMargins(6, 6, 6, 6)
-        self.ai_crop_info_label = QLabel(
-            self.tr("Draw a square around the species you want to identify. Keyboard: C.")
+        self.ai_crop_btn = QPushButton(self.tr("Crop (C)"))
+        crop_hint = self.tr(
+            "Draw a square crop area for Artsorakelet. Keyboard shortcut C."
         )
-        self.ai_crop_info_label.setWordWrap(True)
-        self.ai_crop_info_label.setStyleSheet("color: #7f8c8d; font-size: 9pt;")
-        ai_crop_layout.addWidget(self.ai_crop_info_label)
-        self.ai_crop_btn = QPushButton(self.tr("Crop"))
-        self.ai_crop_btn.setToolTip(self.tr("Draw a crop area for Artsorakelet"))
+        self._register_hint_widget(self.ai_crop_btn, crop_hint)
         self.ai_crop_btn.clicked.connect(self._on_ai_crop_clicked)
         self.ai_crop_btn.setEnabled(False)
         ai_crop_layout.addWidget(self.ai_crop_btn)
         self._set_ai_crop_active(False)
 
         layout.addWidget(ai_crop_group)
-
         layout.addStretch(1)
-        action_row = QHBoxLayout()
-        action_row.addStretch()
-        self.cancel_btn = QPushButton(self.tr("Cancel"))
-        self.cancel_btn.clicked.connect(self.reject)
-        self.next_btn = QPushButton(self.tr("Continue"))
-        self.next_btn.clicked.connect(self._accept_continue)
-        action_row.addWidget(self.cancel_btn)
-        action_row.addWidget(self.next_btn)
-        layout.addLayout(action_row)
         return panel
 
     def _populate_objectives(self, selected_key: str | None = None) -> None:
@@ -1058,6 +1122,23 @@ class ImageImportDialog(QDialog):
             return indices[0]
         return None
 
+    def _update_rotate_button_state(self) -> None:
+        if not hasattr(self, "rotate_preview_btn"):
+            return
+        idx = self._current_single_index()
+        enabled = (
+            idx is not None
+            and 0 <= idx < len(self.import_results)
+            and bool(self.import_results[idx].filepath)
+        )
+        self.rotate_preview_btn.setEnabled(enabled)
+        self.rotate_preview_btn.setVisible(self.preview_stack.currentWidget() is self.preview)
+
+    def _position_rotate_button(self) -> None:
+        if not hasattr(self, "rotate_preview_btn"):
+            return
+        self.rotate_preview_btn.move(8, 8)
+
     def _matches_observation_datetime(self, dt: QDateTime | None) -> bool:
         if not dt or not self._observation_datetime:
             return False
@@ -1111,6 +1192,7 @@ class ImageImportDialog(QDialog):
             if self._ai_thread is not None:
                 enable_guess = False
             self.ai_guess_btn.setEnabled(enable_guess)
+        self._update_rotate_button_state()
 
     def _update_ai_table(self) -> None:
         if not hasattr(self, "ai_table"):
@@ -1474,23 +1556,220 @@ class ImageImportDialog(QDialog):
         self._update_observation_source_index()
         self._update_set_from_image_button_state()
 
+    def _register_hint_widget(
+        self,
+        widget: QWidget,
+        hint_text: str | None,
+        tone: str = "info",
+    ) -> None:
+        if not widget:
+            return
+        hint = (hint_text or "").strip()
+        hint_tone = (tone or "info").strip().lower()
+        if self._hint_controller is not None:
+            self._hint_controller.register_widget(widget, hint, tone=hint_tone)
+            return
+        widget.setProperty("_hint_text", hint)
+        widget.setProperty("_hint_tone", hint_tone)
+        widget.setToolTip("")
+        if not any(existing is widget for existing, _, _ in self._pending_hint_widgets):
+            self._pending_hint_widgets.append((widget, hint, hint_tone))
+
+    def _set_hintable_label_text(
+        self,
+        label: QLabel,
+        text: str,
+        hint_text: str | None = None,
+        hint_tone: str = "info",
+    ) -> None:
+        label.setText(text)
+        hint = (hint_text or "").strip()
+        if isinstance(label, HintLabel):
+            label.set_hint_text(hint)
+            label.setToolTip("")
+        elif hint:
+            self._register_hint_widget(label, hint, tone=hint_tone)
+        else:
+            label.setProperty("_hint_text", "")
+            label.setProperty("_hint_tone", "info")
+            label.setToolTip("")
+
+    def set_hint(self, text: str | None) -> None:
+        if self._hint_controller is not None:
+            self._hint_controller.set_hint(text)
+
+    def set_status(
+        self,
+        text: str | None,
+        timeout_ms: int = 4000,
+        tone: str = "info",
+    ) -> None:
+        if self._hint_controller is not None:
+            self._hint_controller.set_status(text, timeout_ms=timeout_ms, tone=tone)
+
+    @staticmethod
+    def _status_tone_from_color(color: str | None, default: str = "info") -> str:
+        value = (color or "").strip().lower()
+        if not value:
+            return default
+        if value in {"#27ae60", "#2ecc71", "green"}:
+            return "success"
+        if value in {"#e74c3c", "#e67e22", "#f39c12", "red", "orange"}:
+            return "warning"
+        return default
+
     def _set_settings_hint(self, text: str | None, color: str) -> None:
-        if not hasattr(self, "settings_hint_label"):
-            return
-        if not text:
-            self.settings_hint_label.setText("")
-            return
-        self.settings_hint_label.setText(text)
-        self.settings_hint_label.setStyleSheet(f"color: {color}; font-size: 9pt;")
+        self.set_status(text, tone=self._status_tone_from_color(color, default="info"))
 
     def _set_ai_status(self, text: str | None, color: str = "#7f8c8d") -> None:
-        if not hasattr(self, "ai_status_label"):
+        self.set_status(
+            text,
+            timeout_ms=6000,
+            tone=self._status_tone_from_color(color, default="info"),
+        )
+
+    @staticmethod
+    def _rotate_normalized_crop_box_clockwise(
+        box: tuple[float, float, float, float],
+    ) -> tuple[float, float, float, float]:
+        x1, y1, x2, y2 = box
+        corners = [
+            (x1, y1),
+            (x2, y1),
+            (x2, y2),
+            (x1, y2),
+        ]
+        rotated = [(1.0 - y, x) for x, y in corners]
+        xs = [p[0] for p in rotated]
+        ys = [p[1] for p in rotated]
+        return (
+            max(0.0, min(1.0, min(xs))),
+            max(0.0, min(1.0, min(ys))),
+            max(0.0, min(1.0, max(xs))),
+            max(0.0, min(1.0, max(ys))),
+        )
+
+    def _invalidate_cached_pixmap(self, path: str | None) -> None:
+        if not path:
             return
-        if not text:
-            self.ai_status_label.setText("")
+        self._pixmap_cache.pop(path, None)
+        self._pixmap_cache_is_preview.pop(path, None)
+
+    def _prepare_rotate_source_path(self, index: int) -> str | None:
+        if index < 0 or index >= len(self.import_results):
+            return None
+        result = self.import_results[index]
+        source = (result.filepath or "").strip()
+        if not source:
+            return None
+        source_path = Path(source)
+        if not source_path.exists():
+            return None
+        if result.image_id:
+            return str(source_path)
+        imports_dir = get_images_dir() / "imports"
+        imports_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            in_imports = source_path.resolve().is_relative_to(imports_dir.resolve())
+        except Exception:
+            in_imports = False
+        if in_imports:
+            return str(source_path)
+        dest = imports_dir / source_path.name
+        counter = 1
+        while dest.exists():
+            dest = imports_dir / f"{source_path.stem}_prep_{counter}{source_path.suffix}"
+            counter += 1
+        try:
+            shutil.copy2(source_path, dest)
+        except Exception:
+            return None
+        result.filepath = str(dest)
+        result.preview_path = str(dest)
+        if not result.original_filepath:
+            result.original_filepath = str(source_path)
+        self.image_paths[index] = str(dest)
+        self._converted_import_paths.add(str(dest))
+        return str(dest)
+
+    def _rotate_image_file_clockwise(self, path: str) -> bool:
+        from PIL import Image, ImageOps
+
+        source = Path(path)
+        if not source.exists():
+            return False
+        tmp = source.with_name(f"{source.stem}_rotating{source.suffix}")
+        try:
+            with Image.open(source) as img:
+                normalized = ImageOps.exif_transpose(img)
+                rotated = normalized.rotate(-90, expand=True)
+                exif = normalized.getexif()
+                if exif is not None:
+                    exif[274] = 1  # Orientation = Normal
+                fmt = img.format
+                save_kwargs = {}
+                if fmt and fmt.upper() in {"JPEG", "JPG"} and rotated.mode not in {"RGB", "L"}:
+                    rotated = rotated.convert("RGB")
+                if fmt and fmt.upper() in {"JPEG", "JPG"}:
+                    save_kwargs["quality"] = 95
+                if exif is not None and len(exif) > 0:
+                    save_kwargs["exif"] = exif.tobytes()
+                try:
+                    rotated.save(tmp, format=fmt, **save_kwargs)
+                except Exception:
+                    save_kwargs.pop("exif", None)
+                    rotated.save(tmp, format=fmt, **save_kwargs)
+            tmp.replace(source)
+            return True
+        except Exception:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return False
+
+    def _on_rotate_current_image_clicked(self) -> None:
+        index = self._current_single_index()
+        if index is None or index < 0 or index >= len(self.import_results):
             return
-        self.ai_status_label.setText(text)
-        self.ai_status_label.setStyleSheet(f"color: {color}; font-size: 9pt;")
+        result = self.import_results[index]
+        old_filepath = result.filepath
+        old_preview = result.preview_path
+        rotate_path = self._prepare_rotate_source_path(index)
+        if not rotate_path:
+            self._set_settings_hint(self.tr("Failed to rotate image"), "#e74c3c")
+            return
+        if not self._rotate_image_file_clockwise(rotate_path):
+            self._set_settings_hint(self.tr("Failed to rotate image"), "#e74c3c")
+            return
+        result.filepath = rotate_path
+        result.preview_path = rotate_path
+        if result.original_filepath == old_filepath:
+            result.original_filepath = rotate_path
+        self.image_paths[index] = rotate_path
+        self._invalidate_cached_pixmap(old_filepath)
+        if old_preview and old_preview != old_filepath:
+            self._invalidate_cached_pixmap(old_preview)
+        self._invalidate_cached_pixmap(rotate_path)
+        if result.ai_crop_box:
+            rotated_box = self._rotate_normalized_crop_box_clockwise(result.ai_crop_box)
+            result.ai_crop_box = rotated_box
+            self._ai_crop_boxes[index] = rotated_box
+            new_size = self._get_image_size(rotate_path)
+            if new_size:
+                result.ai_crop_source_size = (int(new_size[0]), int(new_size[1]))
+            if result.image_id:
+                try:
+                    ImageDB.update_image(
+                        result.image_id,
+                        ai_crop_box=result.ai_crop_box,
+                        ai_crop_source_size=result.ai_crop_source_size,
+                    )
+                except Exception:
+                    pass
+        self._refresh_gallery()
+        self._select_image(index)
+        self._set_settings_hint(self.tr("Image rotated 90 deg"), "#27ae60")
 
     def _update_settings_hint_for_indices(self, indices: list[int], action: str | None = None) -> None:
         if not indices:
@@ -1736,9 +2015,9 @@ class ImageImportDialog(QDialog):
             size = self._get_image_size(result.original_filepath or result.filepath or result.preview_path)
             if size:
                 width, height = size
-                factor = getattr(result, "resample_scale_factor", None)
-                if not isinstance(factor, (int, float)) or factor <= 0:
-                    factor = self._compute_resample_scale_factor(result, respect_toggle=False)
+                # Recompute from current objective/sampling settings so the tag
+                # reflects the actual preview resize target, not a stale cached factor.
+                factor = self._compute_resample_scale_factor(result, respect_toggle=False)
                 target_w = max(1, int(round(width * factor)))
                 target_h = max(1, int(round(height * factor)))
                 mp_value = (target_w * target_h) / 1_000_000.0
@@ -1746,11 +2025,14 @@ class ImageImportDialog(QDialog):
                 mp_value = (preview_pixmap.width() * preview_pixmap.height()) / 1_000_000.0
             mp_text = self._format_megapixels(mp_value) if mp_value is not None else "--"
             self.preview.set_corner_tag(
-                self.tr("Resize {mp}MP").format(mp=mp_text),
+                self.tr("Preview of resize to {mp} MP").format(mp=mp_text),
                 QColor(39, 174, 96),
             )
         else:
-            self.preview.set_corner_tag(self.tr("Original image"), QColor(149, 165, 166))
+            if (result.image_type or "field").strip().lower() == "field":
+                self.preview.set_corner_tag("")
+            else:
+                self.preview.set_corner_tag(self.tr("Original image"), QColor(149, 165, 166))
 
     def _set_preview_for_result(self, result: ImageImportResult, preserve_view: bool = False) -> None:
         old_state = None
@@ -1803,7 +2085,31 @@ class ImageImportDialog(QDialog):
         self._resize_preview_enabled = not self._resize_preview_enabled
         self._refresh_resize_preview(force=True, preserve_view=True)
 
+    def _on_scale_shortcut(self) -> None:
+        if not hasattr(self, "calibrate_btn"):
+            return
+        if not self.calibrate_btn.isEnabled():
+            return
+        self._open_calibration_dialog()
+
+    def _apply_image_type_shortcut(self, image_type: str) -> None:
+        if self.selected_index is None and not self.selected_indices:
+            return
+        if getattr(self, "_loading_form", False):
+            return
+        target = (image_type or "").strip().lower()
+        if target == "micro":
+            self.micro_radio.setChecked(True)
+        else:
+            self.field_radio.setChecked(True)
+        indices = self.selected_indices or [self.selected_index]
+        self._last_settings_action = "image_type"
+        self._apply_settings_to_indices(indices, action="image_type")
+
     def eventFilter(self, obj, event):
+        if obj is getattr(self, "preview", None) and event.type() == QEvent.Resize:
+            self._position_rotate_button()
+            return False
         if (
             obj is getattr(self, "target_sampling_input", None)
             and event.type() == QEvent.KeyPress
@@ -2387,46 +2693,6 @@ class ImageImportDialog(QDialog):
         self._update_current_image_sampling(result)
 
     def _update_current_image_sampling(self, result: ImageImportResult | None) -> None:
-        if not hasattr(self, "exif_sampling_label"):
-            return
-        if not result or result.image_type != "microscope":
-            self.exif_sampling_label.setText("--")
-            self.exif_sampling_label.setToolTip("")
-            self._update_resize_info(result)
-            return
-
-        objective = None
-        if result.objective and result.objective in self.objectives:
-            objective = self.objectives[result.objective]
-        scale_mpp = result.custom_scale
-        if scale_mpp is None and objective:
-            scale_mpp = objective.get("microns_per_pixel")
-        if not scale_mpp or scale_mpp <= 0:
-            self.exif_sampling_label.setText("--")
-            self.exif_sampling_label.setToolTip("")
-            return
-        na_value = objective.get("na") if objective else None
-        if not na_value:
-            self.exif_sampling_label.setText(self.tr("NA not set"))
-            self.exif_sampling_label.setToolTip("")
-            return
-
-        pixels_per_micron = 1.0 / float(scale_mpp)
-        result_info = get_resolution_status(pixels_per_micron, float(na_value))
-        status = result_info["status"]
-        sampling_pct = float(result_info.get("sampling_pct", 0.0))
-        if "oversampled" in status.lower() and sampling_pct > 0:
-            oversample = sampling_pct / 100.0
-            ratio = f"{oversample:.1f}".rstrip("0").rstrip(".")
-            label = f"Oversampled {ratio}x"
-        elif status == "Undersampled" and sampling_pct > 0:
-            undersample = 100.0 / sampling_pct
-            ratio = f"{undersample:.1f}".rstrip("0").rstrip(".")
-            label = f"Undersampled {ratio}x"
-        else:
-            label = status
-        self.exif_sampling_label.setText(label)
-        self.exif_sampling_label.setToolTip(format_resolution_summary(pixels_per_micron, float(na_value)))
         self._update_resize_info(result)
 
     def _get_image_size(self, path: str | None) -> tuple[int, int] | None:
@@ -2498,24 +2764,29 @@ class ImageImportDialog(QDialog):
         factor = target_pixels_per_micron / pixels_per_micron
         if factor > 1.0:
             factor = 1.0
+        # Skip resize when ideal area is close to current (>= 90% of current MP).
+        if (float(factor) * float(factor)) >= 0.90:
+            return 1.0
         return max(0.01, float(factor))
 
     def _update_resize_info(self, result: ImageImportResult | None) -> None:
         if not hasattr(self, "current_resolution_label") or not hasattr(self, "target_resolution_label"):
             return
         if not result or result.image_type != "microscope":
-            self.current_resolution_label.setText("--")
-            self.target_resolution_label.setText("--")
+            self._set_hintable_label_text(self.current_resolution_label, "--", "")
+            self._set_hintable_label_text(self.target_resolution_label, "--", "")
             return
         size = self._get_image_size(result.filepath or result.preview_path or result.original_filepath)
         if not size:
-            self.current_resolution_label.setText("--")
-            self.target_resolution_label.setText("--")
+            self._set_hintable_label_text(self.current_resolution_label, "--", "")
+            self._set_hintable_label_text(self.target_resolution_label, "--", "")
             return
         width, height = size
         current_mp = (width * height) / 1_000_000.0
-        self.current_resolution_label.setText(
-            f"{self._format_megapixels(current_mp)} MP ({width} × {height})"
+        self._set_hintable_label_text(
+            self.current_resolution_label,
+            f"{self._format_megapixels(current_mp)} MP ({width} x {height})",
+            self.tr("Current pixel dimensions and megapixels for this image."),
         )
         objective = None
         if result.objective and result.objective in self.objectives:
@@ -2534,31 +2805,58 @@ class ImageImportDialog(QDialog):
             self.target_sampling_input.setValue(float(target_pct))
             self.target_sampling_input.blockSignals(False)
         if self._is_resized_image(result):
-            self.target_resolution_label.setText(self.tr("Already resized"))
+            self._set_hintable_label_text(
+                self.target_resolution_label,
+                self.tr("Already resized"),
+                self.tr("This image is already stored in a resized form."),
+            )
             return
         if not scale_mpp or not na_value:
-            self.target_resolution_label.setText("--")
+            self._set_hintable_label_text(
+                self.target_resolution_label,
+                "--",
+                self.tr("Ideal resolution requires both scale and objective NA."),
+            )
             return
         factor = self._compute_resample_scale_factor(result)
         if result.image_id is None and not self._is_resized_image(result):
             result.resample_scale_factor = factor
         if not hasattr(self, "resize_optimal_checkbox") or not self.resize_optimal_checkbox.isChecked():
-            self.target_resolution_label.setText("--")
+            self._set_hintable_label_text(
+                self.target_resolution_label,
+                "--",
+                self.tr("Enable resize to preview ideal output resolution."),
+            )
             return
+        target_pct = float(
+            objective.get("target_sampling_pct", self.target_sampling_pct)
+            if objective
+            else self.target_sampling_pct
+        )
+        hint_text = self.tr(
+            "Ideal resolution from objective scale, NA, and target sampling ({pct:.0f}% Nyquist)."
+        ).format(pct=target_pct)
         if factor >= 0.999:
-            self.target_resolution_label.setText(self.tr("Same as current"))
+            self._set_hintable_label_text(
+                self.target_resolution_label,
+                self.tr("Current (no resize)"),
+                self.tr("Ideal area is close to current area (>=90%), so resize is skipped."),
+            )
             return
         target_w = max(1, int(round(width * factor)))
         target_h = max(1, int(round(height * factor)))
         target_mp = (target_w * target_h) / 1_000_000.0
-        self.target_resolution_label.setText(
-            f"{self._format_megapixels(target_mp)} MP ({target_w} × {target_h})"
+        self._set_hintable_label_text(
+            self.target_resolution_label,
+            f"{self._format_megapixels(target_mp)} MP ({target_w} x {target_h})",
+            hint_text,
         )
 
     def _on_resize_settings_changed(self) -> None:
         if not hasattr(self, "resize_optimal_checkbox"):
             return
         resize_enabled = bool(self.resize_optimal_checkbox.isChecked())
+        self._resize_preview_enabled = resize_enabled
         self._sync_resize_controls()
         SettingsDB.set_setting("resize_to_optimal_sampling", resize_enabled)
         store_original = self._store_originals_enabled() if resize_enabled else False
@@ -2569,6 +2867,7 @@ class ImageImportDialog(QDialog):
                 result.resample_scale_factor = self._compute_resample_scale_factor(result)
         if self.selected_index is not None and 0 <= self.selected_index < len(self.import_results):
             self._update_current_image_sampling(self.import_results[self.selected_index])
+        self._refresh_resize_preview(force=True, preserve_view=True)
 
     def _on_target_sampling_changed(self, value: float) -> None:
         self.target_sampling_pct = float(value)
@@ -2633,28 +2932,24 @@ class ImageImportDialog(QDialog):
     def _update_scale_mismatch_warning(self) -> None:
         if not hasattr(self, "scale_warning_label"):
             return
-        if not hasattr(self, "scale_group") or not self.scale_group.isEnabled():
-            self.scale_warning_label.setText("")
-            self.scale_warning_label.setToolTip("")
+        def _hide_warning() -> None:
+            self._set_hintable_label_text(self.scale_warning_label, "", "")
             self.scale_warning_label.setVisible(False)
+
+        if not hasattr(self, "scale_group") or not self.scale_group.isEnabled():
+            _hide_warning()
             return
         idx = self._current_single_index()
         if idx is None or idx < 0 or idx >= len(self.import_results):
-            self.scale_warning_label.setText("")
-            self.scale_warning_label.setToolTip("")
-            self.scale_warning_label.setVisible(False)
+            _hide_warning()
             return
         result = self.import_results[idx]
         if result.image_type != "microscope":
-            self.scale_warning_label.setText("")
-            self.scale_warning_label.setToolTip("")
-            self.scale_warning_label.setVisible(False)
+            _hide_warning()
             return
         selected_objective = self.objective_combo.currentData()
         if not selected_objective or selected_objective == self.CUSTOM_OBJECTIVE_KEY:
-            self.scale_warning_label.setText("")
-            self.scale_warning_label.setToolTip("")
-            self.scale_warning_label.setVisible(False)
+            _hide_warning()
             return
         calibration = CalibrationDB.get_active_calibration(selected_objective)
         calibration_mp = calibration.get("megapixels") if calibration else None
@@ -2667,17 +2962,13 @@ class ImageImportDialog(QDialog):
         elif estimate:
             calibration_mp = estimate
         if not isinstance(calibration_mp, (int, float)) or calibration_mp <= 0:
-            self.scale_warning_label.setText("")
-            self.scale_warning_label.setToolTip("")
-            self.scale_warning_label.setVisible(False)
+            _hide_warning()
             return
         image_mp = self._get_image_megapixels(
             result.filepath or result.preview_path or result.original_filepath
         )
         if not image_mp:
-            self.scale_warning_label.setText("")
-            self.scale_warning_label.setToolTip("")
-            self.scale_warning_label.setVisible(False)
+            _hide_warning()
             return
         effective_mp = float(image_mp)
         factor = getattr(result, "resample_scale_factor", None)
@@ -2685,25 +2976,24 @@ class ImageImportDialog(QDialog):
             effective_mp = float(image_mp) / (float(factor) * float(factor))
         diff_ratio = abs(float(effective_mp) - float(calibration_mp)) / max(1e-6, float(calibration_mp))
         if diff_ratio <= 0.01:
-            self.scale_warning_label.setText("")
-            self.scale_warning_label.setToolTip("")
-            self.scale_warning_label.setVisible(False)
+            _hide_warning()
             return
         ratio = max(effective_mp, calibration_mp) / max(1e-6, min(effective_mp, calibration_mp))
         if ratio < 1.5:
-            self.scale_warning_label.setText("")
-            self.scale_warning_label.setToolTip("")
-            self.scale_warning_label.setVisible(False)
+            _hide_warning()
             return
-        self.scale_warning_label.setText(self.tr("Warning: Image resolution mismatch!"))
-        self.scale_warning_label.setToolTip(
-            self.tr(
-                "Calibration image: {cal}MP. This image: {img}MP. "
-                "This is ok if you are working on a cropped image."
-            ).format(
-                cal=self._format_megapixels(float(calibration_mp)),
-                img=self._format_megapixels(float(effective_mp)),
-            )
+        hint_text = self.tr(
+            "Calibration image: {cal}MP. This image: {img}MP. "
+            "This is ok if you are working on a cropped image."
+        ).format(
+            cal=self._format_megapixels(float(calibration_mp)),
+            img=self._format_megapixels(float(effective_mp)),
+        )
+        self._set_hintable_label_text(
+            self.scale_warning_label,
+            self.tr("Resolution mismatch!"),
+            hint_text,
+            hint_tone="warning",
         )
         self.scale_warning_label.setVisible(True)
 
@@ -2722,12 +3012,11 @@ class ImageImportDialog(QDialog):
         self.exif_lon_label.setText("Lon: --")
         self.exif_map_btn.setEnabled(False)
         if hasattr(self, "exif_sampling_label"):
-            self.exif_sampling_label.setText("--")
-            self.exif_sampling_label.setToolTip("")
+            self._set_hintable_label_text(self.exif_sampling_label, "--", "")
         if hasattr(self, "current_resolution_label"):
-            self.current_resolution_label.setText("--")
+            self._set_hintable_label_text(self.current_resolution_label, "--", "")
         if hasattr(self, "target_resolution_label"):
-            self.target_resolution_label.setText("--")
+            self._set_hintable_label_text(self.target_resolution_label, "--", "")
 
     def _show_multi_selection_state(self) -> None:
         self.preview.set_image(None)

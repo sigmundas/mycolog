@@ -41,20 +41,32 @@ def _lookup_adb_taxon_id_from_db(genus: str, species: str) -> int | None:
         return None
     try:
         cur = conn.execute("PRAGMA table_info(taxon_min)")
-        has_adb = any((row[1] or "").lower() == "adbtaxonid" for row in cur.fetchall())
-        if not has_adb:
+        columns = {(row[1] or "").lower() for row in cur.fetchall()}
+        if "adbtaxonid" in columns:
+            cur = conn.execute(
+                """
+                SELECT AdbTaxonId
+                FROM taxon_min
+                WHERE genus = ? COLLATE NOCASE
+                  AND specific_epithet = ? COLLATE NOCASE
+                  AND AdbTaxonId IS NOT NULL
+                LIMIT 1
+                """,
+                (genus, species),
+            )
+        elif "taxon_id" in columns:
+            cur = conn.execute(
+                """
+                SELECT taxon_id
+                FROM taxon_min
+                WHERE genus = ? COLLATE NOCASE
+                  AND specific_epithet = ? COLLATE NOCASE
+                LIMIT 1
+                """,
+                (genus, species),
+            )
+        else:
             return None
-        cur = conn.execute(
-            """
-            SELECT AdbTaxonId
-            FROM taxon_min
-            WHERE genus = ? COLLATE NOCASE
-              AND specific_epithet = ? COLLATE NOCASE
-              AND AdbTaxonId IS NOT NULL
-            LIMIT 1
-            """,
-            (genus, species),
-        )
         row = cur.fetchone()
         if not row or row[0] is None:
             return None
@@ -147,8 +159,9 @@ class ObservationDB:
                           gps_latitude: float = None, gps_longitude: float = None,
                           author: str = None, source_type: str = "personal",
                           citation: str = None, data_provider: str = None,
-                          adb_taxon_id: int | None = None,
-                          artsdata_id: int | None = None) -> int:
+                          artsdata_id: int | None = None,
+                          unspontaneous: bool = False,
+                          determination_method: int | None = None) -> int:
         """Create a new observation and return its ID"""
         conn = get_connection()
         cursor = conn.cursor()
@@ -162,9 +175,6 @@ class ObservationDB:
                 parts.append(species)
             species_guess = ' '.join(parts)
 
-        if adb_taxon_id is None:
-            adb_taxon_id = _resolve_adb_taxon_id(genus, species)
-
         # Create folder path: genus/species date-time
         genus_folder = sanitize_folder_name(genus) if genus else "unknown"
         species_name = sanitize_folder_name(species) if species else "sp"
@@ -175,12 +185,15 @@ class ObservationDB:
 
         cursor.execute('''
             INSERT INTO observations (date, genus, species, common_name, location, habitat,
-                                     adb_taxon_id, artsdata_id, species_guess, notes, uncertain,
+                                     artsdata_id, species_guess, notes, uncertain, unspontaneous,
+                                     determination_method,
                                      folder_path, inaturalist_id, gps_latitude, gps_longitude,
                                      author, source_type, citation, data_provider)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (date, genus, species, common_name, location, habitat, adb_taxon_id,
-              artsdata_id, species_guess, notes, 1 if uncertain else 0, folder_path,
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (date, genus, species, common_name, location, habitat, artsdata_id,
+              species_guess, notes, 1 if uncertain else 0, 1 if unspontaneous else 0,
+              determination_method,
+              folder_path,
               inaturalist_id, gps_latitude, gps_longitude, author, source_type,
               citation, data_provider))
 
@@ -190,13 +203,15 @@ class ObservationDB:
         return obs_id
 
     @staticmethod
-    def update_observation(observation_id: int, genus: str = None, species: str = None,
-                           common_name: str = None, location: str = None, habitat: str = None,
-                           notes: str = None, uncertain: bool = None,
-                           species_guess: str = None, date: str = None,
-                           gps_latitude: float = None, gps_longitude: float = None,
-                           allow_nulls: bool = False, adb_taxon_id: int | None = None,
-                           artsdata_id: int | None = None) -> Optional[str]:
+    def update_observation(observation_id: int, genus: str | object = _UNSET, species: str | object = _UNSET,
+                           common_name: str | object = _UNSET, location: str | object = _UNSET, habitat: str | object = _UNSET,
+                           notes: str | object = _UNSET, uncertain: bool | object = _UNSET,
+                           species_guess: str | object = _UNSET, date: str | object = _UNSET,
+                           gps_latitude: float | object = _UNSET, gps_longitude: float | object = _UNSET,
+                           allow_nulls: bool = False,
+                           artsdata_id: int | None | object = _UNSET,
+                           unspontaneous: bool | object = _UNSET,
+                           determination_method: int | None | object = _UNSET) -> Optional[str]:
         """Update an observation. Returns new folder path if genus/species changed."""
         conn = get_connection()
         conn.row_factory = sqlite3.Row
@@ -213,13 +228,13 @@ class ObservationDB:
 
             # Check if genus/species changed
             new_folder_path = None
-            genus_changed = genus is not None and genus != current.get('genus')
-            species_changed = species is not None and species != current.get('species')
+            genus_changed = genus is not _UNSET and genus != current.get('genus')
+            species_changed = species is not _UNSET and species != current.get('species')
 
             if genus_changed or species_changed:
                 # Build new folder path
-                new_genus = genus if genus is not None else current.get('genus')
-                new_species = species if species is not None else current.get('species')
+                new_genus = current.get('genus') if genus is _UNSET else genus
+                new_species = current.get('species') if species is _UNSET else species
 
                 genus_folder = sanitize_folder_name(new_genus) if new_genus else "unknown"
                 species_name = sanitize_folder_name(new_species) if new_species else "sp"
@@ -244,51 +259,47 @@ class ObservationDB:
             updates = []
             values = []
 
-            if allow_nulls or genus is not None:
+            if genus is not _UNSET and (allow_nulls or genus is not None):
                 updates.append('genus = ?')
                 values.append(genus)
-            if allow_nulls or species is not None:
+            if species is not _UNSET and (allow_nulls or species is not None):
                 updates.append('species = ?')
                 values.append(species)
-            if allow_nulls or common_name is not None:
+            if common_name is not _UNSET and (allow_nulls or common_name is not None):
                 updates.append('common_name = ?')
                 values.append(common_name)
-            if allow_nulls or location is not None:
+            if location is not _UNSET and (allow_nulls or location is not None):
                 updates.append('location = ?')
                 values.append(location)
-            if allow_nulls or habitat is not None:
+            if habitat is not _UNSET and (allow_nulls or habitat is not None):
                 updates.append('habitat = ?')
                 values.append(habitat)
-            if allow_nulls or date is not None:
+            if date is not _UNSET and (allow_nulls or date is not None):
                 date_value = date
-                if date_value is None and allow_nulls:
-                    date_value = current.get('date') or datetime.now().strftime("%Y-%m-%d %H:%M")
                 updates.append('date = ?')
                 values.append(date_value)
-            if allow_nulls or notes is not None:
+            if notes is not _UNSET and (allow_nulls or notes is not None):
                 updates.append('notes = ?')
                 values.append(notes)
-            if adb_taxon_id is not None or genus is not None or species is not None:
-                if adb_taxon_id is None:
-                    adb_taxon_id = _resolve_adb_taxon_id(
-                        genus if genus is not None else current.get('genus'),
-                        species if species is not None else current.get('species'),
-                    )
-                updates.append('adb_taxon_id = ?')
-                values.append(adb_taxon_id)
-            if allow_nulls or artsdata_id is not None:
+            if artsdata_id is not _UNSET and (allow_nulls or artsdata_id is not None):
                 updates.append('artsdata_id = ?')
                 values.append(artsdata_id)
-            if allow_nulls or uncertain is not None:
+            if uncertain is not _UNSET and (allow_nulls or uncertain is not None):
                 updates.append('uncertain = ?')
                 values.append(1 if uncertain else 0)
-            if allow_nulls or gps_latitude is not None:
+            if unspontaneous is not _UNSET and (allow_nulls or unspontaneous is not None):
+                updates.append('unspontaneous = ?')
+                values.append(1 if unspontaneous else 0)
+            if determination_method is not _UNSET and (allow_nulls or determination_method is not None):
+                updates.append('determination_method = ?')
+                values.append(determination_method)
+            if gps_latitude is not _UNSET and (allow_nulls or gps_latitude is not None):
                 updates.append('gps_latitude = ?')
                 values.append(gps_latitude)
-            if allow_nulls or gps_longitude is not None:
+            if gps_longitude is not _UNSET and (allow_nulls or gps_longitude is not None):
                 updates.append('gps_longitude = ?')
                 values.append(gps_longitude)
-            if allow_nulls or species_guess is not None:
+            if species_guess is not _UNSET and (allow_nulls or species_guess is not None):
                 updates.append('species_guess = ?')
                 values.append(species_guess)
             if new_folder_path:
@@ -296,9 +307,9 @@ class ObservationDB:
                 values.append(new_folder_path)
 
             # Update species_guess based on new genus/species if not explicitly provided
-            if not allow_nulls and species_guess is None and (genus is not None or species is not None):
-                new_genus = genus if genus is not None else current.get('genus')
-                new_species = species if species is not None else current.get('species')
+            if not allow_nulls and species_guess is _UNSET and (genus is not _UNSET or species is not _UNSET):
+                new_genus = current.get('genus') if genus is _UNSET else genus
+                new_species = current.get('species') if species is _UNSET else species
                 parts = []
                 if new_genus:
                     parts.append(new_genus)
@@ -371,6 +382,54 @@ class ObservationDB:
             WHERE id = ?
         ''', (spore_statistics, observation_id))
 
+        conn.commit()
+        conn.close()
+
+    @staticmethod
+    def clear_artsdata_id(observation_id: int) -> None:
+        """Clear Artsobservasjoner ID without touching other observation fields."""
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            '''
+            UPDATE observations
+            SET artsdata_id = NULL
+            WHERE id = ?
+            ''',
+            (observation_id,),
+        )
+        conn.commit()
+        conn.close()
+
+    @staticmethod
+    def set_inaturalist_id(observation_id: int, inaturalist_id: int | None) -> None:
+        """Set iNaturalist ID for an observation."""
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            '''
+            UPDATE observations
+            SET inaturalist_id = ?
+            WHERE id = ?
+            ''',
+            (inaturalist_id, observation_id),
+        )
+        conn.commit()
+        conn.close()
+
+    @staticmethod
+    def set_mushroomobserver_id(observation_id: int, mushroomobserver_id: int | None) -> None:
+        """Set Mushroom Observer ID for an observation."""
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            '''
+            UPDATE observations
+            SET mushroomobserver_id = ?
+            WHERE id = ?
+            ''',
+            (mushroomobserver_id, observation_id),
+        )
         conn.commit()
         conn.close()
 
@@ -527,6 +586,16 @@ class ImageDB:
 
         final_filepath = filepath
         final_original_filepath = original_filepath
+        artsobs_web_unpublished = 0
+
+        if observation_id:
+            cursor.execute('SELECT artsdata_id FROM observations WHERE id = ?', (observation_id,))
+            obs_row = cursor.fetchone()
+            try:
+                if obs_row and int(obs_row["artsdata_id"] or 0) > 0:
+                    artsobs_web_unpublished = 1
+            except (TypeError, ValueError):
+                artsobs_web_unpublished = 0
 
         # Copy image to observation folder if requested
         if copy_to_folder and observation_id:
@@ -608,12 +677,13 @@ class ImageDB:
                               objective_name, scale_microns_per_pixel, resample_scale_factor,
                               mount_medium, sample_type, contrast, measure_color, notes, calibration_id,
                               ai_crop_x1, ai_crop_y1, ai_crop_x2, ai_crop_y2,
-                              ai_crop_source_w, ai_crop_source_h, gps_source, original_filepath)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                              ai_crop_source_w, ai_crop_source_h, gps_source, original_filepath,
+                              artsobs_web_unpublished)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (observation_id, final_filepath, image_type, micro_category,
               objective_name, scale, resample_scale_factor, mount_medium, sample_type, contrast, measure_color, notes,
               calibration_id, crop_x1, crop_y1, crop_x2, crop_y2, crop_w, crop_h, gps_source_value,
-              final_original_filepath))
+              final_original_filepath, artsobs_web_unpublished))
 
         img_id = cursor.lastrowid
         conn.commit()
@@ -666,6 +736,67 @@ class ImageDB:
         rows = cursor.fetchall()
         conn.close()
         return [dict(row) for row in rows]
+
+    @staticmethod
+    def get_pending_artsobs_web_uploads() -> List[dict]:
+        """Get images marked as pending upload for Artsobservasjoner web."""
+        conn = get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT
+                i.id AS image_id,
+                i.observation_id,
+                i.filepath,
+                i.original_filepath,
+                i.created_at,
+                o.artsdata_id
+            FROM images i
+            JOIN observations o ON o.id = i.observation_id
+            WHERE COALESCE(i.artsobs_web_unpublished, 0) = 1
+              AND COALESCE(o.artsdata_id, 0) > 0
+            ORDER BY i.created_at, i.id
+        ''')
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    def mark_images_artsobs_web_uploaded(image_ids: List[int]) -> None:
+        if not image_ids:
+            return
+        clean_ids: list[int] = []
+        for value in image_ids:
+            try:
+                clean_ids.append(int(value))
+            except (TypeError, ValueError):
+                continue
+        if not clean_ids:
+            return
+        placeholders = ",".join("?" for _ in clean_ids)
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            f"UPDATE images SET artsobs_web_unpublished = 0 WHERE id IN ({placeholders})",
+            clean_ids,
+        )
+        conn.commit()
+        conn.close()
+
+    @staticmethod
+    def mark_observation_images_artsobs_web_uploaded(observation_id: int) -> None:
+        try:
+            obs_id = int(observation_id)
+        except (TypeError, ValueError):
+            return
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE images SET artsobs_web_unpublished = 0 WHERE observation_id = ?",
+            (obs_id,),
+        )
+        conn.commit()
+        conn.close()
 
     @staticmethod
     def update_image(image_id: int, micro_category: str = None,

@@ -450,13 +450,15 @@ def init_database():
             habitat TEXT,
             genus TEXT,
             species TEXT,
-            adb_taxon_id INTEGER,
             artsdata_id INTEGER,
             common_name TEXT,
             species_guess TEXT,
             uncertain INTEGER DEFAULT 0,
+            unspontaneous INTEGER DEFAULT 0,
+            determination_method INTEGER,
             notes TEXT,
             inaturalist_id INTEGER,
+            mushroomobserver_id INTEGER,
             folder_path TEXT,
             spore_statistics TEXT,
             auto_threshold REAL,
@@ -486,17 +488,23 @@ def init_database():
     except sqlite3.OperationalError:
         pass  # Column already exists
 
-    # Add adb_taxon_id column if it doesn't exist
-    try:
-        cursor.execute('ALTER TABLE observations ADD COLUMN adb_taxon_id INTEGER')
-    except sqlite3.OperationalError:
-        pass  # Column already exists
-
     # Add artsdata_id column if it doesn't exist
     try:
         cursor.execute('ALTER TABLE observations ADD COLUMN artsdata_id INTEGER')
     except sqlite3.OperationalError:
         pass  # Column already exists
+
+    # Add Mushroom Observer ID column if it doesn't exist
+    try:
+        cursor.execute('ALTER TABLE observations ADD COLUMN mushroomobserver_id INTEGER')
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Remove legacy adb_taxon_id column if present.
+    try:
+        cursor.execute('ALTER TABLE observations DROP COLUMN adb_taxon_id')
+    except sqlite3.OperationalError:
+        pass
 
     # Add source tracking columns if they don't exist
     try:
@@ -544,6 +552,18 @@ def init_database():
     except sqlite3.OperationalError:
         pass  # Column already exists
 
+    # Add unspontaneous column if it doesn't exist
+    try:
+        cursor.execute('ALTER TABLE observations ADD COLUMN unspontaneous INTEGER DEFAULT 0')
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Add determination_method column if it doesn't exist
+    try:
+        cursor.execute('ALTER TABLE observations ADD COLUMN determination_method INTEGER')
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
     # Add folder_path column if it doesn't exist
     try:
         cursor.execute('ALTER TABLE observations ADD COLUMN folder_path TEXT')
@@ -586,6 +606,7 @@ def init_database():
             ai_crop_source_w INTEGER,
             ai_crop_source_h INTEGER,
             gps_source INTEGER DEFAULT 0,
+            artsobs_web_unpublished INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (observation_id) REFERENCES observations(id)
         )
@@ -674,6 +695,12 @@ def init_database():
     # Add GPS source flag for observation metadata
     try:
         cursor.execute('ALTER TABLE images ADD COLUMN gps_source INTEGER DEFAULT 0')
+    except sqlite3.OperationalError:
+        pass
+
+    # Add pending Artsobs web upload flag for images
+    try:
+        cursor.execute('ALTER TABLE images ADD COLUMN artsobs_web_unpublished INTEGER DEFAULT 0')
     except sqlite3.OperationalError:
         pass
 

@@ -9,26 +9,32 @@ def convert_heic_to_jpeg(filepath, output_dir):
     """
     try:
         import pillow_heif
-        from PIL import Image
+        from PIL import Image, ImageOps
     except ImportError:
         return None
 
     try:
         pillow_heif.register_heif_opener()
-        exif_data = None
         try:
             heif_file = pillow_heif.open_heif(filepath)
-            exif_data = heif_file.info.get("exif")
             image = heif_file.to_pillow()
         except Exception:
             image = Image.open(filepath)
-            exif_data = image.info.get("exif")
-        if not exif_data:
-            try:
-                exif_data = image.getexif().tobytes()
-            except Exception:
-                exif_data = None
-        image = image.convert("RGB")
+
+        # Apply EXIF orientation to pixels so portrait photos remain portrait
+        # on services that ignore EXIF orientation during display.
+        image = ImageOps.exif_transpose(image).convert("RGB")
+
+        exif_bytes = None
+        try:
+            exif = image.getexif()
+            if exif:
+                # Orientation tag: reset after transposing.
+                exif[274] = 1
+                exif_bytes = exif.tobytes()
+        except Exception:
+            exif_bytes = None
+
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         base_name = Path(filepath).stem
@@ -37,8 +43,8 @@ def convert_heic_to_jpeg(filepath, output_dir):
         while output_path.exists():
             output_path = output_dir / f"{base_name}_{counter}.jpg"
             counter += 1
-        if exif_data:
-            image.save(output_path, "JPEG", quality=95, exif=exif_data)
+        if exif_bytes:
+            image.save(output_path, "JPEG", quality=95, exif=exif_bytes)
         else:
             image.save(output_path, "JPEG", quality=95)
         return str(output_path)

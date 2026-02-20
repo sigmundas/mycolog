@@ -9,18 +9,97 @@ import requests
 from platformdirs import user_data_dir
 from typing import Dict, Optional, Callable
 
+_ARTSOBS_WEB_USERNAME_KEY = "artsobs_web_username"
+_ARTSOBS_WEB_KEYRING_SERVICE = "MycoLog.Artsobservasjoner"
+_ARTSOBS_WEB_KEYRING_ACCOUNT = "web_password"
 
-def _prompt_web_credentials(parent=None) -> tuple[Optional[str], Optional[str]]:
+
+def _get_keyring_module():
+    try:
+        import keyring  # type: ignore
+        return keyring
+    except Exception:
+        return None
+
+
+def _get_saved_web_username() -> str:
+    try:
+        from database.models import SettingsDB
+        return (SettingsDB.get_setting(_ARTSOBS_WEB_USERNAME_KEY, "") or "").strip()
+    except Exception:
+        return ""
+
+
+def _set_saved_web_username(username: str) -> None:
+    try:
+        from database.models import SettingsDB
+        SettingsDB.set_setting(_ARTSOBS_WEB_USERNAME_KEY, username or "")
+    except Exception:
+        return
+
+
+def _load_saved_web_credentials() -> tuple[str, Optional[str], bool]:
+    username = _get_saved_web_username()
+    keyring = _get_keyring_module()
+    if keyring is None:
+        return username, None, False
+    try:
+        password = keyring.get_password(
+            _ARTSOBS_WEB_KEYRING_SERVICE,
+            _ARTSOBS_WEB_KEYRING_ACCOUNT,
+        )
+    except Exception:
+        return username, None, False
+    return username, password, True
+
+
+def _save_web_credentials(username: str, password: str) -> None:
+    _set_saved_web_username(username)
+    keyring = _get_keyring_module()
+    if keyring is None:
+        raise RuntimeError("Secure password storage is unavailable on this system.")
+    try:
+        keyring.set_password(
+            _ARTSOBS_WEB_KEYRING_SERVICE,
+            _ARTSOBS_WEB_KEYRING_ACCOUNT,
+            password,
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Could not securely save password: {exc}") from exc
+
+
+def _clear_saved_web_credentials() -> None:
+    _set_saved_web_username("")
+    keyring = _get_keyring_module()
+    if keyring is None:
+        return
+    try:
+        keyring.delete_password(
+            _ARTSOBS_WEB_KEYRING_SERVICE,
+            _ARTSOBS_WEB_KEYRING_ACCOUNT,
+        )
+    except Exception:
+        return
+
+
+def _prompt_web_credentials(parent=None) -> tuple[Optional[str], Optional[str], bool]:
     """Show a Qt dialog for Artsobservasjoner web credentials."""
     from PySide6.QtWidgets import (
         QDialog,
         QDialogButtonBox,
         QFormLayout,
+        QCheckBox,
         QLabel,
         QLineEdit,
         QMessageBox,
         QVBoxLayout,
     )
+
+    saved_username, saved_password, can_store_password = _load_saved_web_credentials()
+    has_saved_password = bool(saved_password)
+    password_edited = False
+    submitted_password: Optional[str] = None
+    remember_login = False
 
     dialog = QDialog(parent)
     dialog.setWindowTitle("Log in to Artsobservasjoner (web)")
@@ -33,22 +112,59 @@ def _prompt_web_credentials(parent=None) -> tuple[Optional[str], Optional[str]]:
     form = QFormLayout()
     username_edit = QLineEdit()
     username_edit.setPlaceholderText("Email")
+    username_edit.setText(saved_username)
     password_edit = QLineEdit()
     password_edit.setPlaceholderText("Password")
     password_edit.setEchoMode(QLineEdit.Password)
+    if has_saved_password:
+        password_edit.setText("********")
     form.addRow("Email:", username_edit)
     form.addRow("Password:", password_edit)
     layout.addLayout(form)
 
+    remember_checkbox = QCheckBox("Save login info on this device")
+    remember_checkbox.setChecked(bool(saved_username or has_saved_password))
+    if not can_store_password:
+        remember_checkbox.setChecked(False)
+        remember_checkbox.setEnabled(False)
+        remember_checkbox.setToolTip("Install keyring to enable encrypted password storage.")
+    layout.addWidget(remember_checkbox)
+
+    if has_saved_password:
+        layout.addWidget(QLabel("Saved password loaded (shown masked)."))
+    if not can_store_password:
+        warning = QLabel("Secure password storage unavailable: password will not be saved.")
+        warning.setStyleSheet("color: #b35c00;")
+        layout.addWidget(warning)
+
     buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
     layout.addWidget(buttons)
 
+    def _on_password_edited(_text: str):
+        nonlocal password_edited
+        password_edited = True
+
+    password_edit.textEdited.connect(_on_password_edited)
+
     def _accept_if_valid():
+        nonlocal submitted_password, remember_login
         if not username_edit.text().strip() or not password_edit.text():
             QMessageBox.warning(
                 dialog,
                 "Missing Information",
                 "Please enter both email and password.",
+            )
+            return
+        if has_saved_password and not password_edited:
+            submitted_password = saved_password
+        else:
+            submitted_password = password_edit.text()
+        remember_login = bool(remember_checkbox.isChecked())
+        if remember_login and not can_store_password:
+            QMessageBox.warning(
+                dialog,
+                "Secure Storage Unavailable",
+                "Password saving requires secure keyring support on this system.",
             )
             return
         dialog.accept()
@@ -60,9 +176,9 @@ def _prompt_web_credentials(parent=None) -> tuple[Optional[str], Optional[str]]:
     username_edit.setFocus()
 
     if dialog.exec() != QDialog.Accepted:
-        return None, None
+        return None, None, False
 
-    return username_edit.text().strip(), password_edit.text()
+    return username_edit.text().strip(), submitted_password, remember_login
 
 
 class ArtsObservasjonerWebLogin:
@@ -96,20 +212,24 @@ class ArtsObservasjonerWebLogin:
 
         return self.session.cookies.get("__RequestVerificationToken")
 
-    def login(self, username: str, password: str) -> bool:
+    def login(self, username: str, password: str, remember_me: bool = False) -> bool:
         """Authenticate with username/password."""
         csrf_token = self.get_csrf_token()
         if not csrf_token:
             raise RuntimeError("Failed to get CSRF token from Artsobservasjoner.")
 
-        login_data = {
-            "__RequestVerificationToken": csrf_token,
-            "AuthenticationViewModel.UserName": username,
-            "AuthenticationViewModel.ReturnUrl": "",
-            "AuthenticationViewModel.Password": password,
-            "AuthenticationViewModel.RememberMe": "false",
-            "Shared_LogOn": "Logg inn",
-        }
+        login_data: list[tuple[str, str]] = [
+            ("__RequestVerificationToken", csrf_token),
+            ("AuthenticationViewModel.UserName", username),
+            ("AuthenticationViewModel.ReturnUrl", ""),
+            ("AuthenticationViewModel.Password", password),
+        ]
+        # Mirror standard ASP.NET checkbox post pattern:
+        # hidden false value first, then checkbox true when checked.
+        login_data.append(("AuthenticationViewModel.RememberMe", "false"))
+        if remember_me:
+            login_data.append(("AuthenticationViewModel.RememberMe", "true"))
+        login_data.append(("Shared_LogOn", "Logg inn"))
 
         response = self.session.post(
             f"{self.BASE_URL}/LogOn",
@@ -266,7 +386,7 @@ class ArtsObservasjonerAuth:
     Unified authentication manager
     Tries multiple approaches and caches cookies
     """
-    
+
     def __init__(self, cookies_file: Optional[Path] = None):
         """
         Args:
@@ -278,46 +398,124 @@ class ArtsObservasjonerAuth:
                 / "artsobservasjoner_cookies.json"
             )
         self.cookies_file = Path(cookies_file)
+        stem = self.cookies_file.stem
+        suffix = self.cookies_file.suffix or ".json"
+        self._cookies_files = {
+            "mobile": self.cookies_file.with_name(f"{stem}_mobile{suffix}"),
+            "web": self.cookies_file.with_name(f"{stem}_web{suffix}"),
+        }
         self._migrate_legacy_cookies()
         self.cookies_file.parent.mkdir(parents=True, exist_ok=True)
 
-    def _migrate_legacy_cookies(self) -> None:
-        legacy_file = Path.home() / ".myco_log" / "artsobservasjoner_cookies.json"
-        if not legacy_file.exists() or self.cookies_file.exists():
-            return
+    @staticmethod
+    def _normalize_target(target: str | None) -> str:
+        key = (target or "mobile").strip().lower()
+        return "web" if key == "web" else "mobile"
+
+    def _cookies_path(self, target: str | None = None) -> Path:
+        return self._cookies_files[self._normalize_target(target)]
+
+    @staticmethod
+    def _is_mobile_cookie_payload(cookies: Dict[str, str]) -> bool:
+        return any(
+            name in cookies for name in ("__Host-bff", "__Host-bffC1", "__Host-bffC2")
+        )
+
+    @staticmethod
+    def _is_web_cookie_payload(cookies: Dict[str, str]) -> bool:
+        return ".ASPXAUTHNO" in cookies
+
+    def _load_json_cookies(self, path: Path) -> Optional[Dict[str, str]]:
+        if not path.exists():
+            return None
         try:
-            self.cookies_file.parent.mkdir(parents=True, exist_ok=True)
-            legacy_file.replace(self.cookies_file)
+            with open(path) as f:
+                data = json.load(f)
         except Exception:
-            return
-    
-    def load_cookies(self) -> Optional[Dict[str, str]]:
+            return None
+        return data if isinstance(data, dict) else None
+
+    def _write_json_cookies(self, path: Path, cookies: Dict[str, str]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(cookies, f, indent=2)
+
+    def _migrate_legacy_cookies(self) -> None:
+        self.cookies_file.parent.mkdir(parents=True, exist_ok=True)
+        legacy_file = Path.home() / ".myco_log" / "artsobservasjoner_cookies.json"
+
+        for source in (legacy_file, self.cookies_file):
+            cookies = self._load_json_cookies(source)
+            if not cookies:
+                continue
+
+            wrote_any = False
+            if self._is_mobile_cookie_payload(cookies):
+                mobile_path = self._cookies_path("mobile")
+                if not mobile_path.exists():
+                    self._write_json_cookies(mobile_path, cookies)
+                    wrote_any = True
+            if self._is_web_cookie_payload(cookies):
+                web_path = self._cookies_path("web")
+                if not web_path.exists():
+                    self._write_json_cookies(web_path, cookies)
+                    wrote_any = True
+
+            if not wrote_any:
+                # Unknown legacy payload; keep compatibility by storing under mobile.
+                mobile_path = self._cookies_path("mobile")
+                if not mobile_path.exists():
+                    self._write_json_cookies(mobile_path, cookies)
+
+    def load_cookies(self, target: str = "mobile") -> Optional[Dict[str, str]]:
         """Load cached cookies if they exist"""
-        if self.cookies_file.exists():
-            with open(self.cookies_file) as f:
-                cookies = json.load(f)
-                print(f"✓ Loaded {len(cookies)} cached cookies")
+        target_path = self._cookies_path(target)
+        cookies = self._load_json_cookies(target_path)
+        if cookies:
+            print(f"Loaded {len(cookies)} cached cookies from {target_path}")
+            return cookies
+
+        # Backwards compatibility for the old shared file.
+        if self.cookies_file != target_path:
+            cookies = self._load_json_cookies(self.cookies_file)
+            if cookies:
+                print(f"Loaded {len(cookies)} cached cookies from {self.cookies_file}")
                 return cookies
         return None
-    
-    def save_cookies(self, cookies: Dict[str, str]):
+
+    def save_cookies(self, cookies: Dict[str, str], target: str = "mobile"):
         """Save cookies to cache"""
-        with open(self.cookies_file, 'w') as f:
+        target_path = self._cookies_path(target)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(target_path, "w") as f:
             json.dump(cookies, f, indent=2)
-        print(f"✓ Saved {len(cookies)} cookies to {self.cookies_file}")
-    
+        print(f"Saved {len(cookies)} cookies to {target_path}")
+
+    def clear_cookies(self, target: Optional[str] = None) -> None:
+        if target:
+            paths = [self._cookies_path(target)]
+        else:
+            paths = [self._cookies_path("mobile"), self._cookies_path("web"), self.cookies_file]
+        for path in paths:
+            try:
+                if path.exists():
+                    path.unlink()
+            except Exception:
+                continue
+
     def login_with_gui(self, callback: Optional[Callable] = None) -> Dict[str, str]:
         """
         Show PyQt login dialog (best for MycoLog)
-        
+
         Args:
             callback: Function to call when login succeeds
         """
+
         def on_success(cookies):
-            self.save_cookies(cookies)
+            self.save_cookies(cookies, target="mobile")
             if callback:
                 callback(cookies)
-        
+
         auth_widget = ArtsObservasjonerAuthWidget(on_login_success=on_success)
         auth_widget.show()
         return auth_widget.get_cookies()
@@ -329,12 +527,18 @@ class ArtsObservasjonerAuth:
         Returns:
             Cookie dict on success, None if user cancelled.
         """
-        username, password = _prompt_web_credentials(parent=parent)
+        username, password, remember_login = _prompt_web_credentials(parent=parent)
         if username is None:
             return None
+        if not password:
+            raise RuntimeError("Missing password.")
 
         web_auth = ArtsObservasjonerWebLogin()
-        success = web_auth.login(username=username, password=password)
+        success = web_auth.login(
+            username=username,
+            password=password,
+            remember_me=remember_login,
+        )
         if not success:
             raise RuntimeError("Login failed. Please check your email and password.")
 
@@ -342,25 +546,39 @@ class ArtsObservasjonerAuth:
         if not cookies:
             raise RuntimeError("Login succeeded but no cookies were returned.")
 
+        if remember_login:
+            try:
+                _save_web_credentials(username, password)
+            except Exception as exc:
+                print(f"Warning: could not save web credentials securely: {exc}")
+        else:
+            _clear_saved_web_credentials()
+
         if callback:
             callback(cookies)
         else:
-            self.save_cookies(cookies)
+            self.save_cookies(cookies, target="web")
         return cookies
-    
+
     def get_valid_cookies(self, target: str = "mobile") -> Optional[Dict[str, str]]:
         """
         Get valid cookies, using cache if available
-        
+
         Returns None if no valid cookies found
         """
-        cookies = self.load_cookies()
-        
+        cookies = self.load_cookies(target=target)
+
         if cookies and self._validate_cookies(cookies, target=target):
+            target_path = self._cookies_path(target)
+            if not target_path.exists():
+                try:
+                    self.save_cookies(cookies, target=target)
+                except Exception:
+                    pass
             return cookies
-        
+
         return None
-    
+
     def _validate_cookies(self, cookies: Dict[str, str], target: str = "mobile") -> bool:
         """
         Test if cookies are still valid
@@ -374,7 +592,7 @@ class ArtsObservasjonerAuth:
         session = requests.Session()
         for name, value in cookies.items():
             session.cookies.set(name, value, domain='mobil.artsobservasjoner.no')
-        
+
         try:
             # Try a simple authenticated endpoint
             response = session.get(
