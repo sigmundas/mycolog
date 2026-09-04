@@ -400,6 +400,104 @@ def _community_preview(context: ReviewContext):
     return pane
 
 
+def _comparison_row(
+    dataset_id,
+    title,
+    source_kind,
+    detail,
+    color,
+    *,
+    visible=True,
+    is_observation=False,
+):
+    from ui.comparison_panel import ComparisonRow, SourceKind
+
+    return ComparisonRow(
+        dataset_id=dataset_id,
+        title=title,
+        source_kind=SourceKind(source_kind) if isinstance(source_kind, str) else source_kind,
+        detail=detail,
+        color=color,
+        visible=visible,
+        is_observation=is_observation,
+    )
+
+
+def _comparison_list_basic(context: ReviewContext):
+    from ui.comparison_panel import RESERVED_OBSERVATION_COLOR, ComparisonListWidget
+
+    widget = ComparisonListWidget(context.host)
+    widget.set_rows(
+        [
+            _comparison_row(
+                "obs-1", "This observation", "observation", "n = 20",
+                RESERVED_OBSERVATION_COLOR, is_observation=True,
+            ),
+            _comparison_row(
+                "lib-1", "Funga Nordica", "library", "8.5–10.8 × 4.5–5.8 µm", "#e67e22",
+            ),
+            _comparison_row(
+                "com-1", "sporely_community_user_42", "community", "n = 48", "#8e44ad",
+            ),
+        ]
+    )
+    return widget
+
+
+def _comparison_list_overflow(context: ReviewContext):
+    from ui.comparison_panel import RESERVED_OBSERVATION_COLOR, ComparisonListWidget
+
+    widget = ComparisonListWidget(context.host)
+    rows = [
+        _comparison_row(
+            "obs-1", "This observation", "observation", "n = 20",
+            RESERVED_OBSERVATION_COLOR, is_observation=True,
+        )
+    ]
+    palette = ["#e67e22", "#8e44ad", "#2ecc71", "#e74c3c", "#1abc9c", "#f1c40f", "#34495e", "#c0392b"]
+    for index in range(8):
+        rows.append(
+            _comparison_row(
+                f"row-{index}",
+                f"Reference set {index + 1}",
+                "library" if index % 2 == 0 else "community",
+                f"n = {10 + index}",
+                palette[index % len(palette)],
+            )
+        )
+    widget.set_rows(rows)
+    return widget
+
+
+def _comparison_list_longnames(context: ReviewContext):
+    from ui.comparison_panel import RESERVED_OBSERVATION_COLOR, ComparisonListWidget
+
+    widget = ComparisonListWidget(context.host)
+    widget.set_rows(
+        [
+            _comparison_row(
+                "obs-1", "This observation", "observation", "n = 20",
+                RESERVED_OBSERVATION_COLOR, is_observation=True,
+            ),
+            _comparison_row(
+                "lib-long",
+                "A comprehensive revision of northern European Cortinarius species with extensive morphological and molecular notes",
+                "library",
+                "8.5–10.8 × 4.5–5.8 µm",
+                "#e67e22",
+            ),
+            _comparison_row(
+                "com-nordic",
+                "Kantarell og trakttrompetsopp fra Ørsta og Ålesund — Blåbærgrøtsopp",
+                "community",
+                "n = 12",
+                "#8e44ad",
+            ),
+        ]
+    )
+    return widget
+
+
 def register_reference_scenarios(registry: ScenarioRegistry) -> None:
     scenarios = (
         ReviewScenario(
@@ -500,6 +598,39 @@ def register_reference_scenarios(registry: ScenarioRegistry) -> None:
             viewport=(600, 500),
             build=_community_preview,
             theme="dark",
+        ),
+        ReviewScenario(
+            id="reference.comparison-list",
+            group="reference-library",
+            title="Comparison list — observation, library, and community rows",
+            description="Three plotted datasets exercise checkbox, color chip, badge, and detail line rendering.",
+            viewport=(420, 260),
+            build=_comparison_list_basic,
+        ),
+        ReviewScenario(
+            id="reference.comparison-list-dark",
+            group="reference-library",
+            title="Comparison list — dark theme",
+            description="Same three-row state in dark theme to verify contrast.",
+            viewport=(420, 260),
+            build=_comparison_list_basic,
+            theme="dark",
+        ),
+        ReviewScenario(
+            id="reference.comparison-list-overflow",
+            group="reference-library",
+            title="Comparison list — nine rows, scrolling",
+            description="Nine rows must scroll within a fixed-height panel while staying usable.",
+            viewport=(420, 320),
+            build=_comparison_list_overflow,
+        ),
+        ReviewScenario(
+            id="reference.comparison-list-longnames",
+            group="reference-library",
+            title="Comparison list — long titles and æøå",
+            description="A publication title over 60 characters must elide; Norwegian names with æ, ø, å must render correctly.",
+            viewport=(420, 260),
+            build=_comparison_list_longnames,
         ),
     )
     for scenario in scenarios:

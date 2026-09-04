@@ -244,6 +244,7 @@ from .observations_tab import ObservationsTab
 from .live_lab_tab import LiveLabTab
 from .database_settings_dialog import DatabaseSettingsDialog
 from .cloud_reference_dialog import CloudReferenceDialog
+from .comparison_panel import ComparisonListWidget
 from .reference_library_attach_dialog import ReferenceLibraryAttachDialog
 from .section_card import create_section_card
 from .segmented_selector import SegmentedSelector
@@ -10164,6 +10165,14 @@ class MainWindow(GeometryMixin, QMainWindow):
         )
         layout.addWidget(self.ref_manage_library_btn)
 
+        # Richer per-row comparison list, kept in sync with ref_series_table
+        # above via _refresh_reference_series_table(); see ui/comparison_panel.py.
+        self.comparison_list = ComparisonListWidget()
+        self.comparison_list.setMinimumHeight(160)
+        self.comparison_list.visibility_toggled.connect(self._set_reference_series_enabled)
+        self.comparison_list.color_change_requested.connect(self._open_reference_series_color_menu)
+        layout.addWidget(self.comparison_list)
+
         self._init_reference_panel_completers()
         self._populate_reference_panel_sources()
         self._apply_reference_panel_values(self.reference_values)
@@ -10885,6 +10894,12 @@ class MainWindow(GeometryMixin, QMainWindow):
         self.ref_series_table.resizeColumnToContents(1)
         self.ref_series_table.resizeColumnToContents(3)
         self.ref_series_table.resizeColumnToContents(4)
+        if hasattr(self, "comparison_list"):
+            self.comparison_list.set_rows(
+                ComparisonListWidget.rows_from_resolved_entries(
+                    self._resolved_reference_series_entries(self._is_dark_theme())
+                )
+            )
 
     def _on_reference_series_row_clicked(self, row: int, col: int):
         if col in (0, 1, 3, 4):
