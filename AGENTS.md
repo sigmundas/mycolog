@@ -1,13 +1,18 @@
 ## Working agreements
 
-Search symbols first. Never read main_window.py or cloud_sync.py wholesale unless there is a demonstrated need.
+Search symbols first. Never read main_window.py, observations_tab.py, or cloud_sync.py wholesale unless there is a demonstrated need.
 
 - Do not run `npm test` after modifying JavaScript files.
 - Ask for confirmation before adding new production dependencies.
 - Do not run heavy build steps, including Capacitor syncs, PyInstaller, Docker builds, full app builds, packaging commands, or dependency installation, unless explicitly requested.
 - Keep patches narrow. If a task touches multiple workflows or large UI files, propose staged patches and stop after the current stage.
 - Do not rewrite or refactor unrelated code while fixing a bug. Preserve existing behavior unless the prompt explicitly asks for a behavior change.
-- Do not commit or push unless the user explicitly asks. Never rewrite published history or force-push without explicit authorization.
+- Agents may commit, but only work whose verification has actually passed, and never push. When a task defines numbered stages, commit each verified stage as its own commit and report the hash.
+  - **Self-verifiable stages** — the checks are ones you can run: unit tests, syntax checks, renderer screenshots for static layout. Run them, then commit.
+  - **Human-gated stages** — verification needs the user: interactive behavior (signal loops, focus, scroll retention, drag/resize), state surviving an app restart, camera/microscope hardware, live Supabase writes, RLS, cross-client sync, performance on real data, or judgment about whether output reads correctly to a mycologist. Do not commit. Leave the work uncommitted, and report a numbered checklist of exactly what the user must do to verify. The commit happens after the user confirms, in the next task.
+  - A renderer screenshot proves layout, not behavior. A change to what happens when the user interacts is human-gated even when every screenshot is clean.
+  - If verification fails partway, do not commit a partial stage — the failure is the report.
+  - Never rewrite published history or force-push without explicit authorization.
 - For sporely-py, always use the project virtual environment:
   `/Users/sigmundas/Documents/Code/sporely/sporely-py/.venv/bin/python` and
   `/Users/sigmundas/Documents/Code/sporely/sporely-py/.venv/bin/pytest`.
@@ -42,7 +47,14 @@ Claude role agents under `.claude/agents/` follow the same boundaries with Claud
 
 - The active plan is durable project memory; the current agent context is disposable working memory. At an architectural/subsystem boundary, update the plan/handoff and prefer a fresh agent. Keep the same agent only for tightly related follow-up work where its recent context is directly useful.
 - Read the active plan's **current stage/handoff first**. Do not read completed-stage history unless a concrete compatibility question requires it. Use `docs/technical-overview.md` for orientation instead of rediscovering the repository.
-- Search before reading. Use `rg`/symbol search, then inspect bounded ranges around relevant definitions/callers. Never dump a large file to context just to understand it. In particular, do not read `ui/main_window.py`, `utils/cloud_sync.py`, or other multi-thousand-line modules wholesale.
+- Search before reading. Use `rg`/symbol search, then inspect bounded ranges around relevant definitions/callers. Never dump a large file to context just to understand it. In particular, do not read `ui/main_window.py`, `ui/observations_tab.py`, `utils/cloud_sync.py`, or other multi-thousand-line modules wholesale.
+- Scope every search to the repository you are working in. Never search the
+  parent `~/Documents/Code/sporely/` root: it holds orphaned worktree copies
+  (`sporely-web-*`, `sporely-landing-stage6*`, `sporely-admin-*`,
+  `sporely-recovery-*`) whose git metadata is dead. They return plausible,
+  well-formed, stale code, and nothing in the files says so. If a finding's
+  paths point into one of those directories, discard it and re-search in the
+  canonical repo.
 - Start reviews with `git diff --stat`, `git diff --name-only`, and the actual targeted diff. Expand into surrounding code only for touched symbols or a concrete suspected failure mode.
 - Do not have multiple agents perform the same repository archaeology. If a scout already returned the relevant symbols/call path, later agents should use that handoff and verify only where necessary.
 - When delegating a scout/review subtask, give a narrow question and ask for a compact result (normally <=20 lines plus file/symbol references). Do not ask for broad repository summaries.
@@ -64,6 +76,7 @@ When documents disagree, current code and tests establish implementation reality
 ## Review and implementation conventions
 
 - In reviews, distinguish correctness defects from cleanup or style opinions. Check especially for duplicate logic, competing sources of truth, database consistency, state-flow errors, UI inconsistency, dead code, unclear boundaries, naming, and error handling. Keep review reports factual and concise.
+- Prefer extending an existing widget, dialog, state structure, or code path over adding a parallel one. If the task assumes a reuse target and you cannot find it, stop and report rather than writing a second implementation.
 - Use Python 3.10+ and PySide6; do not introduce PyQt.
 - Follow `docs/development/gui-conventions.md` for GUI-specific work.
 - Use Qt layouts instead of absolute positioning with `setGeometry()` or `move()`. Avoid fixed width/height where stretch policies work. Use `QSplitter` for resizable panes and persist user-adjustable splitter state through `QSettings`.
@@ -72,6 +85,10 @@ When documents disagree, current code and tests establish implementation reality
 - Respect EXIF orientation with `QImageReader.setAutoTransform(True)` when loading previews.
 - Use native type annotations for signatures and class variables. Prefix private UI builders and event slots with one underscore.
 - Prefer dataclasses for structured data passed between UI and internal logic; do not broaden a focused patch solely to retrofit existing structures.
+
+### Stage reports
+
+When a task defines a stage, report exactly: files touched and the specific symbols/line ranges modified in large modules; existing code paths reused, by symbol name; validation run and results; screenshot evidence where the change is visual (see `.claude/rules/ui-screenshots.md`); deviations from the task spec, each with its reason; the verification tier (self-verified and committed, with the hash — or human-gated, with the numbered checklist of what the user must verify). Assertions about what code does must cite the symbol or line range that shows it. "Renders without errors" is not evidence about a layout — say what the screenshot showed, and do not offer a screenshot as evidence about behavior.
 
 ## Database and generated artifacts
 
