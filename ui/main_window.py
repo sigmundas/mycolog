@@ -10476,6 +10476,17 @@ class MainWindow(GeometryMixin, QMainWindow):
         normalized = self.normalize_measurement_category(category)
         return normalized == "spores"
 
+    def _reference_overlays_allowed_for_category(self) -> bool:
+        """Whether the gallery plot draws reference ranges for the current
+        Category filter -- the same condition ``update_graph_plots`` uses to
+        gate ``show_reference_overlays`` on the spore scatter plot. The
+        comparison list must mirror this exactly rather than re-derive it,
+        since it is a description of what the plot draws.
+        """
+        category = self.gallery_filter_combo.currentData() if hasattr(self, "gallery_filter_combo") else None
+        normalized = self.normalize_measurement_category(category) if category else None
+        return normalized in (None, "spores")
+
     def _reference_series_key(self, data: dict):
         if not isinstance(data, dict):
             return None
@@ -10590,9 +10601,14 @@ class MainWindow(GeometryMixin, QMainWindow):
             if preferred_color:
                 color = QColor(preferred_color).name().lower()
             else:
-                color = ref_palette[entry_index % len(ref_palette)]
+                # Index 0 is reserved for the current observation's own
+                # colour (comparison_panel.RESERVED_OBSERVATION_COLOR), so
+                # the first reference starts at index 1 -- otherwise the
+                # first reference and the observation are both blue and
+                # indistinguishable at chip size.
+                color = ref_palette[(entry_index + 1) % len(ref_palette)]
                 if color == hist_color and ref_palette:
-                    color = ref_palette[(entry_index + 1) % len(ref_palette)]
+                    color = ref_palette[(entry_index + 2) % len(ref_palette)]
             resolved.append({
                 **entry,
                 "color": color,
@@ -10908,13 +10924,15 @@ class MainWindow(GeometryMixin, QMainWindow):
         self.ref_series_table.resizeColumnToContents(3)
         self.ref_series_table.resizeColumnToContents(4)
         if hasattr(self, "comparison_list"):
+            references_suppressed = not self._reference_overlays_allowed_for_category()
             rows = ComparisonListWidget.rows_from_resolved_entries(
-                self._resolved_reference_series_entries(self._is_dark_theme())
+                self._resolved_reference_series_entries(self._is_dark_theme()),
+                dimmed=references_suppressed,
             )
             current_row = self._current_observation_comparison_row()
             if current_row is not None:
                 rows.insert(0, current_row)
-            self.comparison_list.set_rows(rows)
+            self.comparison_list.set_rows(rows, references_suppressed=references_suppressed)
 
     def _is_scatter_plot_measurement(self, measurement: dict) -> bool:
         """Whether a measurement is one the gallery scatter plot draws a point for."""
@@ -11580,6 +11598,7 @@ class MainWindow(GeometryMixin, QMainWindow):
             exclude_measurement_set_ids=excluded,
             attach_callback=_add_callback,
             cloud_attach_callback=_add_cloud_callback,
+            ai_candidates=self._collect_reference_ai_suggestions(),
         )
         dialog.exec()
 
@@ -18129,6 +18148,14 @@ class MainWindow(GeometryMixin, QMainWindow):
         if self.gallery_selected_measurement_id and self.gallery_selected_measurement_id not in all_measurement_ids:
             self.gallery_selected_measurement_id = None
         self.update_graph_plots(all_measurements)
+        # The comparison list is a description of the plot: whatever
+        # population the plot draws, the current-observation row's ``n``
+        # must match, and reference rows must reflect whether the plot is
+        # currently drawing reference ranges (see
+        # _reference_overlays_allowed_for_category). update_gallery() is
+        # what runs on every Category filter change, so refreshing here
+        # keeps both in sync without a separate signal connection.
+        self._refresh_reference_series_table()
 
         if self._gallery_collapsed:
             self._complete_gallery_refresh()
@@ -19094,7 +19121,7 @@ class MainWindow(GeometryMixin, QMainWindow):
         category = self.gallery_filter_combo.currentData() if hasattr(self, "gallery_filter_combo") else None
         normalized = self.normalize_measurement_category(category) if category else None
         show_q = normalized in (None, "spores")
-        show_reference_overlays = normalized in (None, "spores")
+        show_reference_overlays = self._reference_overlays_allowed_for_category()
         Q = L / W
         specimen_parmasto = self._parmasto_specimen_metrics(L, W)
         category_label = self._format_observation_legend_label()

@@ -45,9 +45,10 @@ import json
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSettings, QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QHBoxLayout,
     QLabel,
@@ -56,7 +57,9 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSplitter,
+    QStyle,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -69,13 +72,41 @@ from database.reference_library import (
     MeasurementSetRepository,
 )
 
+from app_identity import SETTINGS_APP, SETTINGS_ORG
+
 from .cloud_reference_dialog import CommunityResultsPane
 from .reference_preview_pane import ReferencePreviewPane
 from .two_line_row import TwoLineRow
+from .window_state import GeometryMixin
 
 _NEW_PUBLICATION_ROLE = "new_publication"
 
 _USABLE_MEASUREMENT_TYPES = (None, "", "manual", "spore", "spores")
+
+
+def format_ai_candidate_display(entry: dict) -> str:
+    """Display text for one AI-candidate row in the taxon target selector.
+
+    Mirrors ``MainWindow._format_ref_ai_display``'s "scientific (vernacular)
+    NN%" convention (the old Genus/Species panel's AI suggestions dropdown),
+    reimplemented locally since ``ui.add_reference_dialog`` must not import
+    ``main_window`` (it is imported by it).
+    """
+    scientific = str(entry.get("scientific_name") or "").strip()
+    if not scientific:
+        genus = str(entry.get("genus") or "").strip()
+        species = str(entry.get("species") or "").strip()
+        scientific = f"{genus} {species}".strip()
+    vernacular = str(entry.get("vernacular") or "").strip()
+    base = scientific
+    if vernacular and vernacular.casefold() != scientific.casefold():
+        base = f"{scientific} ({vernacular})"
+    try:
+        score = float(entry.get("score"))
+    except (TypeError, ValueError):
+        return base
+    percent = int(round(score * 100)) if score <= 1.0 else int(round(score))
+    return f"{base}  {percent}%"
 
 
 def filter_library_candidates(
@@ -84,6 +115,7 @@ def filter_library_candidates(
     taxon_id: str | None,
     only_this_taxon: bool,
     query: str = "",
+    taxon_text: str = "",
 ) -> list[MeasurementSetCandidate]:
     """Pure taxon+search filter for the Library tab's results list.
 
@@ -91,11 +123,19 @@ def filter_library_candidates(
     scope and text-search semantics (search matches short label, published
     taxon name, and raw expression; taxon scope and search AND together) so
     both dialogs behave identically without sharing dialog state.
+
+    ``taxon_text`` is a fallback for when the picker's taxon target has no
+    known ``taxon_id`` -- an AI-suggested or freely-typed genus/species (see
+    ``AddReferenceDialog``'s taxon selector) -- and matches candidates whose
+    published name contains it instead of comparing ids.
     """
     result = list(candidates)
-    if taxon_id is not None and only_this_taxon:
+    if only_this_taxon and taxon_id is not None:
         target = str(taxon_id)
         result = [c for c in result if str(getattr(c, "taxon_id", "") or "") == target]
+    elif only_this_taxon and taxon_text.strip():
+        needle = taxon_text.strip().casefold()
+        result = [c for c in result if needle in str(c.name_as_published or "").casefold()]
     normalized_query = (query or "").strip().casefold()
     if normalized_query:
         def _match(c: MeasurementSetCandidate) -> bool:
@@ -184,12 +224,15 @@ class _StubTabPane(QWidget):
         layout.addWidget(label)
 
 
-class AddReferenceDialog(QDialog):
+class AddReferenceDialog(GeometryMixin, QDialog):
     """Tabbed picker for adding a reference dataset to the comparison plot.
 
     "Library", "Community", and "My observations" are functional; "Enter
     manually" shows a stub pane (wired in a later stage per the plan).
     """
+
+    _geometry_key = "AddReferenceDialog"
+    _SPLITTER_SETTINGS_KEY = "geometry/AddReferenceDialog/splitter"
 
     def __init__(
         self,
@@ -206,11 +249,24 @@ class AddReferenceDialog(QDialog):
         candidates: list[MeasurementSetCandidate] | None = None,
         my_observations: list[PersonalObservationCandidate] | None = None,
         community_results: list[dict] | None = None,
+        ai_candidates: list[dict] | None = None,
     ) -> None:
         super().__init__(parent)
         self._taxon_id: str | None = str(taxon_id).strip() or None if taxon_id is not None else None
         self._genus = genus
         self._species = species
+        # The taxon this picker opened on -- "Own taxon" in the selector,
+        # and the row it always offers regardless of what the user switches
+        # to. Never mutated after construction.
+        self._own_taxon_id = self._taxon_id
+        self._own_genus = genus
+        self._own_species = species
+        self._own_label = taxon_label
+        # AI candidates are display-only data the host (MainWindow) already
+        # collected (see MainWindow._collect_reference_ai_suggestions) --
+        # this dialog never re-derives them and never writes back to the
+        # observation's identification.
+        self._ai_candidates = list(ai_candidates or [])
         self._exclude_observation_id = exclude_observation_id
         self._exclude_ids = {str(x) for x in (exclude_measurement_set_ids or [])}
         self._attach_callback = attach_callback
@@ -236,22 +292,23 @@ class AddReferenceDialog(QDialog):
             title = self.tr("Add reference — {taxon}").format(taxon=taxon_label)
         self.setWindowTitle(title)
         self.setModal(True)
-        self.resize(820, 560)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(10)
 
-        body_splitter = QSplitter(Qt.Horizontal, self)
-        self.tabs = QTabWidget(body_splitter)
-        body_splitter.addWidget(self.tabs)
+        root.addLayout(self._build_taxon_target_row())
+
+        self._body_splitter = QSplitter(Qt.Horizontal, self)
+        self.tabs = QTabWidget(self._body_splitter)
+        self._body_splitter.addWidget(self.tabs)
         # Single shared preview pane (reused from Stage 1 — never rebuilt):
         # every tab's selection populates this one instance.
-        self.preview_pane = ReferencePreviewPane(body_splitter)
-        body_splitter.addWidget(self.preview_pane)
-        body_splitter.setStretchFactor(0, 1)
-        body_splitter.setStretchFactor(1, 2)
-        root.addWidget(body_splitter, 1)
+        self.preview_pane = ReferencePreviewPane(self._body_splitter)
+        self._body_splitter.addWidget(self.preview_pane)
+        self._body_splitter.setStretchFactor(0, 1)
+        self._body_splitter.setStretchFactor(1, 2)
+        root.addWidget(self._body_splitter, 1)
 
         self._build_library_tab()
         self.tabs.addTab(self._library_tab, self.tr("Library"))
@@ -285,6 +342,180 @@ class AddReferenceDialog(QDialog):
         self._refresh_candidates()
         self._refresh_my_observations()
 
+        min_size, source_width, preview_width = self._derive_minimum_size()
+        self.setMinimumSize(min_size)
+        self.resize(min_size)
+        # A floor on each pane, not just an initial setSizes(): the splitter
+        # otherwise redistributes space by stretch factor on any later
+        # resize (restored geometry, a maximize, a manual drag), which can
+        # squeeze either tab bar back into its own scroll-arrow fallback
+        # even though the dialog stays wide enough overall.
+        self.tabs.setMinimumWidth(source_width)
+        self.preview_pane.setMinimumWidth(preview_width)
+        self._body_splitter.setSizes([source_width, preview_width])
+        self._restore_geometry()
+        self._restore_splitter_state()
+        self.finished.connect(self._save_geometry)
+        self.finished.connect(self._save_splitter_state)
+
+    def _derive_minimum_size(self) -> tuple[QSize, int, int]:
+        """Derive the smallest size at which all four source tabs and all
+        five preview sub-tabs are visible without scroll arrows, from the
+        widgets' own size hints rather than a hardcoded pixel value.
+
+        Returns the dialog size plus the source/preview pane widths that
+        produced it, so the caller can also seat the splitter at that split
+        (see the "fresh QSplitter" note where it is called).
+        """
+        margins = self.layout().contentsMargins()
+        # A tab bar's own sizeHint() sits right at the threshold where Qt
+        # falls back to scroll arrows, not safely past it (observed: a tab
+        # bar rendered at exactly its sizeHint width still used the arrows).
+        # PM_TabBarScrollButtonWidth is the width Qt itself reserves per
+        # arrow button, so clearing the threshold by twice that (one on
+        # each side) is a style-derived margin, not an invented pixel count.
+        scroll_button_clearance = 2 * self.style().pixelMetric(
+            QStyle.PM_TabBarScrollButtonWidth
+        )
+        source_width = max(
+            self.tabs.tabBar().sizeHint().width(),
+            self._library_tab.sizeHint().width(),
+        ) + scroll_button_clearance
+        preview_width = max(
+            self.preview_pane.review_tabs.tabBar().sizeHint().width(),
+            self.preview_pane.sizeHint().width(),
+        ) + scroll_button_clearance
+        width = (
+            margins.left() + margins.right()
+            + source_width + self._body_splitter.handleWidth() + preview_width
+        )
+        return QSize(width, self.sizeHint().height()), source_width, preview_width
+
+    def _restore_splitter_state(self) -> None:
+        settings = QSettings(SETTINGS_ORG, SETTINGS_APP)
+        state = settings.value(self._SPLITTER_SETTINGS_KEY)
+        if state:
+            self._body_splitter.restoreState(state)
+
+    def _save_splitter_state(self) -> None:
+        settings = QSettings(SETTINGS_ORG, SETTINGS_APP)
+        settings.setValue(self._SPLITTER_SETTINGS_KEY, self._body_splitter.saveState())
+
+    # ------------------------------------------------------------------
+    # Taxon target selector
+    # ------------------------------------------------------------------
+    #
+    # The reference panel's Genus/Species/Norsk navn fields never set the
+    # observation's identification -- Edit Observation does, and that is
+    # already settled by the time the user reaches Analysis. This selector
+    # only chooses whose published spore data to compare against, which is
+    # usually the observation's own taxon but need not be. Changing it never
+    # writes to the observation.
+
+    def _build_taxon_target_row(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        row.addWidget(QLabel(self.tr("Compare against:"), self))
+        self.taxon_target_combo = QComboBox(self)
+        self.taxon_target_combo.setEditable(True)
+        self.taxon_target_combo.setInsertPolicy(QComboBox.NoInsert)
+        self.taxon_target_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.taxon_target_combo.setToolTip(
+            self.tr(
+                "Choose which taxon's published spore data to compare "
+                "against -- an AI suggestion, or type a genus and species. "
+                "This never changes the observation's own identification."
+            )
+        )
+        row.addWidget(self.taxon_target_combo, 1)
+        self._populate_taxon_target_combo()
+        self.taxon_target_combo.activated.connect(self._on_taxon_target_activated)
+        self.taxon_target_combo.lineEdit().returnPressed.connect(
+            self._on_taxon_target_text_entered
+        )
+        return row
+
+    def _own_taxon_display_label(self) -> str:
+        return self._own_label or " ".join(
+            part for part in (self._own_genus, self._own_species) if part
+        ).strip()
+
+    def _populate_taxon_target_combo(self) -> None:
+        combo = self.taxon_target_combo
+        combo.blockSignals(True)
+        combo.clear()
+        own_label = self._own_taxon_display_label()
+        combo.addItem(
+            self.tr("This observation: {taxon}").format(taxon=own_label)
+            if own_label
+            else self.tr("This observation's taxon"),
+            {
+                "genus": self._own_genus,
+                "species": self._own_species,
+                "taxon_id": self._own_taxon_id,
+                "label": own_label,
+            },
+        )
+        for entry in self._ai_candidates:
+            genus = str(entry.get("genus") or "").strip()
+            species = str(entry.get("species") or "").strip()
+            if not genus or not species:
+                continue
+            combo.addItem(
+                format_ai_candidate_display(entry),
+                {
+                    "genus": genus,
+                    "species": species,
+                    "taxon_id": None,
+                    "label": f"{genus} {species}",
+                },
+            )
+        combo.setCurrentIndex(0)
+        combo.blockSignals(False)
+
+    def _on_taxon_target_activated(self, index: int) -> None:
+        data = self.taxon_target_combo.itemData(index)
+        if not isinstance(data, dict):
+            return
+        self._apply_taxon_target(
+            genus=data.get("genus") or "",
+            species=data.get("species") or "",
+            taxon_id=data.get("taxon_id"),
+            label=data.get("label") or "",
+        )
+
+    def _on_taxon_target_text_entered(self) -> None:
+        text = self.taxon_target_combo.currentText().strip()
+        parts = text.split(None, 1)
+        if len(parts) < 2:
+            return
+        genus, species = parts[0], parts[1]
+        self._apply_taxon_target(
+            genus=genus, species=species, taxon_id=None, label=f"{genus} {species}"
+        )
+
+    def _apply_taxon_target(
+        self, *, genus: str, species: str, taxon_id, label: str
+    ) -> None:
+        self._genus = str(genus or "").strip()
+        self._species = str(species or "").strip()
+        self._taxon_id = (
+            str(taxon_id).strip() or None if taxon_id is not None else None
+        )
+        display_label = label or " ".join(
+            part for part in (self._genus, self._species) if part
+        ).strip()
+        self.setWindowTitle(
+            self.tr("Add reference — {taxon}").format(taxon=display_label)
+            if display_label
+            else self.tr("Add reference")
+        )
+        self._selected_candidate = None
+        self._populate_results_list()
+        self._community_pane.set_taxon(self._genus, self._species)
+        self._refresh_my_observations()
+        self._update_footer_state()
+
     def _on_tab_changed(self, _index: int) -> None:
         self._update_footer_state()
         if self.tabs.currentIndex() == self._my_observations_tab_index:
@@ -316,11 +547,13 @@ class AddReferenceDialog(QDialog):
         self.search_input.textChanged.connect(self._on_filter_changed)
         filter_row.addWidget(self.search_input, 1)
         self.only_this_taxon_checkbox = QCheckBox(self.tr("Only this taxon"), self._library_tab)
-        if self._taxon_id is None:
-            self.only_this_taxon_checkbox.setEnabled(False)
-            self.only_this_taxon_checkbox.setChecked(False)
-        else:
-            self.only_this_taxon_checkbox.setChecked(True)
+        # Default checked: unfiltered, library rows show only publication
+        # and range (see _add_candidate_item), so without this the user has
+        # no way to tell which species several "Funga Nordica (2008)" rows
+        # each describe. Falls back to a name-text match (_taxon_target_query_text)
+        # when the target has no taxon_id, so it still narrows the list for
+        # an AI-suggested or freely-typed genus/species.
+        self.only_this_taxon_checkbox.setChecked(True)
         self.only_this_taxon_checkbox.toggled.connect(self._on_filter_changed)
         filter_row.addWidget(self.only_this_taxon_checkbox)
         layout.addLayout(filter_row)
@@ -348,12 +581,20 @@ class AddReferenceDialog(QDialog):
         self._populate_results_list()
         self._update_footer_state()
 
+    def _taxon_target_query_text(self) -> str:
+        """Fallback text for taxon filtering when the current target has no
+        ``taxon_id`` (an AI candidate or a freely-typed genus/species)."""
+        if self._taxon_id is not None:
+            return ""
+        return " ".join(part for part in (self._genus, self._species) if part).strip()
+
     def _filtered_candidates(self) -> list[MeasurementSetCandidate]:
         return filter_library_candidates(
             self._candidates,
             taxon_id=self._taxon_id,
             only_this_taxon=self.only_this_taxon_checkbox.isChecked(),
             query=self.search_input.text(),
+            taxon_text=self._taxon_target_query_text(),
         )
 
     def _populate_results_list(self) -> None:
@@ -386,6 +627,10 @@ class AddReferenceDialog(QDialog):
         detail = candidate.data_kind or ""
         if candidate.raw_text:
             detail = f"{detail} · {candidate.raw_text}" if detail else candidate.raw_text
+        if not self.only_this_taxon_checkbox.isChecked() and candidate.name_as_published:
+            # Unfiltered, several rows can share a publication -- show which
+            # taxon each one describes instead of leaving that ambiguous.
+            detail = f"{candidate.name_as_published} · {detail}" if detail else candidate.name_as_published
 
         item = QListWidgetItem()
         item.setToolTip(label if not detail else f"{label}\n{detail}")
@@ -714,6 +959,7 @@ class AddReferenceDialog(QDialog):
 __all__ = [
     "AddReferenceDialog",
     "filter_library_candidates",
+    "format_ai_candidate_display",
     "PersonalObservationCandidate",
     "default_my_observation_candidates",
 ]

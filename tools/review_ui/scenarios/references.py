@@ -735,6 +735,129 @@ def _add_dialog_community_empty(context: ReviewContext):
     return dialog
 
 
+def _comparison_list_suppressed(context: ReviewContext):
+    """Category switched away from Spores: reference rows dim, the plot's
+    ``n`` on the current-observation row reflects the cystidium population
+    instead, and the explanatory hint line appears (stage-4b-fix Part 1)."""
+    from ui.comparison_panel import RESERVED_OBSERVATION_COLOR, ComparisonListWidget
+
+    widget = ComparisonListWidget(context.host)
+    rows = [
+        _comparison_row(
+            "obs-1", "This observation", "observation", "n = 6 (cystidia)",
+            RESERVED_OBSERVATION_COLOR, is_observation=True,
+        ),
+        _comparison_row(
+            "lib-1", "Funga Nordica", "library", "range · 8.5–10.8 µm", "#d95319",
+        ),
+        _comparison_row(
+            "myobs-1", "Sigmund Ås 2026-08-02", "my_obs", "n = 17", "#2ecc71",
+        ),
+    ]
+    for row in rows[1:]:
+        row.dimmed = True
+    widget.set_rows(rows, references_suppressed=True)
+    return widget
+
+
+def _comparison_list_colors(context: ReviewContext):
+    """The current observation and two references must be three visibly
+    distinct colours (stage-4b-fix Part 2.3): the observation keeps the
+    reserved blue, and references start at palette index 1, not 0."""
+    from ui.comparison_panel import RESERVED_OBSERVATION_COLOR, ComparisonListWidget
+    from ui.main_window import reference_plot_palette
+
+    palette = reference_plot_palette(False)
+    widget = ComparisonListWidget(context.host)
+    widget.set_rows(
+        [
+            _comparison_row(
+                "obs-1", "This observation", "observation", "n = 20",
+                RESERVED_OBSERVATION_COLOR, is_observation=True,
+            ),
+            _comparison_row(
+                "lib-1", "Funga Nordica", "library", "range · 8.5–10.8 µm", palette[1],
+            ),
+            _comparison_row(
+                "com-1", "sporely_community_user_42", "community", "n = 24", palette[2],
+            ),
+        ]
+    )
+    return widget
+
+
+def _add_dialog_taxon_selector_candidates() -> list[dict]:
+    return [
+        {
+            "source": "arts",
+            "scientific_name": "Cortinarius rubellus",
+            "vernacular": "Bittersnerlerørsopp",
+            "genus": "Cortinarius",
+            "species": "rubellus",
+            "score": 0.82,
+        },
+        {
+            "source": "inat",
+            "scientific_name": "Cortinarius orellanus",
+            "vernacular": "",
+            "genus": "Cortinarius",
+            "species": "orellanus",
+            "score": 0.41,
+        },
+    ]
+
+
+def _add_dialog_taxon_selector(context: ReviewContext):
+    """The taxon target selector with an AI candidate active, showing its
+    match percentage and the re-filtered Library tab (stage-4b-fix Part 3).
+
+    The combo's own popup is a separate top-level window the offscreen
+    grab() capture cannot include; this instead shows the selector after
+    picking an AI candidate, so its "NN%" display and the retitled dialog
+    are both visible evidence of the feature.
+    """
+    from ui.add_reference_dialog import AddReferenceDialog
+
+    _fixture(context)
+    dialog = AddReferenceDialog(
+        context.host,
+        taxon_label="Cortinarius limonius",
+        taxon_id="7",
+        genus="Cortinarius",
+        species="limonius",
+        candidates=_add_dialog_candidates(),
+        community_results=[],
+        ai_candidates=_add_dialog_taxon_selector_candidates(),
+        attach_callback=lambda *_args: None,
+        cloud_attach_callback=lambda *_args: None,
+    )
+    # setCurrentIndex() alone does not emit activated() -- a real click
+    # does both together, so the handler is invoked explicitly here too.
+    dialog.taxon_target_combo.setCurrentIndex(1)
+    dialog._on_taxon_target_activated(1)
+    return dialog
+
+
+def _add_dialog_default_size(context: ReviewContext):
+    """The dialog at its derived default size: all four source tabs and all
+    five preview sub-tabs visible with no scroll arrows (stage-4b-fix
+    Part 2.2). The scenario's own viewport is set to this size."""
+    from ui.add_reference_dialog import AddReferenceDialog
+
+    _fixture(context)
+    dialog = AddReferenceDialog(
+        context.host,
+        taxon_label="Cortinarius limonius",
+        taxon_id="7",
+        candidates=_add_dialog_candidates(),
+        community_results=[],
+        attach_callback=lambda *_args: None,
+        cloud_attach_callback=lambda *_args: None,
+    )
+    dialog.results_list.setCurrentRow(0)
+    return dialog
+
+
 def register_reference_scenarios(registry: ScenarioRegistry) -> None:
     scenarios = (
         ReviewScenario(
@@ -952,6 +1075,38 @@ def register_reference_scenarios(registry: ScenarioRegistry) -> None:
             description="No community results for the working taxon: honest empty state, Add to plot stays disabled.",
             viewport=(900, 560),
             build=_add_dialog_community_empty,
+        ),
+        ReviewScenario(
+            id="reference.comparison-list-suppressed",
+            group="reference-library",
+            title="Comparison list — Category outside Spores",
+            description="Reference rows render dimmed and unchecked, with the explanatory hint line, while the current-observation row's n tracks the plotted (cystidia) population.",
+            viewport=(420, 280),
+            build=_comparison_list_suppressed,
+        ),
+        ReviewScenario(
+            id="reference.comparison-list-colors",
+            group="reference-library",
+            title="Comparison list — three distinct colours",
+            description="The current observation and two references must be visibly distinct: references now start at palette index 1, not the observation's reserved index 0.",
+            viewport=(420, 260),
+            build=_comparison_list_colors,
+        ),
+        ReviewScenario(
+            id="reference.add-dialog-default-size",
+            group="reference-library",
+            title="Add-reference picker — derived default size",
+            description="All four source tabs and all five preview sub-tabs are visible with no scroll arrows at the dialog's own derived minimum/default size.",
+            viewport=(1400, 760),
+            build=_add_dialog_default_size,
+        ),
+        ReviewScenario(
+            id="reference.add-dialog-taxon-selector",
+            group="reference-library",
+            title="Add-reference picker — taxon target selector",
+            description="An AI candidate is active in the taxon target selector, showing its match percentage; the Library tab and dialog title have re-filtered to it.",
+            viewport=(1400, 760),
+            build=_add_dialog_taxon_selector,
         ),
     )
     for scenario in scenarios:

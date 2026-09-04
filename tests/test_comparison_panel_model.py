@@ -60,6 +60,45 @@ def _sorted_for_display(rows: list[ComparisonRow]) -> list[ComparisonRow]:
     return sorted(rows, key=lambda r: 0 if r.is_observation else 1)
 
 
+def _normalized_library_entry(key="use-1"):
+    """A library-attached row (has ``observation_reference_use_id``), the
+    shape ``translate_observation_reference_use`` produces. ``source`` is
+    the publication short_label, same as the title -- the detail line must
+    not repeat it (see stage-4b-fix Part 2.1).
+    """
+    return {
+        "key": key,
+        "label": "A. fulva — Danmarks basidiesvampe",
+        "enabled": True,
+        "color": "#0072bd",
+        "preferred_color": None,
+        "data": {
+            "source_kind": "reference",
+            "observation_reference_use_id": key,
+            "source": "Danmarks basidiesvampe",
+            "reference_data_kind": "range",
+            "raw_text": "7-9.5 × 5.5-7.5",
+            "length_p05": 7.0,
+            "length_p95": 9.5,
+        },
+    }
+
+
+def test_library_row_detail_is_the_measurement_range_not_the_publication_name():
+    row = ComparisonRow.from_resolved_entry(_normalized_library_entry())
+    assert row.detail == "range · 7-9.5 × 5.5-7.5"
+
+
+def test_rows_from_resolved_entries_marks_dimmed_when_suppressed():
+    rows = ComparisonListWidget.rows_from_resolved_entries([_library_entry()], dimmed=True)
+    assert rows[0].dimmed is True
+
+
+def test_rows_from_resolved_entries_not_dimmed_by_default():
+    rows = ComparisonListWidget.rows_from_resolved_entries([_library_entry()])
+    assert rows[0].dimmed is False
+
+
 def test_adding_dataset_produces_a_row():
     rows = ComparisonListWidget.rows_from_resolved_entries([_library_entry()])
     assert len(rows) == 1

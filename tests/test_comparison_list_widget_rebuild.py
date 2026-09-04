@@ -42,6 +42,40 @@ def _row(key: str, visible: bool = True) -> ComparisonRow:
     )
 
 
+def test_dimmed_row_renders_unchecked_and_disabled_without_mutating_visible():
+    """Rows outside Spores render checkbox-unchecked-and-disabled (Part 1),
+    but the underlying ``ComparisonRow.visible`` flag -- the persisted
+    enabled state -- is untouched; only the widget's own checkbox state is
+    forced, so switching back to Spores restores the real setting."""
+    _app()
+    widget = ComparisonListWidget()
+    row = ComparisonRow(
+        dataset_id="k1",
+        title="Row k1",
+        source_kind=SourceKind.LIBRARY,
+        detail="n = 10",
+        color="#e67e22",
+        visible=True,
+        is_observation=False,
+        verdict=None,
+        dimmed=True,
+    )
+    widget.set_rows([row], references_suppressed=True)
+
+    row_widget = widget._list_layout.itemAt(0).widget()
+    assert row_widget.checkbox.isChecked() is False
+    assert row_widget.checkbox.isEnabled() is False
+    assert row.visible is True
+    assert widget._suppressed_hint_label.isHidden() is False
+
+
+def test_hint_label_hidden_when_references_not_suppressed():
+    _app()
+    widget = ComparisonListWidget()
+    widget.set_rows([_row("k1")], references_suppressed=False)
+    assert widget._suppressed_hint_label.isHidden() is True
+
+
 def test_set_rows_does_not_reemit_visibility_toggled():
     _app()
     widget = ComparisonListWidget()

@@ -16,7 +16,7 @@ from enum import Enum
 from typing import Callable
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFontMetrics
+from PySide6.QtGui import QColor, QFontMetrics
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
@@ -31,6 +31,19 @@ from PySide6.QtWidgets import (
 )
 
 RESERVED_OBSERVATION_COLOR = "#3498db"
+
+
+def _faded_chip_color(color: str) -> str:
+    """Blend a chip colour 60% toward neutral grey, for a dimmed row."""
+    base = QColor(color)
+    if not base.isValid():
+        return "#adb5bd"
+    grey = QColor("#adb5bd")
+    ratio = 0.6
+    red = round(base.red() + (grey.red() - base.red()) * ratio)
+    green = round(base.green() + (grey.green() - base.green()) * ratio)
+    blue = round(base.blue() + (grey.blue() - base.blue()) * ratio)
+    return QColor(red, green, blue).name()
 
 
 class SourceKind(Enum):
@@ -72,9 +85,13 @@ class ComparisonRow:
     visible: bool
     is_observation: bool
     verdict: object | None = None
+    # True when the plot is not currently drawing this row (Category filter
+    # outside Spores) -- rendered checkbox-disabled and faded rather than
+    # hidden. Never true for the current-observation row.
+    dimmed: bool = False
 
     @classmethod
-    def from_resolved_entry(cls, entry: dict) -> "ComparisonRow | None":
+    def from_resolved_entry(cls, entry: dict, *, dimmed: bool = False) -> "ComparisonRow | None":
         """Build a row from one item of ``_resolved_reference_series_entries()``.
 
         That state holds references only — the currently open observation is
@@ -107,6 +124,7 @@ class ComparisonRow:
             visible=bool(entry.get("enabled", True)),
             is_observation=False,
             verdict=None,
+            dimmed=dimmed,
         )
 
     @classmethod
@@ -134,6 +152,16 @@ class ComparisonRow:
 
 
 def _format_detail(data: dict) -> str:
+    if data.get("observation_reference_use_id"):
+        # Library-attached rows: mirror AddReferenceDialog._add_candidate_item's
+        # "kind · raw expression" detail instead of falling through to
+        # ``source`` below, which is the same short_label already shown in
+        # the title -- that duplication was the bug.
+        data_kind = str(data.get("reference_data_kind") or "").strip()
+        raw_text = str(data.get("raw_text") or "").strip()
+        detail = f"{data_kind} · {raw_text}" if data_kind and raw_text else (data_kind or raw_text)
+        if detail:
+            return detail
     points = data.get("points")
     if isinstance(points, (list, tuple)) and points:
         return f"n = {len(points)}"
@@ -228,6 +256,19 @@ class _ComparisonRowWidget(QFrame):
             # show/hide toggle on the plot yet, so render checked-and-locked
             # instead of inventing a control that would not do anything.
             self.checkbox.setEnabled(False)
+        elif row.dimmed:
+            # The plot is not drawing this row for the current Category
+            # filter (outside Spores). Render unchecked-and-disabled and
+            # faded rather than hidden, so the user can see why nothing
+            # plots. This does not change the row's persisted enabled state.
+            self.checkbox.setChecked(False)
+            self.checkbox.setEnabled(False)
+            for label in (self.title_label, self.detail_label, self.badge_label):
+                label.setStyleSheet(label.styleSheet() + "color: #adb5bd;")
+            self.color_chip.setStyleSheet(
+                f"background-color: {_faded_chip_color(row.color)}; "
+                "border-radius: 3px; border: 1px solid #666;"
+            )
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
         super().resizeEvent(event)
@@ -286,9 +327,19 @@ class ComparisonListWidget(QWidget):
         self._list_layout.addStretch(1)
         self._scroll.setWidget(self._container)
 
+        self._suppressed_hint_label = QLabel(
+            self.tr("Reference data applies to spore measurements."), self
+        )
+        self._suppressed_hint_label.setStyleSheet("color: #7f8c8d; font-style: italic;")
+        self._suppressed_hint_label.setWordWrap(True)
+        self._suppressed_hint_label.setVisible(False)
+        outer.addWidget(self._suppressed_hint_label)
+
         self._rows: list[ComparisonRow] = []
 
-    def set_rows(self, rows: list[ComparisonRow]) -> None:
+    def set_rows(
+        self, rows: list[ComparisonRow], *, references_suppressed: bool = False
+    ) -> None:
         """Replace all rows, in the order given.
 
         Pinning the current-observation row first is the caller's
@@ -299,6 +350,7 @@ class ComparisonListWidget(QWidget):
         """
         ordered = list(rows)
         self._rows = ordered
+        self._suppressed_hint_label.setVisible(references_suppressed)
 
         while self._list_layout.count() > 1:
             item = self._list_layout.takeAt(0)
@@ -317,10 +369,12 @@ class ComparisonListWidget(QWidget):
         return list(self._rows)
 
     @staticmethod
-    def rows_from_resolved_entries(entries: list[dict]) -> list[ComparisonRow]:
+    def rows_from_resolved_entries(
+        entries: list[dict], *, dimmed: bool = False
+    ) -> list[ComparisonRow]:
         rows = []
         for entry in entries or []:
-            row = ComparisonRow.from_resolved_entry(entry)
+            row = ComparisonRow.from_resolved_entry(entry, dimmed=dimmed)
             if row is not None:
                 rows.append(row)
         return rows

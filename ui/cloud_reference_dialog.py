@@ -1285,6 +1285,17 @@ class CommunityResultsPane(QWidget):
     # Search
     # ------------------------------------------------------------------
 
+    def set_taxon(self, genus: str, species: str) -> None:
+        """Switch the fixed taxon this tab searches for and reload results.
+
+        Used by the picker's taxon selector (see stage-4b-fix Part 3): the
+        Community tab has no per-candidate taxon field to filter by, so a
+        target change re-searches for the new genus/species instead.
+        """
+        self._genus = str(genus or "").strip()
+        self._species = str(species or "").strip()
+        self.refresh()
+
     def refresh(self) -> None:
         """(Re)load results for the fixed taxon. Clears any current selection."""
         self._results = []

@@ -23,6 +23,7 @@ from ui.add_reference_dialog import (
     PersonalObservationCandidate,
     default_my_observation_candidates,
     filter_library_candidates,
+    format_ai_candidate_display,
 )
 
 
@@ -76,13 +77,16 @@ def _candidates() -> list[MeasurementSetCandidate]:
 
 def _make_dialog(**kwargs) -> AddReferenceDialog:
     _app()
-    return AddReferenceDialog(
-        None,
-        taxon_label="Cortinarius limonius",
-        taxon_id=7,
-        candidates=_candidates(),
-        **kwargs,
-    )
+    defaults = {
+        "taxon_label": "Cortinarius limonius",
+        "taxon_id": 7,
+        "candidates": _candidates(),
+        # Injected (even empty) so the Community tab never spawns a real
+        # network search thread just from constructing the dialog.
+        "community_results": [],
+    }
+    defaults.update(kwargs)
+    return AddReferenceDialog(None, **defaults)
 
 
 def _result_row_for(dialog: AddReferenceDialog, measurement_set_id: str) -> int:
@@ -93,6 +97,106 @@ def _result_row_for(dialog: AddReferenceDialog, measurement_set_id: str) -> int:
         if item.data(Qt.UserRole) == measurement_set_id:
             return row
     raise AssertionError(f"no results-list row for {measurement_set_id!r}")
+
+
+def _ai_candidates() -> list[dict]:
+    return [
+        {
+            "source": "arts",
+            "scientific_name": "Cortinarius rubellus",
+            "vernacular": "Bittersnerlerørsopp",
+            "genus": "Cortinarius",
+            "species": "rubellus",
+            "score": 0.82,
+        },
+    ]
+
+
+def test_format_ai_candidate_display():
+    text = format_ai_candidate_display(_ai_candidates()[0])
+    assert text == "Cortinarius rubellus (Bittersnerlerørsopp)  82%"
+
+
+def test_taxon_target_combo_defaults_to_own_taxon():
+    dialog = _make_dialog(genus="Cortinarius", species="limonius")
+    assert dialog.taxon_target_combo.currentIndex() == 0
+    assert "Cortinarius limonius" in dialog.taxon_target_combo.currentText()
+
+
+def test_selecting_ai_candidate_refilters_library_and_updates_title():
+    dialog = _make_dialog(
+        genus="Cortinarius", species="limonius", ai_candidates=_ai_candidates()
+    )
+    assert dialog.taxon_target_combo.count() == 2
+    # A real click both moves currentIndex and emits activated(); the two
+    # are driven separately here to exercise the same path.
+    dialog.taxon_target_combo.setCurrentIndex(1)
+    dialog._on_taxon_target_activated(1)
+
+    assert dialog._genus == "Cortinarius"
+    assert dialog._species == "rubellus"
+    assert dialog._taxon_id is None
+    assert "Cortinarius rubellus" in dialog.windowTitle()
+    assert "82%" in dialog.taxon_target_combo.currentText()
+    # ms-3 is published as "Cortinarius rubellus Cooke" with no taxon_id
+    # match against the picker's target -- the text fallback must still
+    # narrow to it.
+    assert {c.measurement_set_id for c in dialog._filtered_candidates()} == {"ms-3"}
+
+
+def test_typing_arbitrary_taxon_filters_library_via_text_match():
+    dialog = _make_dialog(genus="Cortinarius", species="limonius")
+    dialog.taxon_target_combo.setCurrentText("Cortinarius rubellus")
+    dialog._on_taxon_target_text_entered()
+
+    assert dialog._genus == "Cortinarius"
+    assert dialog._species == "rubellus"
+    assert {c.measurement_set_id for c in dialog._filtered_candidates()} == {"ms-3"}
+
+
+def test_typed_text_with_only_one_word_is_ignored():
+    dialog = _make_dialog(genus="Cortinarius", species="limonius")
+    dialog.taxon_target_combo.setCurrentText("Cortinarius")
+    dialog._on_taxon_target_text_entered()
+    # Unchanged: still the taxon the dialog opened on.
+    assert dialog._genus == "Cortinarius"
+    assert dialog._species == "limonius"
+
+
+def test_only_this_taxon_defaults_checked_even_without_taxon_id():
+    dialog = _make_dialog(taxon_id=None, genus="", species="")
+    assert dialog.only_this_taxon_checkbox.isChecked() is True
+
+
+def test_unchecking_only_this_taxon_shows_taxon_in_row_detail():
+    dialog = _make_dialog()
+    dialog.only_this_taxon_checkbox.setChecked(False)
+    row = _result_row_for(dialog, "ms-3")
+    widget = dialog.results_list.itemWidget(dialog.results_list.item(row))
+    assert "Cortinarius rubellus" in widget._full_detail
+
+
+def test_changing_taxon_target_never_touches_exclude_observation_id():
+    dialog = _make_dialog(
+        genus="Cortinarius", species="limonius", ai_candidates=_ai_candidates()
+    )
+    before = dialog._exclude_observation_id
+    dialog._on_taxon_target_activated(1)
+    assert dialog._exclude_observation_id == before
+
+
+def test_derived_minimum_size_fits_both_tab_bars():
+    """The dialog's minimum width must be at least the source tab bar's own
+    size hint plus the preview pane's sub-tab bar's own size hint -- the
+    exact condition that avoids the QTabWidget scroll-arrow fallback (see
+    stage-4b-fix Part 2.2). No hardcoded pixel width is asserted here; the
+    check is relative to the widgets' own hints.
+    """
+    dialog = _make_dialog()
+    min_size = dialog.minimumSize()
+    source_tabbar_w = dialog.tabs.tabBar().sizeHint().width()
+    preview_tabbar_w = dialog.preview_pane.review_tabs.tabBar().sizeHint().width()
+    assert min_size.width() >= source_tabbar_w + preview_tabbar_w
 
 
 def test_only_this_taxon_checked_shows_only_working_taxon_sets():
