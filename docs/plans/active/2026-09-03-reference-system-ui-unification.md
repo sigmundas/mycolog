@@ -6,7 +6,8 @@ approved mockups' structure/hierarchy (panel + picker), reusing existing widget
 styles and the app's global tab style. Backend/model code stays; only UI entry
 points are removed.
 
-Status: Stage 0 (archaeology) complete. Executing stages in order; report after each.
+Status: Stages 1–4a complete — see **Landed stages** at the end of this doc.
+Next up is stage 4b (Community tab). Executing stages in order; report after each.
 
 ## Subsystem map (verified 2026-09-03)
 
@@ -126,6 +127,9 @@ long publication title elision, æøå), light + dark.
 3. Add-reference picker dialog shell: 4 plain-QTabWidget tabs + shared ReferencePreviewPane;
    wire Library tab first. Title "Add reference — {taxon}". Renderer check.
 4. Wire Community / My observations / Enter manually tabs (relocate existing flows). Renderer each.
+   Split in execution: **4a** My observations + row-anatomy fix (`a36ec63`),
+   **4a-fix** three live-app defects (`e8a67f1`), **4b** Community tab,
+   **4c** Enter manually tab.
 5. Verdict computation (pure, unit-tested) + badges + preview banner.
 6. Remove dead entry points (Source dropdown, Plot, Edit, Attach library reference), taxon
    chips, color auto-assignment, polish. Renderer check on full Analysis tab.
@@ -163,3 +167,91 @@ dialog:
   rebuilding wholesale.
 No code changes were required in `ui/comparison_panel.py` itself; only the two
 regression tests above were added to lock in the verified-safe behavior.
+
+## Landed stages
+
+Backfilled 2026-09-04 from the commits. Stage prompts live in
+`~/Documents/Code/sporely/.sparring/prompts/`.
+
+### Stage 1 — `272b20d` — extract `ReferencePreviewPane`
+Pulled the tabbed Summary/Raw spores/Method/Calibration/Provenance review UI out
+of `CloudReferenceDialog` into `ui/reference_preview_pane.py`.
+`CloudReferenceDialog` forwards its old attribute names via properties, so
+existing callers are unaffected and the change is invisible at runtime.
+Verified: renderer scenarios `reference.community-preview(-dark)`.
+Deferred: the Summary tab's meta-line truncates without ellipsis or tooltip —
+pre-existing, carried over from the dialog (see Known issues).
+
+### Stage 2 — `8290371` — `ComparisonListWidget`
+Added `ui/comparison_panel.py` (`ComparisonRow` + `ComparisonListWidget`) as a
+per-row presentation of the existing `reference_series` state, wired additively
+below `ref_series_table`. Both lists refresh from the same
+`_refresh_reference_series_table()` call site and route mutations through the
+existing enable/colour ops, so no state was forked.
+Verified: model-level tests for row creation/removal, visibility round-trip,
+observation-row pinning; renderer scenarios `reference.comparison-list(-dark)`,
+`-overflow`, `-longnames`.
+Deferred: overflow menu edit/view/remove are stage-6 placeholders.
+
+### Stage 3 part 0 — `bb65ed8` — rebuild-safety audit
+Audited `set_rows` for the checkbox rebuild feedback loop and scroll
+preservation before the picker work. Both properties already held
+(`setChecked` before `connect`; the scroll area's content widget is reused, not
+replaced), so no production change was needed.
+Verified: `tests/test_comparison_list_widget_rebuild.py`.
+Deferred: `set_rows` still recreates every row widget on any change — flicker
+and focus loss are a stage-6 diffing pass.
+
+### Stage 3 — `ab4bb38` — `AddReferenceDialog` shell + Library tab
+Added the tabbed Library/Community/My observations/Enter manually picker. Only
+Library wired: taxon + text filtering (AND semantics), preview pane populated
+from the selected measurement set, "New publication…" reusing the existing
+editor, and "Add to plot" routed through the existing
+`_attach_normalized_reference_to_active_observation` so persistence and colour
+assignment are not duplicated. Other three tabs show an honest placeholder. An
+additive "Add reference…" button opens the picker; legacy entry points untouched.
+Verified: `tests/test_add_reference_dialog.py`; renderer scenarios for populated,
+empty-state, and stubbed tab.
+
+### Stage 4a — `a36ec63` — row anatomy + My observations tab
+Fixed the stage-3 row-anatomy gap (Library rows now render a second,
+independently elided detail line). Wired the My observations tab over the same
+query backing the legacy "My data &lt;date&gt;" entries, and hoisted
+`ReferencePreviewPane` to dialog level so all tabs share one instance. A personal
+observation has no measurement-set identity, so `MainWindow` dispatches on an
+`observation:<id>` identifier prefix to the pre-existing legacy comparison-series
+path instead of the normalized attach path.
+Verified: `tests/test_add_reference_dialog.py`; renderer scenarios.
+Deferred: Community → 4b, Enter manually → 4c.
+
+### Stage 4a-fix — `e8a67f1` — three live-app defects
+Three defects seen in a screenshot of the running app. (1)
+`from_resolved_entry` now maps the legacy `source_kind == "observation"` string
+to `SourceKind.MY_OBS`, leaving `SourceKind.OBSERVATION` reserved for the
+current observation; this also removed the reserved-blue override that caused
+the chip/plot colour mismatch. (2) Added
+`ComparisonRow.for_current_observation` +
+`MainWindow._current_observation_comparison_row` to synthesize pinned row 1 from
+the active observation's own measurements, since
+`_resolved_reference_series_entries` holds references only. (3) The
+current-observation checkbox renders checked-and-disabled, as its scatter has no
+independent toggle yet.
+Verified: model tests + renderer scenarios updated to observation/library/my_obs;
+all five manual tests confirmed passing by the user.
+
+**Open defects carried into 4b** (from the 4a-fix review, 2026-09-04):
+- `_current_observation_comparison_row`'s `n` counts a different population than
+  the plot draws — it ignores the `gallery_filter_combo` category filter, omits
+  the plot's `width > 0` check, and hand-rolls a category allow-list instead of
+  reusing `normalize_measurement_category`. The category filter makes this
+  user-reachable today.
+- `test_chip_color_matches_plotted_color_after_a_reordering_sort` is
+  tautological: it sorts a list of dataclasses and asserts their `color` fields
+  are unchanged, which cannot fail. It gives no regression protection. Chip and
+  plot colour cannot in fact diverge — both read `entry["color"]` from the same
+  `_resolved_reference_series_entries` call — so the reserved-blue override was
+  the whole cause, and the prompt's index-vs-sort-order hypothesis was a wrong
+  diagnosis of a real symptom.
+- `set_rows`' pin-first sort is now redundant with the caller's
+  `rows.insert(0, current_row)`, since no reference row can carry
+  `is_observation=True`. Two mechanisms for one job.
