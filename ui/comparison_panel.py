@@ -75,7 +75,19 @@ class ComparisonRow:
 
     @classmethod
     def from_resolved_entry(cls, entry: dict) -> "ComparisonRow | None":
-        """Build a row from one item of ``_resolved_reference_series_entries()``."""
+        """Build a row from one item of ``_resolved_reference_series_entries()``.
+
+        That state holds references only — the currently open observation is
+        never one of its entries (see ``for_current_observation`` for that
+        row). Legacy code uses the string ``source_kind == "observation"`` for
+        a *previously recorded* personal observation attached as a comparison
+        reference (see
+        ``_attach_personal_observation_reference_to_active_observation`` in
+        ``main_window.py``). That legacy string collides with
+        ``SourceKind.OBSERVATION``, which this module reserves exclusively
+        for the current-observation row, so it is mapped to
+        ``SourceKind.MY_OBS`` here instead of through ``SourceKind.from_raw``.
+        """
         if not isinstance(entry, dict):
             return None
         key = entry.get("key")
@@ -83,10 +95,9 @@ class ComparisonRow:
             return None
         data = entry.get("data") if isinstance(entry.get("data"), dict) else {}
         raw_kind = data.get("source_kind")
-        is_observation = raw_kind == "observation"
-        kind = SourceKind.OBSERVATION if is_observation else SourceKind.from_raw(raw_kind)
+        kind = SourceKind.MY_OBS if raw_kind == "observation" else SourceKind.from_raw(raw_kind)
         detail = _format_detail(data)
-        color = RESERVED_OBSERVATION_COLOR if is_observation else str(entry.get("color") or "#adb5bd")
+        color = str(entry.get("color") or "#adb5bd")
         return cls(
             dataset_id=key,
             title=str(entry.get("label") or ""),
@@ -94,7 +105,30 @@ class ComparisonRow:
             detail=detail,
             color=color,
             visible=bool(entry.get("enabled", True)),
-            is_observation=is_observation,
+            is_observation=False,
+            verdict=None,
+        )
+
+    @classmethod
+    def for_current_observation(
+        cls, dataset_id: object, title: str, date: str, n: int
+    ) -> "ComparisonRow":
+        """Build the pinned row for the currently open observation.
+
+        Unlike :meth:`from_resolved_entry`, this is never built from
+        ``_resolved_reference_series_entries`` — the caller synthesizes it
+        from the active observation's own measurements. Reserved blue,
+        pinned first via ``is_observation``, no verdict badge.
+        """
+        detail = f"{date} · n = {n}" if date else f"n = {n}"
+        return cls(
+            dataset_id=dataset_id,
+            title=title,
+            source_kind=SourceKind.OBSERVATION,
+            detail=detail,
+            color=RESERVED_OBSERVATION_COLOR,
+            visible=True,
+            is_observation=True,
             verdict=None,
         )
 
@@ -190,6 +224,10 @@ class _ComparisonRowWidget(QFrame):
 
         if row.is_observation:
             self.overflow_btn.setEnabled(False)
+            # The current observation's own scatter has no independent
+            # show/hide toggle on the plot yet, so render checked-and-locked
+            # instead of inventing a control that would not do anything.
+            self.checkbox.setEnabled(False)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
         super().resizeEvent(event)

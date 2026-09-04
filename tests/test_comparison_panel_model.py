@@ -9,14 +9,23 @@ from __future__ import annotations
 from ui.comparison_panel import ComparisonRow, ComparisonListWidget, SourceKind, RESERVED_OBSERVATION_COLOR
 
 
-def _observation_entry(key="obs-key"):
+def _my_obs_entry(key="myobs-key", color="#2ecc71"):
+    """A previously-recorded personal observation attached as a reference.
+
+    Legacy state marks this ``source_kind: "observation"`` (see
+    ``_attach_personal_observation_reference_to_active_observation`` in
+    ``main_window.py``), which collides with the string used for
+    ``SourceKind.OBSERVATION``. It must map to ``SourceKind.MY_OBS`` and must
+    never be pinned or reserved-blue — only the current-observation row
+    (built via ``ComparisonRow.for_current_observation``) gets that.
+    """
     return {
         "key": key,
-        "label": "This observation",
+        "label": "Sigmund Ås 2026-08-02",
         "enabled": True,
-        "color": "#111111",  # ignored for observation rows; reserved color wins
+        "color": color,
         "preferred_color": None,
-        "data": {"source_kind": "observation", "points": [(1, 2)] * 20},
+        "data": {"source_kind": "observation", "points": [(1, 2)] * 17},
     }
 
 
@@ -46,6 +55,11 @@ def _community_points_entry(key="com-key"):
     }
 
 
+def _sorted_for_display(rows: list[ComparisonRow]) -> list[ComparisonRow]:
+    """Mirror ``ComparisonListWidget.set_rows``'s pin-first ordering."""
+    return sorted(rows, key=lambda r: 0 if r.is_observation else 1)
+
+
 def test_adding_dataset_produces_a_row():
     rows = ComparisonListWidget.rows_from_resolved_entries([_library_entry()])
     assert len(rows) == 1
@@ -57,14 +71,14 @@ def test_adding_dataset_produces_a_row():
 
 
 def test_removing_dataset_removes_the_row():
-    entries = [_observation_entry(), _library_entry()]
+    entries = [_my_obs_entry(), _library_entry()]
     rows = ComparisonListWidget.rows_from_resolved_entries(entries)
     assert len(rows) == 2
 
-    entries_after_removal = [_observation_entry()]
+    entries_after_removal = [_my_obs_entry()]
     rows_after = ComparisonListWidget.rows_from_resolved_entries(entries_after_removal)
     assert len(rows_after) == 1
-    assert rows_after[0].dataset_id == "obs-key"
+    assert rows_after[0].dataset_id == "myobs-key"
 
 
 def test_visibility_round_trips_between_row_and_dataset_state():
@@ -78,16 +92,72 @@ def test_visibility_round_trips_between_row_and_dataset_state():
     assert disabled_row.visible is False
 
 
-def test_observation_row_stays_first_regardless_of_insertion_order():
-    entries = [_community_points_entry(), _library_entry(), _observation_entry()]
+def test_previous_personal_observation_maps_to_my_obs_not_observation():
+    row = ComparisonRow.from_resolved_entry(_my_obs_entry())
+    assert row.source_kind == SourceKind.MY_OBS
+    assert row.is_observation is False
+
+
+def test_my_obs_row_is_not_pinned_and_does_not_take_reserved_blue():
+    entries = [_community_points_entry(), _library_entry(), _my_obs_entry()]
     rows = ComparisonListWidget.rows_from_resolved_entries(entries)
-    assert rows[0].is_observation is False  # not yet ordered; ordering happens in set_rows
+    my_obs_row = next(r for r in rows if r.dataset_id == "myobs-key")
 
-    ordered = sorted(rows, key=lambda r: 0 if r.is_observation else 1)
+    assert my_obs_row.color == "#2ecc71"  # its own resolved plot color, not reserved blue
+    assert my_obs_row.color != RESERVED_OBSERVATION_COLOR
+
+    ordered = _sorted_for_display(rows)
+    # No row is pinned: order is unchanged, so my_obs stays in insertion position.
+    assert [r.dataset_id for r in ordered] == ["com-key", "lib-key", "myobs-key"]
+
+
+def test_current_observation_row_is_present_first_and_reserved_blue():
+    reference_rows = ComparisonListWidget.rows_from_resolved_entries(
+        [_community_points_entry(), _library_entry(), _my_obs_entry()]
+    )
+    current_row = ComparisonRow.for_current_observation(
+        dataset_id="observation:99",
+        title="This observation",
+        date="2026-08-24",
+        n=20,
+    )
+    ordered = _sorted_for_display([current_row, *reference_rows])
+
+    assert ordered[0] is current_row
+    assert ordered[0].source_kind == SourceKind.OBSERVATION
+    assert ordered[0].color == RESERVED_OBSERVATION_COLOR
     assert ordered[0].is_observation is True
-    assert ordered[0].dataset_id == "obs-key"
+    assert ordered[0].verdict is None
+    assert ordered[0].detail == "2026-08-24 · n = 20"
 
 
-def test_observation_row_keeps_reserved_color():
-    row = ComparisonRow.from_resolved_entry(_observation_entry())
-    assert row.color == RESERVED_OBSERVATION_COLOR
+def test_chip_color_matches_plotted_color_after_a_reordering_sort():
+    """Colour must come from series identity, not display-list position.
+
+    ``_resolved_reference_series_entries`` precomputes each entry's plot
+    color before ``ComparisonRow`` construction; ``set_rows`` then sorts
+    observation-kind rows first. The chip color must survive that reorder
+    unchanged, matching what the plot actually drew for that series.
+    """
+    entries = [
+        _community_points_entry(),  # color "#8e44ad"
+        _library_entry(),  # color "#e67e22"
+        _my_obs_entry(),  # color "#2ecc71"
+    ]
+    rows_before_sort = {
+        row.dataset_id: row.color
+        for row in ComparisonListWidget.rows_from_resolved_entries(entries)
+    }
+    current_row = ComparisonRow.for_current_observation(
+        dataset_id="observation:99", title="This observation", date="2026-08-24", n=20
+    )
+    all_rows = [current_row, *ComparisonListWidget.rows_from_resolved_entries(entries)]
+    ordered = _sorted_for_display(all_rows)
+
+    assert ordered[0].dataset_id == "observation:99"
+    for row in ordered[1:]:
+        assert row.color == rows_before_sort[row.dataset_id]
+
+    # Four distinct colors, one per plotted series (current observation +
+    # the three references).
+    assert len({row.color for row in ordered}) == 4

@@ -245,7 +245,7 @@ from .live_lab_tab import LiveLabTab
 from .database_settings_dialog import DatabaseSettingsDialog
 from .cloud_reference_dialog import CloudReferenceDialog
 from .add_reference_dialog import AddReferenceDialog
-from .comparison_panel import ComparisonListWidget
+from .comparison_panel import ComparisonListWidget, ComparisonRow
 from .reference_library_attach_dialog import ReferenceLibraryAttachDialog
 from .section_card import create_section_card
 from .segmented_selector import SegmentedSelector
@@ -10908,11 +10908,50 @@ class MainWindow(GeometryMixin, QMainWindow):
         self.ref_series_table.resizeColumnToContents(3)
         self.ref_series_table.resizeColumnToContents(4)
         if hasattr(self, "comparison_list"):
-            self.comparison_list.set_rows(
-                ComparisonListWidget.rows_from_resolved_entries(
-                    self._resolved_reference_series_entries(self._is_dark_theme())
-                )
+            rows = ComparisonListWidget.rows_from_resolved_entries(
+                self._resolved_reference_series_entries(self._is_dark_theme())
             )
+            current_row = self._current_observation_comparison_row()
+            if current_row is not None:
+                rows.insert(0, current_row)
+            self.comparison_list.set_rows(rows)
+
+    def _current_observation_comparison_row(self) -> ComparisonRow | None:
+        """Synthesize the pinned row for the currently open observation.
+
+        Row 1 in the comparison panel is the active observation's own
+        measurements, never a resolved reference entry —
+        ``_resolved_reference_series_entries`` holds references only (see
+        ``ComparisonRow.from_resolved_entry``).
+        """
+        observation_id = getattr(self, "active_observation_id", None)
+        if not observation_id:
+            return None
+        try:
+            observation_id = int(observation_id)
+        except (TypeError, ValueError):
+            return None
+        obs = ObservationDB.get_observation(observation_id)
+        if not obs:
+            return None
+        date_value = (obs.get("date") or "").strip()
+        if " " in date_value:
+            date_value = date_value.split(" ")[0]
+        if "T" in date_value:
+            date_value = date_value.split("T")[0]
+        raw = MeasurementDB.get_measurements_for_observation(observation_id)
+        n = sum(
+            1 for m in raw
+            if m.get("length_um") is not None
+            and m.get("width_um") is not None
+            and (m.get("measurement_type") in (None, "", "manual", "spore", "spores"))
+        )
+        return ComparisonRow.for_current_observation(
+            dataset_id=f"observation:{observation_id}",
+            title=self.tr("This observation"),
+            date=date_value,
+            n=n,
+        )
 
     def _on_reference_series_row_clicked(self, row: int, col: int):
         if col in (0, 1, 3, 4):

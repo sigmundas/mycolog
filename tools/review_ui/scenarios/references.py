@@ -437,7 +437,7 @@ def _comparison_list_basic(context: ReviewContext):
                 "lib-1", "Funga Nordica", "library", "8.5–10.8 × 4.5–5.8 µm", "#e67e22",
             ),
             _comparison_row(
-                "com-1", "sporely_community_user_42", "community", "n = 48", "#8e44ad",
+                "myobs-1", "Sigmund Ås 2026-08-02", "my_obs", "n = 17", "#2ecc71",
             ),
         ]
     )
@@ -455,12 +455,13 @@ def _comparison_list_overflow(context: ReviewContext):
         )
     ]
     palette = ["#e67e22", "#8e44ad", "#2ecc71", "#e74c3c", "#1abc9c", "#f1c40f", "#34495e", "#c0392b"]
+    kinds = ["library", "community", "my_obs"]
     for index in range(8):
         rows.append(
             _comparison_row(
                 f"row-{index}",
                 f"Reference set {index + 1}",
-                "library" if index % 2 == 0 else "community",
+                kinds[index % len(kinds)],
                 f"n = {10 + index}",
                 palette[index % len(palette)],
             )
@@ -755,7 +756,7 @@ def register_reference_scenarios(registry: ScenarioRegistry) -> None:
         ReviewScenario(
             id="reference.comparison-list",
             group="reference-library",
-            title="Comparison list — observation, library, and community rows",
+            title="Comparison list — observation, library, and my_obs rows",
             description="Three plotted datasets exercise checkbox, color chip, badge, and detail line rendering.",
             viewport=(420, 260),
             build=_comparison_list_basic,
