@@ -289,8 +289,15 @@ class ComparisonListWidget(QWidget):
         self._rows: list[ComparisonRow] = []
 
     def set_rows(self, rows: list[ComparisonRow]) -> None:
-        """Replace all rows. Observation row (if present) is pinned first."""
-        ordered = sorted(rows, key=lambda r: 0 if r.is_observation else 1)
+        """Replace all rows, in the order given.
+
+        Pinning the current-observation row first is the caller's
+        responsibility (see ``rows.insert(0, current_row)`` in
+        ``main_window.py``) -- ``from_resolved_entry`` always produces
+        ``is_observation=False``, so a sort here could never reorder
+        anything; it would be a no-op given an already-ordered input.
+        """
+        ordered = list(rows)
         self._rows = ordered
 
         while self._list_layout.count() > 1:

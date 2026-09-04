@@ -637,7 +637,59 @@ def _add_dialog_my_observations(context: ReviewContext):
     return dialog
 
 
-def _add_dialog_stub_tab(context: ReviewContext):
+def _add_dialog_community_results():
+    # A long source label (independent elision on the title line) paired
+    # with a long, æøå-bearing contributor (independent elision on the
+    # detail line too) -- both rows use the same TwoLineRow widget as
+    # Library/My-observations, so both lines must elide against their own
+    # width, per _add_dialog_candidates' convention.
+    return [
+        {
+            "_kind": "reference",
+            "genus": "Cortinarius",
+            "species": "limonius",
+            "source": (
+                "Niskanen, Liimatainen & Kytövuori's comprehensive northern "
+                "European community reference submission"
+            ),
+            "contributor_label": (
+                "Åse Øyen — Ørsta og Ålesund lokalt observasjonsnettverk for sjeldne slørsopper"
+            ),
+            "measurement_count": 0,
+            "q_min": 1.6,
+            "q_p50": 1.85,
+            "q_max": 2.1,
+            "length_min": 8.1,
+            "length_p50": 9.3,
+            "length_max": 10.8,
+            "width_min": 4.5,
+            "width_p50": 5.1,
+            "width_max": 5.8,
+        },
+        {
+            "_kind": "observation",
+            "genus": "Cortinarius",
+            "species": "limonius",
+            "contributor_label": "sporely_community_user_42",
+            "observed_on": "2025-04-18",
+            "measurement_count": 24,
+            "q_min": 1.5,
+            "q_p50": 1.8,
+            "q_max": 2.0,
+            "measurements_json": [
+                {"length_um": 8.0 + 0.1 * i, "width_um": 4.5 + 0.05 * i} for i in range(24)
+            ],
+            "length_min": 8.0,
+            "length_p50": 9.0,
+            "length_max": 10.5,
+            "width_min": 4.5,
+            "width_p50": 5.0,
+            "width_max": 5.8,
+        },
+    ]
+
+
+def _add_dialog_community(context: ReviewContext):
     from ui.add_reference_dialog import AddReferenceDialog
 
     _fixture(context)
@@ -645,10 +697,41 @@ def _add_dialog_stub_tab(context: ReviewContext):
         context.host,
         taxon_label="Cortinarius limonius",
         taxon_id="7",
+        genus="Cortinarius",
+        species="limonius",
         candidates=_add_dialog_candidates(),
+        community_results=_add_dialog_community_results(),
         attach_callback=lambda *_args: None,
+        cloud_attach_callback=lambda *_args: None,
     )
-    dialog.tabs.setCurrentIndex(1)  # Community stub
+    dialog.tabs.setCurrentIndex(dialog._community_tab_index)
+    dialog._community_pane.results_list.setCurrentRow(0)
+    return dialog
+
+
+def _add_dialog_community_points(context: ReviewContext):
+    dialog = _add_dialog_community(context)
+    dialog._community_pane.results_list.setCurrentRow(1)
+    dialog._community_pane.raw_points_radio.setChecked(True)
+    return dialog
+
+
+def _add_dialog_community_empty(context: ReviewContext):
+    from ui.add_reference_dialog import AddReferenceDialog
+
+    _fixture(context)
+    dialog = AddReferenceDialog(
+        context.host,
+        taxon_label="Cortinarius limonius",
+        taxon_id="7",
+        genus="Cortinarius",
+        species="limonius",
+        candidates=_add_dialog_candidates(),
+        community_results=[],
+        attach_callback=lambda *_args: None,
+        cloud_attach_callback=lambda *_args: None,
+    )
+    dialog.tabs.setCurrentIndex(dialog._community_tab_index)
     return dialog
 
 
@@ -838,21 +921,37 @@ def register_reference_scenarios(registry: ScenarioRegistry) -> None:
             theme="dark",
         ),
         ReviewScenario(
-            id="reference.add-dialog-stub-tab",
+            id="reference.add-dialog-community",
             group="reference-library",
-            title="Add-reference picker — stubbed Community tab",
-            description="Community tab shows an honest \"coming in a later stage\" placeholder rather than a broken UI.",
+            title="Add-reference picker — Community tab, range summary selected",
+            description="A community reference result with a 60+ char source label and a long æøå contributor; both title and detail lines elide independently. Range summary radio populates the shared preview pane.",
             viewport=(900, 560),
-            build=_add_dialog_stub_tab,
+            build=_add_dialog_community,
         ),
         ReviewScenario(
-            id="reference.add-dialog-stub-tab-dark",
+            id="reference.add-dialog-community-dark",
             group="reference-library",
-            title="Add-reference picker — stubbed Community tab (dark)",
-            description="Same stub-tab state in dark theme.",
+            title="Add-reference picker — Community tab (dark)",
+            description="Same Community-tab state in dark theme to verify contrast.",
             viewport=(900, 560),
-            build=_add_dialog_stub_tab,
+            build=_add_dialog_community,
             theme="dark",
+        ),
+        ReviewScenario(
+            id="reference.add-dialog-community-points",
+            group="reference-library",
+            title="Add-reference picker — Community tab, raw points selected",
+            description="A community observation dataset with the \"Raw points\" radio checked; the radio label and preview show the real n=24.",
+            viewport=(900, 560),
+            build=_add_dialog_community_points,
+        ),
+        ReviewScenario(
+            id="reference.add-dialog-community-empty",
+            group="reference-library",
+            title="Add-reference picker — Community tab, no results",
+            description="No community results for the working taxon: honest empty state, Add to plot stays disabled.",
+            viewport=(900, 560),
+            build=_add_dialog_community_empty,
         ),
     )
     for scenario in scenarios:

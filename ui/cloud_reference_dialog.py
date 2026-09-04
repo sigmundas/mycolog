@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 from PySide6.QtCore import QEvent, QModelIndex, QStringListModel, QThread, Qt, QTimer, Signal
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QButtonGroup,
     QCompleter,
     QDialog,
     QFormLayout,
@@ -16,9 +17,12 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QRadioButton,
     QSizePolicy,
     QSplitter,
     QTabWidget,
@@ -43,6 +47,7 @@ from .delegates import SpeciesItemDelegate
 from .dialog_helpers import make_github_help_button
 from .reference_preview_pane import ReferencePreviewPane
 from .taxon_input_controller import TaxonInputController
+from .two_line_row import TwoLineRow
 
 
 def _should_select_all_on_focus(event) -> bool:
@@ -125,6 +130,310 @@ class _CloudDetailWorker(QThread):
             self.detail_done.emit(detail)
         except Exception as exc:
             self.error.emit(str(exc))
+
+
+def format_stat_value(value: Any, decimals: int = 2) -> str:
+    if value is None:
+        return "—"
+    try:
+        return f"{float(value):.{decimals}f}"
+    except Exception:
+        return str(value)
+
+
+def community_result_source_label(row: dict[str, Any], tr: Callable[[str], str]) -> str:
+    kind = str(row.get("_kind") or "").strip()
+    species_tag = str(row.get("species") or "").strip()
+    if species_tag:
+        genus_tag = str(row.get("genus") or "").strip()
+        species_tag = f"{genus_tag} {species_tag}".strip() if genus_tag else species_tag
+    if kind == "reference":
+        source = str(row.get("source") or "").strip() or tr("Reference values")
+        mount = str(row.get("mount_medium") or "").strip()
+        stain = str(row.get("stain") or "").strip()
+        prep = ", ".join(part for part in (mount, stain) if part)
+        label = f"{source} [{prep}]".strip() if prep else source
+        return f"{species_tag} – {label}" if species_tag else label
+    observed_on = str(row.get("observed_on") or "").strip()
+    if observed_on:
+        base = tr("Community observation {date}").format(date=observed_on)
+    else:
+        base = tr("Community observation")
+    return f"{species_tag} – {base}" if species_tag else base
+
+
+def community_result_q_range_label(row: dict[str, Any]) -> str:
+    q_min = row.get("q_min")
+    q_p50 = row.get("q_p50")
+    q_max = row.get("q_max")
+    if q_min is None and q_p50 is None and q_max is None:
+        length = row.get("length_p05")
+        width = row.get("width_p50")
+        if length is None and width is None:
+            return "—"
+    parts = []
+    if q_min is not None:
+        parts.append(f"{float(q_min):.2f}")
+    if q_p50 is not None:
+        parts.append(f"{float(q_p50):.2f}")
+    if q_max is not None and (not parts or parts[-1] != f"{float(q_max):.2f}"):
+        parts.append(f"{float(q_max):.2f}")
+    return " / ".join(parts) if parts else "—"
+
+
+def community_default_import_source(detail: dict[str, Any], tr: Callable[[str], str]) -> str:
+    contributor = str(detail.get("contributor_label") or "").strip()
+    observed_on = str(detail.get("observed_on") or "").strip()
+    if detail.get("_kind") == "reference":
+        source = str(detail.get("source") or "").strip()
+        return f"Cloud: {source}".strip() if source else tr("Cloud reference")
+    parts = [part for part in (contributor, observed_on) if part]
+    suffix = " - ".join(parts)
+    return f"Cloud: {suffix}".strip() if suffix else tr("Cloud observation")
+
+
+def community_single_detail_value(detail: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = detail.get(key)
+        if isinstance(value, list):
+            cleaned = [str(item).strip() for item in value if str(item).strip()]
+            if len(cleaned) == 1:
+                return cleaned[0]
+            if cleaned:
+                return None
+        text = str(value or "").strip()
+        if text:
+            return text
+    return None
+
+
+def community_summary_metadata_payload(detail: dict[str, Any], tr: Callable[[str], str]) -> dict[str, Any]:
+    return {
+        "source_type": "cloud",
+        "cloud_dataset_kind": str(detail.get("_kind") or "").strip() or "observation",
+        "cloud_observation_id": detail.get("observation_id"),
+        "cloud_reference_id": detail.get("reference_id"),
+        "cloud_source_label": community_default_import_source(detail, tr),
+        "contributor_label": str(detail.get("contributor_label") or "").strip() or None,
+        "observed_on": str(detail.get("observed_on") or "").strip() or None,
+        "license": detail.get("license"),
+        "qc_flags": detail.get("qc_flags") or {},
+        "imported_via": "cloud_reference_dialog",
+        "imported_at": datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+def community_summary_reference_payload(detail: dict[str, Any], tr: Callable[[str], str]) -> dict[str, Any] | None:
+    genus = str(detail.get("genus") or "").strip()
+    species = str(detail.get("species") or "").strip()
+    if not genus or not species:
+        return None
+    return {
+        "genus": genus,
+        "species": species,
+        "source": community_default_import_source(detail, tr),
+        "mount_medium": community_single_detail_value(detail, "mount_media", "mount_medium"),
+        "stain": community_single_detail_value(detail, "stains", "stain"),
+        "length_min": detail.get("length_min"),
+        "length_p05": detail.get("length_p05"),
+        "length_p50": detail.get("length_p50"),
+        "length_p95": detail.get("length_p95"),
+        "length_max": detail.get("length_max"),
+        "length_avg": detail.get("length_avg"),
+        "width_min": detail.get("width_min"),
+        "width_p05": detail.get("width_p05"),
+        "width_p50": detail.get("width_p50"),
+        "width_p95": detail.get("width_p95"),
+        "width_max": detail.get("width_max"),
+        "width_avg": detail.get("width_avg"),
+        "q_min": detail.get("q_min"),
+        "q_p50": detail.get("q_p50"),
+        "q_max": detail.get("q_max"),
+        "q_avg": detail.get("q_avg"),
+        "source_kind": "reference",
+        "source_type": "cloud",
+        "metadata_json": community_summary_metadata_payload(detail, tr),
+    }
+
+
+def community_points_payload(detail: dict[str, Any], tr: Callable[[str], str]) -> dict[str, Any] | None:
+    genus = str(detail.get("genus") or "").strip()
+    species = str(detail.get("species") or "").strip()
+    measurements = detail.get("measurements_json") or []
+    if not genus or not species or not isinstance(measurements, list):
+        return None
+    points = []
+    for row in measurements:
+        if not isinstance(row, dict):
+            continue
+        length = row.get("length_um")
+        width = row.get("width_um")
+        if length is None or width in (None, 0):
+            continue
+        try:
+            points.append({"length_um": float(length), "width_um": float(width)})
+        except Exception:
+            continue
+    if not points:
+        return None
+    return {
+        "genus": genus,
+        "species": species,
+        "points": points,
+        "points_label": community_default_import_source(detail, tr),
+        "source_kind": "points",
+        "source_type": "cloud",
+        "length_min": detail.get("length_min"),
+        "length_p05": detail.get("length_p05"),
+        "length_p50": detail.get("length_p50"),
+        "length_p95": detail.get("length_p95"),
+        "length_max": detail.get("length_max"),
+        "length_avg": detail.get("length_avg"),
+        "width_min": detail.get("width_min"),
+        "width_p05": detail.get("width_p05"),
+        "width_p50": detail.get("width_p50"),
+        "width_p95": detail.get("width_p95"),
+        "width_max": detail.get("width_max"),
+        "width_avg": detail.get("width_avg"),
+        "q_min": detail.get("q_min"),
+        "q_p50": detail.get("q_p50"),
+        "q_max": detail.get("q_max"),
+        "q_avg": detail.get("q_avg"),
+    }
+
+
+def community_detail_preview_fields(detail: dict[str, Any], tr: Callable[[str], str]) -> dict[str, Any]:
+    """Compute every field a review pane needs for one community dataset detail.
+
+    Shared by :class:`CloudReferenceDialog` and the Community tab's
+    ``CommunityResultsPane`` so both apply the identical computation to
+    whichever :class:`~ui.reference_preview_pane.ReferencePreviewPane`
+    instance they own, through that pane's public ``set_*`` API.
+    """
+    kind = str(detail.get("_kind") or "").strip()
+    genus = str(detail.get("genus") or "").strip()
+    species = str(detail.get("species") or "").strip()
+    contributor = str(detail.get("contributor_label") or "—")
+    observed_on = str(detail.get("observed_on") or "").strip()
+    measurement_count = int(detail.get("measurement_count") or 0)
+
+    title = f"{genus} {species}".strip() or tr("Community dataset")
+    if kind == "reference":
+        title += f" ({tr('Reference')})"
+    else:
+        title += f" ({tr('Observation dataset')})"
+    meta = tr("Contributor: {contributor}  •  Date: {date}  •  n={count}").format(
+        contributor=contributor,
+        date=observed_on or "—",
+        count=measurement_count,
+    )
+
+    rows: list[tuple[str, str, str, str]] = []
+    for key in ("length", "width", "q"):
+        median_value = detail.get(f"{key}_p50")
+        if median_value is None:
+            median_value = detail.get(f"{key}_avg")
+        rows.append(
+            (
+                tr(key.capitalize()),
+                format_stat_value(detail.get(f"{key}_min")),
+                format_stat_value(median_value),
+                format_stat_value(detail.get(f"{key}_max")),
+            )
+        )
+
+    qc_flags = detail.get("qc_flags") or {}
+    qc_lines = []
+    if isinstance(qc_flags, dict):
+        for key, label in (
+            ("has_mount", tr("Mount recorded")),
+            ("has_stain", tr("Stain recorded")),
+            ("has_sample_type", tr("Sample type recorded")),
+            ("has_contrast", tr("Contrast recorded")),
+            ("has_objective", tr("Objective recorded")),
+            ("has_scale", tr("Scale recorded")),
+            ("has_point_geometry", tr("Measurement points recorded")),
+        ):
+            if qc_flags.get(key):
+                qc_lines.append(label)
+    note = tr("QC signals: {signals}").format(
+        signals=", ".join(qc_lines) if qc_lines else tr("No extra QC metadata")
+    )
+
+    measurements = detail.get("measurements_json") or []
+    raw_lines = []
+    for row in measurements[:200]:
+        if not isinstance(row, dict):
+            continue
+        raw_lines.append(
+            f"L={format_stat_value(row.get('length_um'))}  "
+            f"W={format_stat_value(row.get('width_um'))}  "
+            f"Q={format_stat_value((float(row.get('length_um')) / float(row.get('width_um'))) if row.get('length_um') is not None and row.get('width_um') not in (None, 0) else None)}"
+        )
+    raw_text = "\n".join(raw_lines) if raw_lines else tr("No raw point data returned.")
+
+    def _join_list(value: Any) -> str:
+        if isinstance(value, list):
+            cleaned = [str(item).strip() for item in value if str(item).strip()]
+            return ", ".join(cleaned) if cleaned else "—"
+        text = str(value or "").strip()
+        return text or "—"
+
+    method_mapping = {
+        "mount": _join_list(detail.get("mount_media") or detail.get("mount_medium")),
+        "stain": _join_list(detail.get("stains") or detail.get("stain")),
+        "sample_type": _join_list(detail.get("sample_types") or detail.get("sample_type")),
+        "contrast": _join_list(detail.get("contrasts") or detail.get("contrast")),
+        "objective": _join_list(detail.get("objectives") or detail.get("objective_name")),
+    }
+    scale_min = detail.get("scale_min")
+    scale_max = detail.get("scale_max")
+    if scale_min is not None or scale_max is not None:
+        if scale_min == scale_max or scale_max is None:
+            scale_text = f"{format_stat_value(scale_min)} µm/px"
+        else:
+            scale_text = f"{format_stat_value(scale_min)}-{format_stat_value(scale_max)} µm/px"
+    else:
+        scale_text = format_stat_value(detail.get("scale_microns_per_pixel"))
+        if scale_text != "—":
+            scale_text += " µm/px"
+    method_mapping["scale"] = scale_text
+
+    calibration_lines = []
+    if scale_text != "—":
+        calibration_lines.append(f"{tr('Scale')}: {scale_text}")
+    if kind == "observation":
+        calibration_lines.append(
+            tr("Calibration details come from image/objective metadata in the synced observation dataset.")
+        )
+    else:
+        calibration_lines.append(tr("Reference rows currently expose summary values only."))
+    calibration_text = "\n".join(calibration_lines)
+
+    provenance_lines = [
+        f"{tr('Kind')}: {kind or '—'}",
+        f"{tr('Contributor')}: {contributor}",
+        f"{tr('Date')}: {observed_on or '—'}",
+    ]
+    if kind == "reference":
+        provenance_lines.append(f"{tr('Source')}: {detail.get('source') or '—'}")
+        provenance_lines.append(tr("Imported reference values are currently treated as shared reference material."))
+    else:
+        provenance_lines.append(f"{tr('Observation id')}: {detail.get('observation_id') or '—'}")
+        provenance_lines.append(tr("Location and private observation content are intentionally excluded from this review flow."))
+    provenance_text = "\n".join(provenance_lines)
+
+    return {
+        "title": title,
+        "meta": meta,
+        "rows": rows,
+        "note": note,
+        "raw_text": raw_text,
+        "method_mapping": method_mapping,
+        "calibration_text": calibration_text,
+        "provenance_text": provenance_text,
+        "points_count": len(measurements) if isinstance(measurements, list) else 0,
+    }
 
 
 class CloudReferenceDialog(QDialog):
@@ -713,42 +1022,10 @@ class CloudReferenceDialog(QDialog):
             self.search_status_label.setText(status_text)
 
     def _result_source_label(self, row: dict[str, Any]) -> str:
-        kind = str(row.get("_kind") or "").strip()
-        species_tag = str(row.get("species") or "").strip()
-        if species_tag:
-            genus_tag = str(row.get("genus") or "").strip()
-            species_tag = f"{genus_tag} {species_tag}".strip() if genus_tag else species_tag
-        if kind == "reference":
-            source = str(row.get("source") or "").strip() or self.tr("Reference values")
-            mount = str(row.get("mount_medium") or "").strip()
-            stain = str(row.get("stain") or "").strip()
-            prep = ", ".join(part for part in (mount, stain) if part)
-            label = f"{source} [{prep}]".strip() if prep else source
-            return f"{species_tag} – {label}" if species_tag else label
-        observed_on = str(row.get("observed_on") or "").strip()
-        if observed_on:
-            base = self.tr("Community observation {date}").format(date=observed_on)
-        else:
-            base = self.tr("Community observation")
-        return f"{species_tag} – {base}" if species_tag else base
+        return community_result_source_label(row, self.tr)
 
     def _result_q_range_label(self, row: dict[str, Any]) -> str:
-        q_min = row.get("q_min")
-        q_p50 = row.get("q_p50")
-        q_max = row.get("q_max")
-        if q_min is None and q_p50 is None and q_max is None:
-            length = row.get("length_p05")
-            width = row.get("width_p50")
-            if length is None and width is None:
-                return "—"
-        parts = []
-        if q_min is not None:
-            parts.append(f"{float(q_min):.2f}")
-        if q_p50 is not None:
-            parts.append(f"{float(q_p50):.2f}")
-        if q_max is not None and (not parts or parts[-1] != f"{float(q_max):.2f}"):
-            parts.append(f"{float(q_max):.2f}")
-        return " / ".join(parts) if parts else "—"
+        return community_result_q_range_label(row)
 
     def _populate_results_table(self) -> None:
         self.results_table.setRowCount(0)
@@ -871,250 +1148,37 @@ class CloudReferenceDialog(QDialog):
         self.plot_points_button.setEnabled(False)
 
     def _format_stat(self, value: Any, decimals: int = 2) -> str:
-        if value is None:
-            return "—"
-        try:
-            return f"{float(value):.{decimals}f}"
-        except Exception:
-            return str(value)
+        return format_stat_value(value, decimals)
 
     def _populate_detail_preview(self) -> None:
         detail = self._selected_detail or {}
-        kind = str(detail.get("_kind") or "").strip()
-        genus = str(detail.get("genus") or "").strip()
-        species = str(detail.get("species") or "").strip()
-        contributor = str(detail.get("contributor_label") or "—")
-        observed_on = str(detail.get("observed_on") or "").strip()
-        measurement_count = int(detail.get("measurement_count") or 0)
-
-        title = f"{genus} {species}".strip() or self.tr("Community dataset")
-        if kind == "reference":
-            title += f" ({self.tr('Reference')})"
-        else:
-            title += f" ({self.tr('Observation dataset')})"
-        self.summary_title_label.setText(title)
-        self.summary_meta_label.setText(
-            self.tr("Contributor: {contributor}  •  Date: {date}  •  n={count}").format(
-                contributor=contributor,
-                date=observed_on or "—",
-                count=measurement_count,
-            )
-        )
-        for row, key in enumerate(("length", "width", "q")):
-            self.summary_table.setItem(row, 0, QTableWidgetItem(self.tr(key.capitalize())))
-            self.summary_table.setItem(row, 1, QTableWidgetItem(self._format_stat(detail.get(f"{key}_min"))))
-            median_value = detail.get(f"{key}_p50")
-            if median_value is None:
-                median_value = detail.get(f"{key}_avg")
-            self.summary_table.setItem(row, 2, QTableWidgetItem(self._format_stat(median_value)))
-            max_value = detail.get(f"{key}_max")
-            self.summary_table.setItem(row, 3, QTableWidgetItem(self._format_stat(max_value)))
-
-        qc_flags = detail.get("qc_flags") or {}
-        qc_lines = []
-        if isinstance(qc_flags, dict):
-            for key, label in (
-                ("has_mount", self.tr("Mount recorded")),
-                ("has_stain", self.tr("Stain recorded")),
-                ("has_sample_type", self.tr("Sample type recorded")),
-                ("has_contrast", self.tr("Contrast recorded")),
-                ("has_objective", self.tr("Objective recorded")),
-                ("has_scale", self.tr("Scale recorded")),
-                ("has_point_geometry", self.tr("Measurement points recorded")),
-            ):
-                if qc_flags.get(key):
-                    qc_lines.append(label)
-        self.summary_note_label.setText(
-            self.tr("QC signals: {signals}").format(signals=", ".join(qc_lines) if qc_lines else self.tr("No extra QC metadata"))
-        )
-
-        measurements = detail.get("measurements_json") or []
-        raw_lines = []
-        for row in measurements[:200]:
-            if not isinstance(row, dict):
-                continue
-            raw_lines.append(
-                f"L={self._format_stat(row.get('length_um'))}  "
-                f"W={self._format_stat(row.get('width_um'))}  "
-                f"Q={self._format_stat((float(row.get('length_um')) / float(row.get('width_um'))) if row.get('length_um') is not None and row.get('width_um') not in (None, 0) else None)}"
-            )
-        self.raw_spores_text.setPlainText("\n".join(raw_lines) if raw_lines else self.tr("No raw point data returned."))
-
-        def _join_list(value: Any) -> str:
-            if isinstance(value, list):
-                cleaned = [str(item).strip() for item in value if str(item).strip()]
-                return ", ".join(cleaned) if cleaned else "—"
-            text = str(value or "").strip()
-            return text or "—"
-
-        self._method_labels["mount"].setText(_join_list(detail.get("mount_media") or detail.get("mount_medium")))
-        self._method_labels["stain"].setText(_join_list(detail.get("stains") or detail.get("stain")))
-        self._method_labels["sample_type"].setText(_join_list(detail.get("sample_types") or detail.get("sample_type")))
-        self._method_labels["contrast"].setText(_join_list(detail.get("contrasts") or detail.get("contrast")))
-        self._method_labels["objective"].setText(_join_list(detail.get("objectives") or detail.get("objective_name")))
-        scale_min = detail.get("scale_min")
-        scale_max = detail.get("scale_max")
-        if scale_min is not None or scale_max is not None:
-            if scale_min == scale_max or scale_max is None:
-                scale_text = f"{self._format_stat(scale_min)} µm/px"
-            else:
-                scale_text = f"{self._format_stat(scale_min)}-{self._format_stat(scale_max)} µm/px"
-        else:
-            scale_text = self._format_stat(detail.get("scale_microns_per_pixel"))
-            if scale_text != "—":
-                scale_text += " µm/px"
-        self._method_labels["scale"].setText(scale_text)
-
-        calibration_lines = []
-        if scale_text != "—":
-            calibration_lines.append(f"{self.tr('Scale')}: {scale_text}")
-        if kind == "observation":
-            calibration_lines.append(
-                self.tr("Calibration details come from image/objective metadata in the synced observation dataset.")
-            )
-        else:
-            calibration_lines.append(self.tr("Reference rows currently expose summary values only."))
-        self.calibration_text.setPlainText("\n".join(calibration_lines))
-
-        provenance_lines = [
-            f"{self.tr('Kind')}: {kind or '—'}",
-            f"{self.tr('Contributor')}: {contributor}",
-            f"{self.tr('Date')}: {observed_on or '—'}",
-        ]
-        if kind == "reference":
-            provenance_lines.append(f"{self.tr('Source')}: {detail.get('source') or '—'}")
-            provenance_lines.append(self.tr("Imported reference values are currently treated as shared reference material."))
-        else:
-            provenance_lines.append(f"{self.tr('Observation id')}: {detail.get('observation_id') or '—'}")
-            provenance_lines.append(self.tr("Location and private observation content are intentionally excluded from this review flow."))
-        self.provenance_text.setPlainText("\n".join(provenance_lines))
+        fields = community_detail_preview_fields(detail, self.tr)
+        self._preview_pane.set_summary(fields["title"], fields["meta"], fields["rows"], fields["note"])
+        self._preview_pane.set_raw_spores(fields["raw_text"])
+        self._preview_pane.set_method(fields["method_mapping"])
+        self._preview_pane.set_calibration(fields["calibration_text"])
+        self._preview_pane.set_provenance(fields["provenance_text"])
 
         self.import_summary_button.setEnabled(True)
-        self.plot_points_button.setEnabled(bool(measurements))
+        self.plot_points_button.setEnabled(bool(fields["points_count"]))
         self.footer_hint.setText(
             self.tr("Review complete. Import summary saves a local reference; Use raw points adds a temporary comparison plot.")
         )
 
     def _default_import_source(self) -> str:
-        detail = self._selected_detail or {}
-        contributor = str(detail.get("contributor_label") or "").strip()
-        observed_on = str(detail.get("observed_on") or "").strip()
-        if detail.get("_kind") == "reference":
-            source = str(detail.get("source") or "").strip()
-            return f"Cloud: {source}".strip() if source else self.tr("Cloud reference")
-        parts = [part for part in (contributor, observed_on) if part]
-        suffix = " - ".join(parts)
-        return f"Cloud: {suffix}".strip() if suffix else self.tr("Cloud observation")
+        return community_default_import_source(self._selected_detail or {}, self.tr)
 
     def _single_detail_value(self, *keys: str) -> str | None:
-        detail = self._selected_detail or {}
-        for key in keys:
-            value = detail.get(key)
-            if isinstance(value, list):
-                cleaned = [str(item).strip() for item in value if str(item).strip()]
-                if len(cleaned) == 1:
-                    return cleaned[0]
-                if cleaned:
-                    return None
-            text = str(value or "").strip()
-            if text:
-                return text
-        return None
+        return community_single_detail_value(self._selected_detail or {}, *keys)
 
     def _summary_metadata_payload(self) -> dict[str, Any]:
-        detail = self._selected_detail or {}
-        return {
-            "source_type": "cloud",
-            "cloud_dataset_kind": str(detail.get("_kind") or "").strip() or "observation",
-            "cloud_observation_id": detail.get("observation_id"),
-            "cloud_reference_id": detail.get("reference_id"),
-            "cloud_source_label": self._default_import_source(),
-            "contributor_label": str(detail.get("contributor_label") or "").strip() or None,
-            "observed_on": str(detail.get("observed_on") or "").strip() or None,
-            "license": detail.get("license"),
-            "qc_flags": detail.get("qc_flags") or {},
-            "imported_via": "cloud_reference_dialog",
-            "imported_at": datetime.now().isoformat(timespec="seconds"),
-        }
+        return community_summary_metadata_payload(self._selected_detail or {}, self.tr)
 
     def _summary_reference_payload(self) -> dict[str, Any] | None:
-        detail = self._selected_detail or {}
-        genus = str(detail.get("genus") or "").strip()
-        species = str(detail.get("species") or "").strip()
-        if not genus or not species:
-            return None
-        return {
-            "genus": genus,
-            "species": species,
-            "source": self._default_import_source(),
-            "mount_medium": self._single_detail_value("mount_media", "mount_medium"),
-            "stain": self._single_detail_value("stains", "stain"),
-            "length_min": detail.get("length_min"),
-            "length_p05": detail.get("length_p05"),
-            "length_p50": detail.get("length_p50"),
-            "length_p95": detail.get("length_p95"),
-            "length_max": detail.get("length_max"),
-            "length_avg": detail.get("length_avg"),
-            "width_min": detail.get("width_min"),
-            "width_p05": detail.get("width_p05"),
-            "width_p50": detail.get("width_p50"),
-            "width_p95": detail.get("width_p95"),
-            "width_max": detail.get("width_max"),
-            "width_avg": detail.get("width_avg"),
-            "q_min": detail.get("q_min"),
-            "q_p50": detail.get("q_p50"),
-            "q_max": detail.get("q_max"),
-            "q_avg": detail.get("q_avg"),
-            "source_kind": "reference",
-            "source_type": "cloud",
-            "metadata_json": self._summary_metadata_payload(),
-        }
+        return community_summary_reference_payload(self._selected_detail or {}, self.tr)
 
     def _points_payload(self) -> dict[str, Any] | None:
-        detail = self._selected_detail or {}
-        genus = str(detail.get("genus") or "").strip()
-        species = str(detail.get("species") or "").strip()
-        measurements = detail.get("measurements_json") or []
-        if not genus or not species or not isinstance(measurements, list):
-            return None
-        points = []
-        for row in measurements:
-            if not isinstance(row, dict):
-                continue
-            length = row.get("length_um")
-            width = row.get("width_um")
-            if length is None or width in (None, 0):
-                continue
-            try:
-                points.append({"length_um": float(length), "width_um": float(width)})
-            except Exception:
-                continue
-        if not points:
-            return None
-        return {
-            "genus": genus,
-            "species": species,
-            "points": points,
-            "points_label": self._default_import_source(),
-            "source_kind": "points",
-            "source_type": "cloud",
-            "length_min": detail.get("length_min"),
-            "length_p05": detail.get("length_p05"),
-            "length_p50": detail.get("length_p50"),
-            "length_p95": detail.get("length_p95"),
-            "length_max": detail.get("length_max"),
-            "length_avg": detail.get("length_avg"),
-            "width_min": detail.get("width_min"),
-            "width_p05": detail.get("width_p05"),
-            "width_p50": detail.get("width_p50"),
-            "width_p95": detail.get("width_p95"),
-            "width_max": detail.get("width_max"),
-            "width_avg": detail.get("width_avg"),
-            "q_min": detail.get("q_min"),
-            "q_p50": detail.get("q_p50"),
-            "q_max": detail.get("q_max"),
-            "q_avg": detail.get("q_avg"),
-        }
+        return community_points_payload(self._selected_detail or {}, self.tr)
 
     def _on_import_summary_clicked(self) -> None:
         payload = self._summary_reference_payload()
@@ -1133,3 +1197,308 @@ class CloudReferenceDialog(QDialog):
         self._accepted_action = "plot_points"
         self._accepted_data = payload
         self.accept()
+
+
+class CommunityResultsPane(QWidget):
+    """Browse/select flow for the Community tab of ``AddReferenceDialog``.
+
+    Reuses ``CloudReferenceDialog``'s search/detail workers and payload
+    builders (``_CloudSearchWorker``, ``_CloudDetailWorker``,
+    ``community_summary_reference_payload``, ``community_points_payload``,
+    ``community_detail_preview_fields``) rather than duplicating them, and
+    populates the host's shared ``ReferencePreviewPane`` instance instead of
+    owning its own. Unlike ``CloudReferenceDialog``, genus/species are fixed
+    by the host (the picker's working taxon) rather than entered here, so
+    there is no taxon search form: results load automatically for that
+    taxon, mirroring the My-observations tab.
+
+    The dialog's two footer buttons ("Import summary as reference" / "Use
+    raw points for plot") become the ``range_summary_radio`` /
+    ``raw_points_radio`` pair; the host reads whichever payload the checked
+    radio implies via :meth:`current_mode_payload` when its own "Add to
+    plot" button is clicked.
+    """
+
+    selection_changed = Signal()
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        genus: str = "",
+        species: str = "",
+        preview_pane: ReferencePreviewPane,
+        results: list[dict[str, Any]] | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._genus = str(genus or "").strip()
+        self._species = str(species or "").strip()
+        self._preview_pane = preview_pane
+        # Optional injected result list, mirroring AddReferenceDialog's other
+        # tabs' testability convention: when provided, each row is treated
+        # as already carrying full detail fields, so selection needs no
+        # network detail fetch. Lets renderer scenarios and tests exercise
+        # this pane deterministically, with no live network.
+        self._injected_results = results
+        self._results: list[dict[str, Any]] = []
+        self._selected_result: dict[str, Any] | None = None
+        self._selected_detail: dict[str, Any] | None = None
+        self._search_worker: _CloudSearchWorker | None = None
+        self._detail_worker: _CloudDetailWorker | None = None
+        self._worker_refs: list[QThread] = []
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+
+        # Same QListWidget + TwoLineRow convention as the Library and
+        # My-observations tabs (title line + independently-elided detail
+        # line), rather than the legacy dialog's 4-column QTableWidget, so
+        # all source tabs in the picker render consistently.
+        self.results_list = QListWidget(self)
+        self.results_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.results_list.itemSelectionChanged.connect(self._on_result_selection_changed)
+        layout.addWidget(self.results_list, 1)
+
+        self.status_label = QLabel("", self)
+        self.status_label.setWordWrap(True)
+        self.status_label.setStyleSheet("color: #7f8c8d;")
+        layout.addWidget(self.status_label)
+
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(12)
+        self.range_summary_radio = QRadioButton(self.tr("Range summary"), self)
+        self.raw_points_radio = QRadioButton(self.tr("Raw points (n=0)"), self)
+        self.raw_points_radio.setEnabled(False)
+        self.range_summary_radio.setChecked(True)
+        self._mode_group = QButtonGroup(self)
+        self._mode_group.addButton(self.range_summary_radio)
+        self._mode_group.addButton(self.raw_points_radio)
+        mode_row.addWidget(self.range_summary_radio)
+        mode_row.addWidget(self.raw_points_radio)
+        mode_row.addStretch(1)
+        layout.addLayout(mode_row)
+
+        self.refresh()
+
+    # ------------------------------------------------------------------
+    # Search
+    # ------------------------------------------------------------------
+
+    def refresh(self) -> None:
+        """(Re)load results for the fixed taxon. Clears any current selection."""
+        self._results = []
+        self._selected_result = None
+        self._selected_detail = None
+        self.results_list.clearSelection()
+        self.results_list.clear()
+        self._preview_pane.clear()
+        self.selection_changed.emit()
+
+        if self._injected_results is not None:
+            self._results = [dict(row or {}) for row in self._injected_results]
+            self._populate_results_list()
+            self._update_status_after_results()
+            return
+        if not self._genus:
+            self.status_label.setText(
+                self.tr("No taxon selected — enter a genus and species first.")
+            )
+            return
+        if self._search_worker is not None:
+            return
+        self.status_label.setText(self.tr("Searching community spore data..."))
+        worker = _CloudSearchWorker(self._genus, self._species)
+        worker.search_done.connect(self._on_search_finished)
+        worker.error.connect(self._on_search_error)
+        self._search_worker = worker
+        self._track_worker(worker)
+        worker.start()
+
+    def _track_worker(self, worker: QThread) -> None:
+        self._worker_refs.append(worker)
+        worker.finished.connect(lambda: self._release_worker(worker))
+
+    def _release_worker(self, worker: QThread) -> None:
+        try:
+            self._worker_refs.remove(worker)
+        except ValueError:
+            pass
+        worker.deleteLater()
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        if self._search_worker is not None:
+            self._search_worker.wait()
+            self._search_worker = None
+        if self._detail_worker is not None:
+            self._detail_worker.wait()
+            self._detail_worker = None
+        super().closeEvent(event)
+
+    def _on_search_finished(self, results: list, summary: dict) -> None:
+        self._search_worker = None
+        self._results = [dict(row or {}) for row in (results or [])]
+        self._populate_results_list()
+        self._update_status_after_results()
+
+    def _on_search_error(self, message: str) -> None:
+        self._search_worker = None
+        self.status_label.setText(str(message or "").strip() or self.tr("Community search failed."))
+
+    def _update_status_after_results(self) -> None:
+        if self._results:
+            self.status_label.setText(
+                self.tr("Found {count} community source(s). Select one to review before adding.").format(
+                    count=len(self._results)
+                )
+            )
+        else:
+            self.status_label.setText(self.tr("No community spore results found for this taxon."))
+
+    def _row_detail_text(self, row_data: dict[str, Any]) -> str:
+        parts = []
+        n = int(row_data.get("measurement_count") or 0)
+        if n:
+            parts.append(self.tr("n = {count}").format(count=n))
+        q_label = community_result_q_range_label(row_data)
+        if q_label != "—":
+            parts.append(self.tr("Q {range}").format(range=q_label))
+        contributor = str(row_data.get("contributor_label") or "").strip()
+        if contributor:
+            parts.append(contributor)
+        return " · ".join(parts)
+
+    def _populate_results_list(self) -> None:
+        self.results_list.clear()
+        for index, row_data in enumerate(self._results):
+            label = community_result_source_label(row_data, self.tr)
+            detail = self._row_detail_text(row_data)
+            item = QListWidgetItem()
+            item.setToolTip(label if not detail else f"{label}\n{detail}")
+            item.setData(Qt.UserRole, index)
+            self.results_list.addItem(item)
+            row_widget = TwoLineRow(label, detail, self.results_list)
+            item.setSizeHint(row_widget.sizeHint())
+            self.results_list.setItemWidget(item, row_widget)
+
+    # ------------------------------------------------------------------
+    # Selection / detail
+    # ------------------------------------------------------------------
+
+    def _on_result_selection_changed(self) -> None:
+        if self._detail_worker is not None:
+            return
+        items = self.results_list.selectedItems()
+        if not items:
+            self._selected_result = None
+            self._selected_detail = None
+            self._preview_pane.clear()
+            self.selection_changed.emit()
+            return
+        row = items[0].data(Qt.UserRole)
+        if not isinstance(row, int) or row < 0 or row >= len(self._results):
+            self._selected_result = None
+            self._selected_detail = None
+            self._preview_pane.clear()
+            self.selection_changed.emit()
+            return
+        self._selected_result = dict(self._results[row])
+        self._selected_detail = None
+        self._preview_pane.set_summary(
+            self.tr("Loading review details..."),
+            community_result_source_label(self._selected_result, self.tr),
+            [],
+            self.tr("Loading dataset details..."),
+        )
+        self.selection_changed.emit()
+
+        if self._injected_results is not None:
+            # Deterministic fixtures already carry full detail fields.
+            self._on_detail_finished(self._selected_result)
+            return
+        worker = _CloudDetailWorker(self._selected_result)
+        worker.detail_done.connect(self._on_detail_finished)
+        worker.error.connect(self._on_detail_error)
+        self._detail_worker = worker
+        self._track_worker(worker)
+        worker.start()
+
+    def _on_detail_finished(self, detail: dict) -> None:
+        self._detail_worker = None
+        self._selected_detail = dict(detail or {})
+        self._apply_detail_to_preview()
+        self._update_mode_radio_state()
+        self.selection_changed.emit()
+
+    def _on_detail_error(self, message: str) -> None:
+        self._detail_worker = None
+        self._selected_detail = None
+        self._preview_pane.set_summary(
+            self.tr("Could not load dataset"),
+            str(message or "").strip(),
+            [],
+            self.tr("This result could not be reviewed."),
+        )
+        self._preview_pane.set_raw_spores(str(message or "").strip())
+        self.selection_changed.emit()
+
+    def _apply_detail_to_preview(self) -> None:
+        if not self._selected_detail:
+            self._preview_pane.clear()
+            return
+        fields = community_detail_preview_fields(self._selected_detail, self.tr)
+        self._preview_pane.set_summary(fields["title"], fields["meta"], fields["rows"], fields["note"])
+        self._preview_pane.set_raw_spores(fields["raw_text"])
+        self._preview_pane.set_method(fields["method_mapping"])
+        self._preview_pane.set_calibration(fields["calibration_text"])
+        self._preview_pane.set_provenance(fields["provenance_text"])
+
+    def _update_mode_radio_state(self) -> None:
+        n = 0
+        if self._selected_detail:
+            measurements = self._selected_detail.get("measurements_json") or []
+            if isinstance(measurements, list):
+                n = len(measurements)
+        self.raw_points_radio.setText(self.tr("Raw points (n={count})").format(count=n))
+        self.raw_points_radio.setEnabled(n > 0)
+        if not self.raw_points_radio.isEnabled() and self.raw_points_radio.isChecked():
+            self.range_summary_radio.setChecked(True)
+
+    # ------------------------------------------------------------------
+    # Host-facing API
+    # ------------------------------------------------------------------
+
+    def sync_preview(self) -> None:
+        """Re-apply the current selection to the (shared) preview pane.
+
+        Called by the host when switching back to this tab, since the
+        preview pane is shared across tabs and may show another tab's
+        content in between.
+        """
+        self._apply_detail_to_preview()
+
+    def has_selection(self) -> bool:
+        return self._selected_detail is not None
+
+    def current_mode_payload(self) -> dict[str, Any] | None:
+        """The reference_series-ready payload for the checked radio, or None."""
+        if not self._selected_detail:
+            return None
+        if self.raw_points_radio.isChecked() and self.raw_points_radio.isEnabled():
+            return community_points_payload(self._selected_detail, self.tr)
+        return community_summary_reference_payload(self._selected_detail, self.tr)
+
+
+__all__ = [
+    "CloudReferenceDialog",
+    "CommunityResultsPane",
+    "community_default_import_source",
+    "community_detail_preview_fields",
+    "community_points_payload",
+    "community_result_q_range_label",
+    "community_result_source_label",
+    "community_single_detail_value",
+    "community_summary_metadata_payload",
+    "community_summary_reference_payload",
+    "format_stat_value",
+]

@@ -10916,6 +10916,12 @@ class MainWindow(GeometryMixin, QMainWindow):
                 rows.insert(0, current_row)
             self.comparison_list.set_rows(rows)
 
+    def _is_scatter_plot_measurement(self, measurement: dict) -> bool:
+        """Whether a measurement is one the gallery scatter plot draws a point for."""
+        length = measurement.get("length_um")
+        width = measurement.get("width_um")
+        return length is not None and width is not None and float(width) > 0
+
     def _current_observation_comparison_row(self) -> ComparisonRow | None:
         """Synthesize the pinned row for the currently open observation.
 
@@ -10923,6 +10929,13 @@ class MainWindow(GeometryMixin, QMainWindow):
         measurements, never a resolved reference entry —
         ``_resolved_reference_series_entries`` holds references only (see
         ``ComparisonRow.from_resolved_entry``).
+
+        ``n`` must equal the number of points the gallery scatter plot
+        actually draws for this observation, so it is derived from the same
+        population (``get_gallery_measurements()``, which applies the
+        category filter and excludes calibration) and the same
+        length/width predicate ``update_graph_plots`` uses, rather than a
+        separate measurement-type allow-list.
         """
         observation_id = getattr(self, "active_observation_id", None)
         if not observation_id:
@@ -10939,13 +10952,7 @@ class MainWindow(GeometryMixin, QMainWindow):
             date_value = date_value.split(" ")[0]
         if "T" in date_value:
             date_value = date_value.split("T")[0]
-        raw = MeasurementDB.get_measurements_for_observation(observation_id)
-        n = sum(
-            1 for m in raw
-            if m.get("length_um") is not None
-            and m.get("width_um") is not None
-            and (m.get("measurement_type") in (None, "", "manual", "spore", "spores"))
-        )
+        n = sum(1 for m in self.get_gallery_measurements() if self._is_scatter_plot_measurement(m))
         return ComparisonRow.for_current_observation(
             dataset_id=f"observation:{observation_id}",
             title=self.tr("This observation"),
@@ -11483,7 +11490,8 @@ class MainWindow(GeometryMixin, QMainWindow):
             )
 
     def _on_add_reference_clicked(self) -> None:
-        """Open the unified Add-reference picker (Library + My observations).
+        """Open the unified Add-reference picker (Library + Community + My
+        observations).
 
         Mirrors ``_on_attach_library_reference_clicked``'s observation-drift
         guard: the working taxon and excluded ids are captured at open time,
@@ -11493,6 +11501,15 @@ class MainWindow(GeometryMixin, QMainWindow):
         which has no measurement-set identity, so its identifier carries an
         ``"observation:"`` prefix the callback dispatches on before falling
         through to the normalized-library attach path.
+
+        The Community tab has no measurement-set or observation identity
+        either -- a cloud dataset is not something ``ObservationReferenceUseRepository``
+        knows how to normalize -- so it routes through a second,
+        dict-shaped ``cloud_attach_callback`` straight to
+        ``_add_reference_series_entry``, the same direct-to-``reference_series``
+        path ``_on_reference_panel_cloud_clicked`` already uses for
+        ``CloudReferenceDialog``'s own import/plot actions. No new
+        persistence is introduced.
         """
         observation_id = getattr(self, "active_observation_id", None)
         if not observation_id:
@@ -11535,6 +11552,24 @@ class MainWindow(GeometryMixin, QMainWindow):
                 identifier, role
             )
 
+        def _add_cloud_callback(data: dict) -> None:
+            current_observation_id = getattr(self, "active_observation_id", None)
+            if (
+                current_observation_id is None
+                or int(current_observation_id) != captured_observation_id
+            ):
+                QMessageBox.warning(
+                    self,
+                    self.tr("Add reference"),
+                    self.tr(
+                        "The active observation changed while the picker "
+                        "was open. Reopen the observation and try again — "
+                        "no reference was attached."
+                    ),
+                )
+                return
+            self._add_reference_series_entry(data)
+
         dialog = AddReferenceDialog(
             self,
             taxon_label=taxon_label,
@@ -11544,6 +11579,7 @@ class MainWindow(GeometryMixin, QMainWindow):
             exclude_observation_id=captured_observation_id,
             exclude_measurement_set_ids=excluded,
             attach_callback=_add_callback,
+            cloud_attach_callback=_add_cloud_callback,
         )
         dialog.exec()
 

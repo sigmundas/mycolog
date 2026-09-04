@@ -265,6 +265,118 @@ def test_my_observations_add_to_plot_disabled_with_no_selection():
     assert dialog.add_to_plot_btn.isEnabled() is False
 
 
+# ---------------------------------------------------------------------
+# Community tab
+# ---------------------------------------------------------------------
+
+
+def _community_results() -> list[dict]:
+    return [
+        {
+            "_kind": "observation",
+            "genus": "Cortinarius",
+            "species": "limonius",
+            "contributor_label": "sporely_community_user_7",
+            "observed_on": "2025-05-01",
+            "measurement_count": 3,
+            "q_min": 1.1,
+            "q_p50": 1.3,
+            "q_max": 1.5,
+            "measurements_json": [
+                {"length_um": 8.0, "width_um": 5.0},
+                {"length_um": 9.0, "width_um": 6.0},
+                {"length_um": 10.0, "width_um": 7.0},
+            ],
+            "length_min": 8.0,
+            "length_p50": 9.0,
+            "length_max": 10.0,
+            "width_min": 5.0,
+            "width_p50": 6.0,
+            "width_max": 7.0,
+        },
+        {
+            "_kind": "reference",
+            "genus": "Cortinarius",
+            "species": "limonius",
+            "source": "mycena.no",
+            "contributor_label": "mycena.no",
+            "measurement_count": 0,
+            "length_min": 8.0,
+            "length_max": 10.5,
+        },
+    ]
+
+
+def _make_community_dialog(**kwargs) -> AddReferenceDialog:
+    _app()
+    kwargs.setdefault("community_results", _community_results())
+    return AddReferenceDialog(
+        None,
+        taxon_label="Cortinarius limonius",
+        genus="Cortinarius",
+        species="limonius",
+        candidates=[],
+        **kwargs,
+    )
+
+
+def test_community_tab_lists_injected_results():
+    dialog = _make_community_dialog()
+    assert dialog._community_pane.results_list.count() == 2
+
+
+def test_community_selection_populates_shared_preview_pane():
+    dialog = _make_community_dialog()
+    dialog.tabs.setCurrentIndex(dialog._community_tab_index)
+    dialog._community_pane.results_list.setCurrentRow(0)
+    assert "Cortinarius limonius" in dialog.preview_pane.summary_title_label.text()
+    assert "8.0" in dialog.preview_pane.raw_spores_text.toPlainText()
+
+
+def test_community_add_to_plot_range_summary_uses_reference_source_kind():
+    received = []
+    dialog = _make_community_dialog(cloud_attach_callback=lambda data: received.append(data))
+    dialog.tabs.setCurrentIndex(dialog._community_tab_index)
+    dialog._community_pane.results_list.setCurrentRow(0)
+    assert dialog._community_pane.range_summary_radio.isChecked() is True
+    dialog._on_add_to_plot_clicked()
+    assert len(received) == 1
+    assert received[0]["source_kind"] == "reference"
+
+
+def test_community_add_to_plot_raw_points_uses_points_source_kind_and_real_n():
+    received = []
+    dialog = _make_community_dialog(cloud_attach_callback=lambda data: received.append(data))
+    dialog.tabs.setCurrentIndex(dialog._community_tab_index)
+    dialog._community_pane.results_list.setCurrentRow(0)
+    assert "n=3" in dialog._community_pane.raw_points_radio.text()
+    dialog._community_pane.raw_points_radio.setChecked(True)
+    dialog._on_add_to_plot_clicked()
+    assert len(received) == 1
+    assert received[0]["source_kind"] == "points"
+    assert len(received[0]["points"]) == 3
+
+
+def test_community_raw_points_radio_disabled_without_measurements():
+    dialog = _make_community_dialog()
+    dialog.tabs.setCurrentIndex(dialog._community_tab_index)
+    dialog._community_pane.results_list.setCurrentRow(1)
+    assert dialog._community_pane.raw_points_radio.isEnabled() is False
+    assert dialog._community_pane.range_summary_radio.isChecked() is True
+
+
+def test_community_add_to_plot_disabled_with_no_selection():
+    dialog = _make_community_dialog()
+    dialog.tabs.setCurrentIndex(dialog._community_tab_index)
+    assert dialog.add_to_plot_btn.isEnabled() is False
+
+
+def test_community_tab_shows_empty_state_with_no_results():
+    dialog = _make_community_dialog(community_results=[])
+    assert dialog._community_pane.results_list.count() == 0
+    assert dialog._community_pane.status_label.text() != ""
+
+
 def test_default_my_observation_candidates_filters_by_taxon_and_requires_points(monkeypatch):
     from ui import add_reference_dialog as mod
 

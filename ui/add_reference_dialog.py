@@ -4,8 +4,23 @@ Consolidates the reference-add entry points into one dialog: source tabs
 (Library / Community / My observations / Enter manually) sharing a single
 :class:`ReferencePreviewPane`, docked beside the tab widget in a top-level
 splitter so every tab's selection populates the same preview instance
-instead of each tab owning its own. Library and My observations are wired;
-Community and Enter manually show an honest, visibly-stubbed placeholder.
+instead of each tab owning its own. Library, Community, and My observations
+are wired; Enter manually shows an honest, visibly-stubbed placeholder.
+
+The Community tab embeds :class:`~ui.cloud_reference_dialog.CommunityResultsPane`,
+which relocates ``CloudReferenceDialog``'s browse/select flow (its search
+workers and payload builders, reused rather than duplicated) into the
+picker. Unlike that legacy dialog, genus/species are fixed by the picker's
+working taxon, so results load automatically instead of behind a search
+button, and the dialog's two footer buttons ("Import summary as reference" /
+"Use raw points for plot") become a radio the tab exposes instead
+("Range summary" / "Raw points (n=X)"). A cloud entry has no measurement-set
+or observation identity, so "Add to plot" routes through a dedicated
+``cloud_attach_callback(dict)`` rather than the string-identifier
+``attach_callback`` the other tabs use, straight to the same
+``_add_reference_series_entry`` path the legacy dialog already calls
+directly -- no new persistence. ``CloudReferenceDialog`` itself stays
+reachable for now; stage 6 removes that dead entry point.
 
 The Library tab does not fork any add/attach logic: selecting a result and
 clicking "Add to plot" calls the ``attach_callback`` supplied by the host
@@ -31,7 +46,6 @@ from dataclasses import dataclass
 from typing import Callable, Iterable
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -55,7 +69,9 @@ from database.reference_library import (
     MeasurementSetRepository,
 )
 
+from .cloud_reference_dialog import CommunityResultsPane
 from .reference_preview_pane import ReferencePreviewPane
+from .two_line_row import TwoLineRow
 
 _NEW_PUBLICATION_ROLE = "new_publication"
 
@@ -154,52 +170,6 @@ def default_my_observation_candidates(
     return result
 
 
-class _TwoLineRow(QWidget):
-    """Results-list row: a title line, then an independently-elided detail
-    line.
-
-    Each line is elided against the row's own width (mirrors
-    ``ui/comparison_panel.py``'s ``_ComparisonRowWidget.resizeEvent``
-    pattern) rather than the list's viewport width, so the row stays
-    correct across splitter drags.
-    """
-
-    def __init__(self, label: str, detail: str, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 2, 4, 2)
-        layout.setSpacing(0)
-
-        self._full_label = label
-        self._full_detail = detail
-
-        self.title_label = QLabel(self)
-        self.title_label.setMinimumWidth(0)
-        layout.addWidget(self.title_label)
-        self._title_metrics = QFontMetrics(self.title_label.font())
-
-        self.detail_label = QLabel(self)
-        self.detail_label.setStyleSheet("color: #7f8c8d; font-size: 11px;")
-        self.detail_label.setMinimumWidth(0)
-        self.detail_label.setVisible(bool(detail))
-        layout.addWidget(self.detail_label)
-        self._detail_metrics = QFontMetrics(self.detail_label.font())
-
-        self.title_label.setText(label)
-        self.detail_label.setText(detail)
-
-    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
-        super().resizeEvent(event)
-        width = max(self.width() - 8, 20)
-        self.title_label.setText(
-            self._title_metrics.elidedText(self._full_label, Qt.ElideRight, width)
-        )
-        if self._full_detail:
-            self.detail_label.setText(
-                self._detail_metrics.elidedText(self._full_detail, Qt.ElideRight, width)
-            )
-
-
 class _StubTabPane(QWidget):
     """Honest placeholder for a not-yet-wired source tab."""
 
@@ -217,8 +187,8 @@ class _StubTabPane(QWidget):
 class AddReferenceDialog(QDialog):
     """Tabbed picker for adding a reference dataset to the comparison plot.
 
-    "Library" and "My observations" are functional; "Community" and "Enter
-    manually" show stub panes (wired in later stages per the plan).
+    "Library", "Community", and "My observations" are functional; "Enter
+    manually" shows a stub pane (wired in a later stage per the plan).
     """
 
     def __init__(
@@ -232,8 +202,10 @@ class AddReferenceDialog(QDialog):
         exclude_observation_id: int | None = None,
         exclude_measurement_set_ids: Iterable[str] | None = None,
         attach_callback: Callable[[str, str], None] | None = None,
+        cloud_attach_callback: Callable[[dict], None] | None = None,
         candidates: list[MeasurementSetCandidate] | None = None,
         my_observations: list[PersonalObservationCandidate] | None = None,
+        community_results: list[dict] | None = None,
     ) -> None:
         super().__init__(parent)
         self._taxon_id: str | None = str(taxon_id).strip() or None if taxon_id is not None else None
@@ -242,6 +214,7 @@ class AddReferenceDialog(QDialog):
         self._exclude_observation_id = exclude_observation_id
         self._exclude_ids = {str(x) for x in (exclude_measurement_set_ids or [])}
         self._attach_callback = attach_callback
+        self._cloud_attach_callback = cloud_attach_callback
         # Optional injected candidate list, mirroring
         # ReferenceLibraryAttachDialog's testability convention: when
         # provided, skips the repository query so tests/scenarios can run
@@ -252,6 +225,7 @@ class AddReferenceDialog(QDialog):
             else None
         )
         self._injected_my_observations = my_observations
+        self._injected_community_results = community_results
         self._candidates: list[MeasurementSetCandidate] = []
         self._selected_candidate: MeasurementSetCandidate | None = None
         self._my_observations: list[PersonalObservationCandidate] = []
@@ -281,10 +255,8 @@ class AddReferenceDialog(QDialog):
 
         self._build_library_tab()
         self.tabs.addTab(self._library_tab, self.tr("Library"))
-        self.tabs.addTab(
-            _StubTabPane(self.tr("Coming in a later stage")),
-            self.tr("Community"),
-        )
+        self._build_community_tab()
+        self._community_tab_index = self.tabs.addTab(self._community_tab, self.tr("Community"))
         self._build_my_observations_tab()
         self._my_observations_tab_index = self.tabs.addTab(
             self._my_observations_tab, self.tr("My observations")
@@ -317,6 +289,8 @@ class AddReferenceDialog(QDialog):
         self._update_footer_state()
         if self.tabs.currentIndex() == self._my_observations_tab_index:
             self._populate_observation_preview(self._selected_observation)
+        elif self.tabs.currentIndex() == self._community_tab_index:
+            self._community_pane.sync_preview()
         elif self.tabs.currentWidget() is self._library_tab:
             self._populate_preview(self._selected_candidate)
         else:
@@ -418,7 +392,7 @@ class AddReferenceDialog(QDialog):
         item.setData(Qt.UserRole, candidate.measurement_set_id)
         item.setData(Qt.UserRole + 1, detail)
         self.results_list.addItem(item)
-        row_widget = _TwoLineRow(label, detail, self.results_list)
+        row_widget = TwoLineRow(label, detail, self.results_list)
         item.setSizeHint(row_widget.sizeHint())
         self.results_list.setItemWidget(item, row_widget)
 
@@ -546,6 +520,26 @@ class AddReferenceDialog(QDialog):
         self._refresh_candidates()
 
     # ------------------------------------------------------------------
+    # Community tab
+    # ------------------------------------------------------------------
+
+    def _build_community_tab(self) -> None:
+        self._community_tab = QWidget(self)
+        layout = QVBoxLayout(self._community_tab)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self._community_pane = CommunityResultsPane(
+            self._community_tab,
+            genus=self._genus,
+            species=self._species,
+            preview_pane=self.preview_pane,
+            results=self._injected_community_results,
+        )
+        self._community_pane.selection_changed.connect(self._update_footer_state)
+        layout.addWidget(self._community_pane, 1)
+
+    # ------------------------------------------------------------------
     # My observations tab
     # ------------------------------------------------------------------
 
@@ -607,7 +601,7 @@ class AddReferenceDialog(QDialog):
         item.setToolTip(label if not detail else f"{label}\n{detail}")
         item.setData(Qt.UserRole, candidate.observation_id)
         self.my_observations_list.addItem(item)
-        row_widget = _TwoLineRow(label, detail, self.my_observations_list)
+        row_widget = TwoLineRow(label, detail, self.my_observations_list)
         item.setSizeHint(row_widget.sizeHint())
         self.my_observations_list.setItemWidget(item, row_widget)
 
@@ -688,21 +682,30 @@ class AddReferenceDialog(QDialog):
     def _update_footer_state(self) -> None:
         if self.tabs.currentIndex() == self._my_observations_tab_index:
             self.add_to_plot_btn.setEnabled(self._selected_observation is not None)
+        elif self.tabs.currentIndex() == self._community_tab_index:
+            self.add_to_plot_btn.setEnabled(self._community_pane.has_selection())
         else:
             self.add_to_plot_btn.setEnabled(self._selected_candidate is not None)
 
     def _on_add_to_plot_clicked(self) -> None:
-        if self._attach_callback is None:
-            return
         if self.tabs.currentIndex() == self._my_observations_tab_index:
-            if self._selected_observation is None:
+            if self._attach_callback is None or self._selected_observation is None:
                 return
             self._attach_callback(
                 f"observation:{self._selected_observation.observation_id}", "compared"
             )
             self.accept()
             return
-        if self._selected_candidate is None:
+        if self.tabs.currentIndex() == self._community_tab_index:
+            if self._cloud_attach_callback is None:
+                return
+            payload = self._community_pane.current_mode_payload()
+            if not payload:
+                return
+            self._cloud_attach_callback(payload)
+            self.accept()
+            return
+        if self._attach_callback is None or self._selected_candidate is None:
             return
         self._attach_callback(self._selected_candidate.measurement_set_id, "compared")
         self.accept()

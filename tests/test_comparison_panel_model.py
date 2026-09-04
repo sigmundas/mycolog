@@ -131,33 +131,15 @@ def test_current_observation_row_is_present_first_and_reserved_blue():
     assert ordered[0].detail == "2026-08-24 · n = 20"
 
 
-def test_chip_color_matches_plotted_color_after_a_reordering_sort():
-    """Colour must come from series identity, not display-list position.
+def test_raw_observation_entry_maps_to_my_obs_and_never_reserved_blue():
+    """Pin the actual regression risk, not an inability to fail.
 
-    ``_resolved_reference_series_entries`` precomputes each entry's plot
-    color before ``ComparisonRow`` construction; ``set_rows`` then sorts
-    observation-kind rows first. The chip color must survive that reorder
-    unchanged, matching what the plot actually drew for that series.
+    A raw ``source_kind == "observation"`` entry (legacy naming collision
+    with ``SourceKind.OBSERVATION``) must resolve to ``SourceKind.MY_OBS``
+    and must never come back colored ``RESERVED_OBSERVATION_COLOR`` -- that
+    color is reserved exclusively for the pinned current-observation row
+    built by ``for_current_observation``.
     """
-    entries = [
-        _community_points_entry(),  # color "#8e44ad"
-        _library_entry(),  # color "#e67e22"
-        _my_obs_entry(),  # color "#2ecc71"
-    ]
-    rows_before_sort = {
-        row.dataset_id: row.color
-        for row in ComparisonListWidget.rows_from_resolved_entries(entries)
-    }
-    current_row = ComparisonRow.for_current_observation(
-        dataset_id="observation:99", title="This observation", date="2026-08-24", n=20
-    )
-    all_rows = [current_row, *ComparisonListWidget.rows_from_resolved_entries(entries)]
-    ordered = _sorted_for_display(all_rows)
-
-    assert ordered[0].dataset_id == "observation:99"
-    for row in ordered[1:]:
-        assert row.color == rows_before_sort[row.dataset_id]
-
-    # Four distinct colors, one per plotted series (current observation +
-    # the three references).
-    assert len({row.color for row in ordered}) == 4
+    row = ComparisonRow.from_resolved_entry(_my_obs_entry())
+    assert row.source_kind == SourceKind.MY_OBS
+    assert row.color != RESERVED_OBSERVATION_COLOR
