@@ -244,6 +244,7 @@ from .observations_tab import ObservationsTab
 from .live_lab_tab import LiveLabTab
 from .database_settings_dialog import DatabaseSettingsDialog
 from .cloud_reference_dialog import CloudReferenceDialog
+from .add_reference_dialog import AddReferenceDialog
 from .comparison_panel import ComparisonListWidget
 from .reference_library_attach_dialog import ReferenceLibraryAttachDialog
 from .section_card import create_section_card
@@ -10173,6 +10174,18 @@ class MainWindow(GeometryMixin, QMainWindow):
         self.comparison_list.color_change_requested.connect(self._open_reference_series_color_menu)
         layout.addWidget(self.comparison_list)
 
+        # New unified picker launch point (stage 3). Additive only: the
+        # legacy Source dropdown / Quick add / Cloud / Attach library
+        # buttons above stay untouched until stage 6.
+        self.ref_add_reference_btn = QPushButton(self.tr("Add reference…"))
+        self.ref_add_reference_btn.clicked.connect(self._on_add_reference_clicked)
+        self._register_gallery_hint_widget(
+            self.ref_add_reference_btn,
+            self.tr("Search the reference library, community data, or your own observations for a reference to plot"),
+            allow_when_disabled=True,
+        )
+        layout.addWidget(self.ref_add_reference_btn)
+
         self._init_reference_panel_completers()
         self._populate_reference_panel_sources()
         self._apply_reference_panel_values(self.reference_values)
@@ -11429,6 +11442,59 @@ class MainWindow(GeometryMixin, QMainWindow):
             self.measure_status_label.setText(
                 self.tr("Skipped {count} malformed reference attachment(s).").format(count=malformed)
             )
+
+    def _on_add_reference_clicked(self) -> None:
+        """Open the unified Add-reference picker (stage 3: Library tab only).
+
+        Mirrors ``_on_attach_library_reference_clicked``'s observation-drift
+        guard: the working taxon and excluded ids are captured at open time,
+        and the add callback re-validates the active observation before
+        routing into the same shared attach helper.
+        """
+        observation_id = getattr(self, "active_observation_id", None)
+        if not observation_id:
+            QMessageBox.information(
+                self,
+                self.tr("Add reference"),
+                self.tr("Select an observation first before adding a reference."),
+            )
+            return
+        captured_observation_id = int(observation_id)
+        excluded = self._current_attached_measurement_set_ids()
+        taxon_getter = getattr(self, "_active_sporely_taxon_id", None)
+        active_taxon = taxon_getter() if callable(taxon_getter) else None
+        genus = self._clean_ref_genus_text(self.ref_genus_input.text()) if hasattr(self, "ref_genus_input") else ""
+        species = self._clean_ref_species_text(self.ref_species_input.text()) if hasattr(self, "ref_species_input") else ""
+        taxon_label = " ".join(part for part in (genus, species) if part).strip()
+
+        def _add_callback(measurement_set_id: str, role: str) -> None:
+            current_observation_id = getattr(self, "active_observation_id", None)
+            if (
+                current_observation_id is None
+                or int(current_observation_id) != captured_observation_id
+            ):
+                QMessageBox.warning(
+                    self,
+                    self.tr("Add reference"),
+                    self.tr(
+                        "The active observation changed while the picker "
+                        "was open. Reopen the observation and try again — "
+                        "no reference was attached."
+                    ),
+                )
+                return
+            self._attach_normalized_reference_to_active_observation(
+                measurement_set_id, role
+            )
+
+        dialog = AddReferenceDialog(
+            self,
+            taxon_label=taxon_label,
+            taxon_id=active_taxon,
+            exclude_measurement_set_ids=excluded,
+            attach_callback=_add_callback,
+        )
+        dialog.exec()
 
     def _on_attach_library_reference_clicked(self) -> None:
         """Open the attachment chooser and persist the user's selection."""

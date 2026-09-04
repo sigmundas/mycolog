@@ -498,6 +498,105 @@ def _comparison_list_longnames(context: ReviewContext):
     return widget
 
 
+def _add_dialog_candidates():
+    from database.reference_library import MeasurementSetCandidate
+
+    # Reuses the long-names data (60+ char title, æøå) already exercised by
+    # reference.comparison-list-longnames rather than inventing a new fixture.
+    return [
+        MeasurementSetCandidate(
+            measurement_set_id="add-dialog-1",
+            short_label="Niskanen, Liimatainen & Kytövuori 2018",
+            name_as_published="Cortinarius limonius (Fr.) Fr.",
+            locator_text="pp. 146–148, fig. 32",
+            data_kind="range",
+            raw_text="(8.1–)8.5–10.8(–11.4) × (4.2–)4.5–5.8(–6.1) µm, Q = 1.7–2.1, n = 36",
+            revision=1,
+            reference_work_id="work-main",
+            reference_treatment_id="treatment-main",
+            work_title=(
+                "A comprehensive revision of northern European Cortinarius "
+                "species with extensive morphological and molecular notes"
+            ),
+            year=2018,
+            taxon_id="7",
+        ),
+        MeasurementSetCandidate(
+            measurement_set_id="add-dialog-2",
+            short_label="Niskanen, Liimatainen & Kytövuori 2018",
+            name_as_published="Cortinarius limonius (Fr.) Fr.",
+            locator_text="supplementary dataset S4",
+            data_kind="raw_points",
+            raw_text="8 paired holotype measurements",
+            revision=1,
+            reference_work_id="work-main",
+            reference_treatment_id="treatment-main",
+            year=2018,
+            taxon_id="7",
+        ),
+        MeasurementSetCandidate(
+            measurement_set_id="add-dialog-3",
+            short_label="Kantarell og trakttrompetsopp fra Ørsta og Ålesund",
+            name_as_published="Cortinarius rubellus Cooke — Blåbærgrøtsopp",
+            locator_text="Vol. 2, p. 311",
+            data_kind="range",
+            raw_text="8.0–9.5 × 5.5–6.5 µm",
+            revision=1,
+            reference_work_id="work-other",
+            reference_treatment_id="treatment-other",
+            year=2020,
+            taxon_id="99",
+        ),
+    ]
+
+
+def _add_dialog_library(context: ReviewContext):
+    from ui.add_reference_dialog import AddReferenceDialog
+
+    _fixture(context)
+    dialog = AddReferenceDialog(
+        context.host,
+        taxon_label="Cortinarius limonius",
+        taxon_id="7",
+        candidates=_add_dialog_candidates(),
+        attach_callback=lambda *_args: None,
+    )
+    dialog.only_this_taxon_checkbox.setChecked(False)
+    dialog.results_list.setCurrentRow(0)
+    return dialog
+
+
+def _add_dialog_library_empty(context: ReviewContext):
+    from ui.add_reference_dialog import AddReferenceDialog
+
+    _fixture(context)
+    dialog = AddReferenceDialog(
+        context.host,
+        taxon_label="Cortinarius limonius",
+        taxon_id="not-present-in-any-candidate",
+        candidates=_add_dialog_candidates(),
+        attach_callback=lambda *_args: None,
+    )
+    # "Only this taxon" defaults to checked; no candidate matches this
+    # taxon id, so the results pane must show the honest empty state.
+    return dialog
+
+
+def _add_dialog_stub_tab(context: ReviewContext):
+    from ui.add_reference_dialog import AddReferenceDialog
+
+    _fixture(context)
+    dialog = AddReferenceDialog(
+        context.host,
+        taxon_label="Cortinarius limonius",
+        taxon_id="7",
+        candidates=_add_dialog_candidates(),
+        attach_callback=lambda *_args: None,
+    )
+    dialog.tabs.setCurrentIndex(1)  # Community stub
+    return dialog
+
+
 def register_reference_scenarios(registry: ScenarioRegistry) -> None:
     scenarios = (
         ReviewScenario(
@@ -631,6 +730,57 @@ def register_reference_scenarios(registry: ScenarioRegistry) -> None:
             description="A publication title over 60 characters must elide; Norwegian names with æ, ø, å must render correctly.",
             viewport=(420, 260),
             build=_comparison_list_longnames,
+        ),
+        ReviewScenario(
+            id="reference.add-dialog-library",
+            group="reference-library",
+            title="Add-reference picker — Library tab, result selected",
+            description="Library tab with three results (incl. a 60+ char title and æøå names); one selected populates the preview pane.",
+            viewport=(900, 560),
+            build=_add_dialog_library,
+        ),
+        ReviewScenario(
+            id="reference.add-dialog-library-dark",
+            group="reference-library",
+            title="Add-reference picker — Library tab (dark)",
+            description="Same Library-tab state in dark theme to verify contrast.",
+            viewport=(900, 560),
+            build=_add_dialog_library,
+            theme="dark",
+        ),
+        ReviewScenario(
+            id="reference.add-dialog-library-empty",
+            group="reference-library",
+            title="Add-reference picker — Library tab, no matches",
+            description="\"Only this taxon\" checked with zero matches: honest empty state, Add to plot stays disabled.",
+            viewport=(900, 560),
+            build=_add_dialog_library_empty,
+        ),
+        ReviewScenario(
+            id="reference.add-dialog-library-empty-dark",
+            group="reference-library",
+            title="Add-reference picker — Library tab, no matches (dark)",
+            description="Same empty-state case in dark theme.",
+            viewport=(900, 560),
+            build=_add_dialog_library_empty,
+            theme="dark",
+        ),
+        ReviewScenario(
+            id="reference.add-dialog-stub-tab",
+            group="reference-library",
+            title="Add-reference picker — stubbed Community tab",
+            description="Community tab shows an honest \"coming in a later stage\" placeholder rather than a broken UI.",
+            viewport=(900, 560),
+            build=_add_dialog_stub_tab,
+        ),
+        ReviewScenario(
+            id="reference.add-dialog-stub-tab-dark",
+            group="reference-library",
+            title="Add-reference picker — stubbed Community tab (dark)",
+            description="Same stub-tab state in dark theme.",
+            viewport=(900, 560),
+            build=_add_dialog_stub_tab,
+            theme="dark",
         ),
     )
     for scenario in scenarios:
