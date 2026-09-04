@@ -11444,12 +11444,16 @@ class MainWindow(GeometryMixin, QMainWindow):
             )
 
     def _on_add_reference_clicked(self) -> None:
-        """Open the unified Add-reference picker (stage 3: Library tab only).
+        """Open the unified Add-reference picker (Library + My observations).
 
         Mirrors ``_on_attach_library_reference_clicked``'s observation-drift
         guard: the working taxon and excluded ids are captured at open time,
         and the add callback re-validates the active observation before
-        routing into the same shared attach helper.
+        routing into the same shared attach helper. The My-observations tab
+        selects a *different* personal observation to plot for comparison,
+        which has no measurement-set identity, so its identifier carries an
+        ``"observation:"`` prefix the callback dispatches on before falling
+        through to the normalized-library attach path.
         """
         observation_id = getattr(self, "active_observation_id", None)
         if not observation_id:
@@ -11467,7 +11471,7 @@ class MainWindow(GeometryMixin, QMainWindow):
         species = self._clean_ref_species_text(self.ref_species_input.text()) if hasattr(self, "ref_species_input") else ""
         taxon_label = " ".join(part for part in (genus, species) if part).strip()
 
-        def _add_callback(measurement_set_id: str, role: str) -> None:
+        def _add_callback(identifier: str, role: str) -> None:
             current_observation_id = getattr(self, "active_observation_id", None)
             if (
                 current_observation_id is None
@@ -11483,18 +11487,73 @@ class MainWindow(GeometryMixin, QMainWindow):
                     ),
                 )
                 return
+            if isinstance(identifier, str) and identifier.startswith("observation:"):
+                self._attach_personal_observation_reference_to_active_observation(
+                    identifier.split(":", 1)[1], genus, species
+                )
+                return
             self._attach_normalized_reference_to_active_observation(
-                measurement_set_id, role
+                identifier, role
             )
 
         dialog = AddReferenceDialog(
             self,
             taxon_label=taxon_label,
             taxon_id=active_taxon,
+            genus=genus,
+            species=species,
+            exclude_observation_id=captured_observation_id,
             exclude_measurement_set_ids=excluded,
             attach_callback=_add_callback,
         )
         dialog.exec()
+
+    def _attach_personal_observation_reference_to_active_observation(
+        self, source_observation_id: str, genus: str, species: str
+    ) -> None:
+        """Plot a different personal observation's spore measurements for comparison.
+
+        This is the same legacy ``source_kind == "observation"`` comparison
+        path the "My data <date>" entries in the legacy Source dropdown use
+        (see ``_maybe_load_reference_panel_reference``'s observation branch),
+        reached here from the My-observations tab of the unified picker
+        instead. It has no normalized measurement-set identity, so it is
+        appended directly to ``reference_series`` rather than routed through
+        ``ObservationReferenceUseRepository``.
+        """
+        try:
+            source_id = int(source_observation_id)
+        except (TypeError, ValueError):
+            return
+        raw = MeasurementDB.get_measurements_for_observation(source_id)
+        points = [
+            m for m in raw
+            if m.get("length_um") is not None
+            and m.get("width_um") is not None
+            and (m.get("measurement_type") in (None, "", "manual", "spore", "spores"))
+        ]
+        if not points:
+            QMessageBox.warning(
+                self,
+                self.tr("Add reference"),
+                self.tr("This observation has no usable spore measurements."),
+            )
+            return
+        obs = ObservationDB.get_observation(source_id)
+        author = (obs.get("author") or "").strip() if obs else ""
+        date_str = ((obs.get("date") or "").split(" ")[0].split("T")[0]) if obs else ""
+        stats = self._reference_stats_from_points(points)
+        data = {
+            **stats,
+            "points": points,
+            "source_kind": "observation",
+            "observation_id": source_id,
+            "date": date_str,
+            "author": author,
+            "genus": genus,
+            "species": species,
+        }
+        self._add_reference_series_entry(data)
 
     def _on_attach_library_reference_clicked(self) -> None:
         """Open the attachment chooser and persist the user's selection."""

@@ -1,10 +1,11 @@
-"""Tabbed "Add reference" picker dialog (Stage 3 shell).
+"""Tabbed "Add reference" picker dialog.
 
 Consolidates the reference-add entry points into one dialog: source tabs
-(Library / Community / My observations / Enter manually) sharing a filter
-row, a results list, and a single :class:`ReferencePreviewPane` (reused
-from Stage 1 — never rebuilt here). Only the Library tab is wired this
-stage; the other three show an honest, visibly-stubbed placeholder.
+(Library / Community / My observations / Enter manually) sharing a single
+:class:`ReferencePreviewPane`, docked beside the tab widget in a top-level
+splitter so every tab's selection populates the same preview instance
+instead of each tab owning its own. Library and My observations are wired;
+Community and Enter manually show an honest, visibly-stubbed placeholder.
 
 The Library tab does not fork any add/attach logic: selecting a result and
 clicking "Add to plot" calls the ``attach_callback`` supplied by the host
@@ -13,9 +14,20 @@ clicking "Add to plot" calls the ``attach_callback`` supplied by the host
 exact path the (soon to be retired) ``ReferenceLibraryAttachDialog`` uses.
 Color assignment is not touched here: it happens automatically, keyed by
 list position, inside ``MainWindow._resolved_reference_series_entries``.
+
+The My observations tab lists previous observations of the working taxon —
+the same query (``ObservationDB.get_personal_observations_for_species``)
+that populates the legacy Source dropdown's "My data <date>" entries — and
+routes "Add to plot" through the same ``attach_callback``, but with an
+``"observation:<id>"``-prefixed identifier: a personal observation has no
+normalized measurement-set identity, so the host dispatches that prefix to
+the legacy ``source_kind == "observation"`` comparison-series path instead
+of the measurement-set attach path.
 """
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass
 from typing import Callable, Iterable
 
 from PySide6.QtCore import Qt, Signal
@@ -36,6 +48,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from database.models import MeasurementDB, ObservationDB
 from database.reference_library import (
     MeasurementSet,
     MeasurementSetCandidate,
@@ -45,6 +58,8 @@ from database.reference_library import (
 from .reference_preview_pane import ReferencePreviewPane
 
 _NEW_PUBLICATION_ROLE = "new_publication"
+
+_USABLE_MEASUREMENT_TYPES = (None, "", "manual", "spore", "spores")
 
 
 def filter_library_candidates(
@@ -77,6 +92,114 @@ def filter_library_candidates(
     return result
 
 
+@dataclass
+class PersonalObservationCandidate:
+    """One row in the My observations tab: a different personal observation
+    of the working taxon, with spore measurements usable as a comparison
+    series."""
+
+    observation_id: int
+    date: str
+    author: str
+    location: str
+    points: list[dict]
+
+    @property
+    def n(self) -> int:
+        return len(self.points)
+
+
+def default_my_observation_candidates(
+    genus: str, species: str, *, exclude_observation_id: int | None = None
+) -> list[PersonalObservationCandidate]:
+    """Load My-observations candidates from the same query that populates
+    the legacy Source dropdown's "My data <date>" entries.
+
+    Only observations with at least one usable spore measurement are
+    returned (mirrors the point-filtering in
+    ``MainWindow._maybe_load_reference_panel_reference``'s observation
+    branch), since an entry with no points cannot be plotted.
+    """
+    if not genus or not species:
+        return []
+    rows = ObservationDB.get_personal_observations_for_species(
+        genus, species, exclude_observation_id=exclude_observation_id
+    )
+    result: list[PersonalObservationCandidate] = []
+    for row in rows:
+        try:
+            obs_id = int(row["id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        raw = MeasurementDB.get_measurements_for_observation(obs_id)
+        points = [
+            m for m in raw
+            if m.get("length_um") is not None
+            and m.get("width_um") is not None
+            and m.get("measurement_type") in _USABLE_MEASUREMENT_TYPES
+        ]
+        if not points:
+            continue
+        obs = ObservationDB.get_observation(obs_id) or {}
+        date_str = (row.get("date") or "").split(" ")[0].split("T")[0]
+        result.append(
+            PersonalObservationCandidate(
+                observation_id=obs_id,
+                date=date_str,
+                author=(row.get("author") or "").strip(),
+                location=(obs.get("location") or "").strip(),
+                points=points,
+            )
+        )
+    return result
+
+
+class _TwoLineRow(QWidget):
+    """Results-list row: a title line, then an independently-elided detail
+    line.
+
+    Each line is elided against the row's own width (mirrors
+    ``ui/comparison_panel.py``'s ``_ComparisonRowWidget.resizeEvent``
+    pattern) rather than the list's viewport width, so the row stays
+    correct across splitter drags.
+    """
+
+    def __init__(self, label: str, detail: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(0)
+
+        self._full_label = label
+        self._full_detail = detail
+
+        self.title_label = QLabel(self)
+        self.title_label.setMinimumWidth(0)
+        layout.addWidget(self.title_label)
+        self._title_metrics = QFontMetrics(self.title_label.font())
+
+        self.detail_label = QLabel(self)
+        self.detail_label.setStyleSheet("color: #7f8c8d; font-size: 11px;")
+        self.detail_label.setMinimumWidth(0)
+        self.detail_label.setVisible(bool(detail))
+        layout.addWidget(self.detail_label)
+        self._detail_metrics = QFontMetrics(self.detail_label.font())
+
+        self.title_label.setText(label)
+        self.detail_label.setText(detail)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        width = max(self.width() - 8, 20)
+        self.title_label.setText(
+            self._title_metrics.elidedText(self._full_label, Qt.ElideRight, width)
+        )
+        if self._full_detail:
+            self.detail_label.setText(
+                self._detail_metrics.elidedText(self._full_detail, Qt.ElideRight, width)
+            )
+
+
 class _StubTabPane(QWidget):
     """Honest placeholder for a not-yet-wired source tab."""
 
@@ -94,9 +217,8 @@ class _StubTabPane(QWidget):
 class AddReferenceDialog(QDialog):
     """Tabbed picker for adding a reference dataset to the comparison plot.
 
-    Only the "Library" tab is functional this stage; "Community",
-    "My observations", and "Enter manually" show stub panes (wired in a
-    later stage per the plan).
+    "Library" and "My observations" are functional; "Community" and "Enter
+    manually" show stub panes (wired in later stages per the plan).
     """
 
     def __init__(
@@ -105,12 +227,19 @@ class AddReferenceDialog(QDialog):
         *,
         taxon_label: str = "",
         taxon_id: int | str | None = None,
+        genus: str = "",
+        species: str = "",
+        exclude_observation_id: int | None = None,
         exclude_measurement_set_ids: Iterable[str] | None = None,
         attach_callback: Callable[[str, str], None] | None = None,
         candidates: list[MeasurementSetCandidate] | None = None,
+        my_observations: list[PersonalObservationCandidate] | None = None,
     ) -> None:
         super().__init__(parent)
         self._taxon_id: str | None = str(taxon_id).strip() or None if taxon_id is not None else None
+        self._genus = genus
+        self._species = species
+        self._exclude_observation_id = exclude_observation_id
         self._exclude_ids = {str(x) for x in (exclude_measurement_set_ids or [])}
         self._attach_callback = attach_callback
         # Optional injected candidate list, mirroring
@@ -122,8 +251,11 @@ class AddReferenceDialog(QDialog):
             if candidates is not None
             else None
         )
+        self._injected_my_observations = my_observations
         self._candidates: list[MeasurementSetCandidate] = []
         self._selected_candidate: MeasurementSetCandidate | None = None
+        self._my_observations: list[PersonalObservationCandidate] = []
+        self._selected_observation: PersonalObservationCandidate | None = None
 
         title = self.tr("Add reference")
         if taxon_label:
@@ -136,8 +268,16 @@ class AddReferenceDialog(QDialog):
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(10)
 
-        self.tabs = QTabWidget(self)
-        root.addWidget(self.tabs, 1)
+        body_splitter = QSplitter(Qt.Horizontal, self)
+        self.tabs = QTabWidget(body_splitter)
+        body_splitter.addWidget(self.tabs)
+        # Single shared preview pane (reused from Stage 1 — never rebuilt):
+        # every tab's selection populates this one instance.
+        self.preview_pane = ReferencePreviewPane(body_splitter)
+        body_splitter.addWidget(self.preview_pane)
+        body_splitter.setStretchFactor(0, 1)
+        body_splitter.setStretchFactor(1, 2)
+        root.addWidget(body_splitter, 1)
 
         self._build_library_tab()
         self.tabs.addTab(self._library_tab, self.tr("Library"))
@@ -145,14 +285,15 @@ class AddReferenceDialog(QDialog):
             _StubTabPane(self.tr("Coming in a later stage")),
             self.tr("Community"),
         )
-        self.tabs.addTab(
-            _StubTabPane(self.tr("Coming in a later stage")),
-            self.tr("My observations"),
+        self._build_my_observations_tab()
+        self._my_observations_tab_index = self.tabs.addTab(
+            self._my_observations_tab, self.tr("My observations")
         )
         self.tabs.addTab(
             _StubTabPane(self.tr("Coming in a later stage")),
             self.tr("Enter manually"),
         )
+        self.tabs.currentChanged.connect(self._on_tab_changed)
 
         footer = QHBoxLayout()
         self.status_hint_label = QLabel("", self)
@@ -168,7 +309,18 @@ class AddReferenceDialog(QDialog):
         footer.addWidget(self.add_to_plot_btn)
         root.addLayout(footer)
 
+        self.preview_pane.clear()
         self._refresh_candidates()
+        self._refresh_my_observations()
+
+    def _on_tab_changed(self, _index: int) -> None:
+        self._update_footer_state()
+        if self.tabs.currentIndex() == self._my_observations_tab_index:
+            self._populate_observation_preview(self._selected_observation)
+        elif self.tabs.currentWidget() is self._library_tab:
+            self._populate_preview(self._selected_candidate)
+        else:
+            self.preview_pane.clear()
 
     # ------------------------------------------------------------------
     # Library tab
@@ -199,21 +351,12 @@ class AddReferenceDialog(QDialog):
         filter_row.addWidget(self.only_this_taxon_checkbox)
         layout.addLayout(filter_row)
 
-        splitter = QSplitter(Qt.Horizontal, self._library_tab)
-        self.results_list = QListWidget(splitter)
+        self.results_list = QListWidget(self._library_tab)
         # Elide long rows instead of growing a horizontal scrollbar; matches
         # the row-eliding convention in ui/comparison_panel.py.
         self.results_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.results_list.itemSelectionChanged.connect(self._on_selection_changed)
-        splitter.addWidget(self.results_list)
-
-        self.preview_pane = ReferencePreviewPane(splitter)
-        splitter.addWidget(self.preview_pane)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 2)
-        layout.addWidget(splitter, 1)
-
-        self.preview_pane.clear()
+        layout.addWidget(self.results_list, 1)
 
     def _on_filter_changed(self, *_args) -> None:
         self._selected_candidate = None
@@ -269,14 +412,15 @@ class AddReferenceDialog(QDialog):
         detail = candidate.data_kind or ""
         if candidate.raw_text:
             detail = f"{detail} · {candidate.raw_text}" if detail else candidate.raw_text
-        metrics = QFontMetrics(self.results_list.font())
-        available_width = max(self.results_list.viewport().width() - 12, 120)
-        elided_label = metrics.elidedText(label, Qt.ElideRight, available_width)
-        item = QListWidgetItem(elided_label)
-        item.setToolTip(label)
+
+        item = QListWidgetItem()
+        item.setToolTip(label if not detail else f"{label}\n{detail}")
         item.setData(Qt.UserRole, candidate.measurement_set_id)
         item.setData(Qt.UserRole + 1, detail)
         self.results_list.addItem(item)
+        row_widget = _TwoLineRow(label, detail, self.results_list)
+        item.setSizeHint(row_widget.sizeHint())
+        self.results_list.setItemWidget(item, row_widget)
 
     def _on_selection_changed(self) -> None:
         items = self.results_list.selectedItems()
@@ -354,6 +498,27 @@ class AddReferenceDialog(QDialog):
         )
 
     @staticmethod
+    def _min_mean_max_from_points(points: list[dict]) -> dict:
+        """Length/width/Q min-mean-max, for the My-observations preview.
+
+        A lighter-weight sibling of ``MainWindow._reference_stats_from_points``
+        (which also computes percentiles the Summary tab here does not use).
+        """
+        lengths = [p["length_um"] for p in points if p.get("length_um") is not None]
+        widths = [p["width_um"] for p in points if p.get("width_um") is not None]
+        if not lengths or not widths:
+            return {}
+        qs = [l / w for l, w in zip(lengths, widths) if w]
+        stats: dict[str, float] = {}
+        for prefix, values in (("length", lengths), ("width", widths), ("q", qs)):
+            if not values:
+                continue
+            stats[f"{prefix}_min"] = min(values)
+            stats[f"{prefix}_mean"] = sum(values) / len(values)
+            stats[f"{prefix}_max"] = max(values)
+        return stats
+
+    @staticmethod
     def _format_stat(value) -> str:
         if value is None:
             return "—"
@@ -380,14 +545,172 @@ class AddReferenceDialog(QDialog):
             editor.deleteLater()
         self._refresh_candidates()
 
+    # ------------------------------------------------------------------
+    # My observations tab
+    # ------------------------------------------------------------------
+
+    def _build_my_observations_tab(self) -> None:
+        self._my_observations_tab = QWidget(self)
+        layout = QVBoxLayout(self._my_observations_tab)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+
+        self.my_observations_list = QListWidget(self._my_observations_tab)
+        self.my_observations_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.my_observations_list.itemSelectionChanged.connect(
+            self._on_my_observations_selection_changed
+        )
+        layout.addWidget(self.my_observations_list, 1)
+
+        self.my_observations_status_label = QLabel("", self._my_observations_tab)
+        self.my_observations_status_label.setStyleSheet("color: #7f8c8d;")
+        self.my_observations_status_label.setWordWrap(True)
+        layout.addWidget(self.my_observations_status_label)
+
+    def _refresh_my_observations(self) -> None:
+        if self._injected_my_observations is not None:
+            self._my_observations = list(self._injected_my_observations)
+        else:
+            self._my_observations = default_my_observation_candidates(
+                self._genus,
+                self._species,
+                exclude_observation_id=self._exclude_observation_id,
+            )
+        self._selected_observation = None
+        self._populate_my_observations_list()
+        self._update_footer_state()
+
+    def _populate_my_observations_list(self) -> None:
+        self.my_observations_list.clear()
+        for candidate in self._my_observations:
+            self._add_observation_item(candidate)
+        self.my_observations_status_label.setText(
+            "" if self._my_observations
+            else self.tr("No previous observations of this taxon have spore measurements.")
+        )
+        if self.tabs.currentIndex() == self._my_observations_tab_index:
+            self.preview_pane.clear()
+
+    def _add_observation_item(self, candidate: PersonalObservationCandidate) -> None:
+        label = (
+            self.tr("My observation — {author}").format(author=candidate.author)
+            if candidate.author
+            else self.tr("My observation")
+        )
+        detail_parts = [candidate.date] if candidate.date else []
+        detail_parts.append(self.tr("n = {count}").format(count=candidate.n))
+        if candidate.location:
+            detail_parts.append(candidate.location)
+        detail = " · ".join(detail_parts)
+
+        item = QListWidgetItem()
+        item.setToolTip(label if not detail else f"{label}\n{detail}")
+        item.setData(Qt.UserRole, candidate.observation_id)
+        self.my_observations_list.addItem(item)
+        row_widget = _TwoLineRow(label, detail, self.my_observations_list)
+        item.setSizeHint(row_widget.sizeHint())
+        self.my_observations_list.setItemWidget(item, row_widget)
+
+    def _on_my_observations_selection_changed(self) -> None:
+        items = self.my_observations_list.selectedItems()
+        if not items:
+            self._selected_observation = None
+            self.preview_pane.clear()
+            self._update_footer_state()
+            return
+        observation_id = items[0].data(Qt.UserRole)
+        candidate = next(
+            (c for c in self._my_observations if c.observation_id == observation_id),
+            None,
+        )
+        self._selected_observation = candidate
+        self._populate_observation_preview(candidate)
+        self._update_footer_state()
+
+    def _populate_observation_preview(
+        self, candidate: PersonalObservationCandidate | None
+    ) -> None:
+        if candidate is None:
+            self.preview_pane.clear()
+            return
+        title = (
+            self.tr("My observation — {author}").format(author=candidate.author)
+            if candidate.author
+            else self.tr("My observation")
+        )
+        meta_parts = [candidate.date] if candidate.date else []
+        if candidate.location:
+            meta_parts.append(candidate.location)
+        meta = " · ".join(meta_parts)
+
+        stats = self._min_mean_max_from_points(candidate.points)
+        rows: list[tuple[str, str, str, str]] = []
+        for label, prefix in (
+            (self.tr("Length"), "length"),
+            (self.tr("Width"), "width"),
+            (self.tr("Q"), "q"),
+        ):
+            rows.append(
+                (
+                    label,
+                    self._format_stat(stats.get(f"{prefix}_min")),
+                    self._format_stat(stats.get(f"{prefix}_mean")),
+                    self._format_stat(stats.get(f"{prefix}_max")),
+                )
+            )
+        note = self.tr("n = {count} spore measurements").format(count=candidate.n)
+        self.preview_pane.set_summary(title, meta, rows, note)
+
+        self.preview_pane.set_raw_spores(
+            json.dumps(candidate.points, indent=2, ensure_ascii=False, default=str)
+        )
+        self.preview_pane.set_method(
+            {
+                "mount": "",
+                "stain": "",
+                "sample_type": "",
+                "objective": "",
+            }
+        )
+        self.preview_pane.set_calibration(
+            self.tr("Not applicable: this is a personal observation, not a normalized library entry.")
+        )
+        self.preview_pane.set_provenance(
+            self.tr("Personal observation, {date}").format(date=candidate.date)
+            if candidate.date
+            else self.tr("Personal observation")
+        )
+
+    # ------------------------------------------------------------------
+    # Footer
+    # ------------------------------------------------------------------
+
     def _update_footer_state(self) -> None:
-        self.add_to_plot_btn.setEnabled(self._selected_candidate is not None)
+        if self.tabs.currentIndex() == self._my_observations_tab_index:
+            self.add_to_plot_btn.setEnabled(self._selected_observation is not None)
+        else:
+            self.add_to_plot_btn.setEnabled(self._selected_candidate is not None)
 
     def _on_add_to_plot_clicked(self) -> None:
-        if self._selected_candidate is None or self._attach_callback is None:
+        if self._attach_callback is None:
+            return
+        if self.tabs.currentIndex() == self._my_observations_tab_index:
+            if self._selected_observation is None:
+                return
+            self._attach_callback(
+                f"observation:{self._selected_observation.observation_id}", "compared"
+            )
+            self.accept()
+            return
+        if self._selected_candidate is None:
             return
         self._attach_callback(self._selected_candidate.measurement_set_id, "compared")
         self.accept()
 
 
-__all__ = ["AddReferenceDialog", "filter_library_candidates"]
+__all__ = [
+    "AddReferenceDialog",
+    "filter_library_candidates",
+    "PersonalObservationCandidate",
+    "default_my_observation_candidates",
+]

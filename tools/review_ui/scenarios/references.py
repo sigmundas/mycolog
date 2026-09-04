@@ -582,6 +582,60 @@ def _add_dialog_library_empty(context: ReviewContext):
     return dialog
 
 
+def _add_dialog_my_observations_candidates():
+    from ui.add_reference_dialog import PersonalObservationCandidate
+
+    # Reuses the long-locality/æøå convention from _add_dialog_candidates
+    # rather than inventing a new fixture.
+    return [
+        PersonalObservationCandidate(
+            observation_id=501,
+            date="2024-06-12",
+            author="Åse Øyen",
+            location="Ørsta og Ålesund, ved gammel bjørkeskog med et forbausende langt stedsnavn",
+            points=[
+                {"length_um": 8.4, "width_um": 5.1},
+                {"length_um": 8.9, "width_um": 5.4},
+                {"length_um": 9.2, "width_um": 5.6},
+            ],
+        ),
+        PersonalObservationCandidate(
+            observation_id=502,
+            date="2023-09-03",
+            author="",
+            location="",
+            points=[{"length_um": 8.0, "width_um": 5.0}],
+        ),
+        PersonalObservationCandidate(
+            observation_id=503,
+            date="2022-10-21",
+            author="Kari Nordmann",
+            location="Trøndelag",
+            points=[
+                {"length_um": 7.8, "width_um": 4.9},
+                {"length_um": 8.3, "width_um": 5.2},
+            ],
+        ),
+    ]
+
+
+def _add_dialog_my_observations(context: ReviewContext):
+    from ui.add_reference_dialog import AddReferenceDialog
+
+    _fixture(context)
+    dialog = AddReferenceDialog(
+        context.host,
+        taxon_label="Cortinarius limonius",
+        taxon_id="7",
+        candidates=_add_dialog_candidates(),
+        my_observations=_add_dialog_my_observations_candidates(),
+        attach_callback=lambda *_args: None,
+    )
+    dialog.tabs.setCurrentIndex(dialog._my_observations_tab_index)
+    dialog.my_observations_list.setCurrentRow(0)
+    return dialog
+
+
 def _add_dialog_stub_tab(context: ReviewContext):
     from ui.add_reference_dialog import AddReferenceDialog
 
@@ -763,6 +817,23 @@ def register_reference_scenarios(registry: ScenarioRegistry) -> None:
             description="Same empty-state case in dark theme.",
             viewport=(900, 560),
             build=_add_dialog_library_empty,
+            theme="dark",
+        ),
+        ReviewScenario(
+            id="reference.add-dialog-myobs",
+            group="reference-library",
+            title="Add-reference picker — My observations tab, result selected",
+            description="Three personal observations of the working taxon (incl. æøå names and a long locality); one selected populates the shared preview pane with raw spores.",
+            viewport=(900, 560),
+            build=_add_dialog_my_observations,
+        ),
+        ReviewScenario(
+            id="reference.add-dialog-myobs-dark",
+            group="reference-library",
+            title="Add-reference picker — My observations tab (dark)",
+            description="Same My-observations-tab state in dark theme to verify contrast.",
+            viewport=(900, 560),
+            build=_add_dialog_my_observations,
             theme="dark",
         ),
         ReviewScenario(
