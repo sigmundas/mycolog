@@ -41,6 +41,7 @@ from utils.vernacular_utils import (
 
 from .delegates import SpeciesItemDelegate
 from .dialog_helpers import make_github_help_button
+from .reference_preview_pane import ReferencePreviewPane
 from .taxon_input_controller import TaxonInputController
 
 
@@ -260,66 +261,8 @@ class CloudReferenceDialog(QDialog):
         preview_title.setStyleSheet("font-weight: 600;")
         right_layout.addWidget(preview_title)
 
-        self.review_tabs = QTabWidget()
-        right_layout.addWidget(self.review_tabs, 1)
-
-        self.summary_tab = QWidget()
-        self.summary_layout = QVBoxLayout(self.summary_tab)
-        self.summary_layout.setContentsMargins(8, 8, 8, 8)
-        self.summary_layout.setSpacing(8)
-        self.summary_title_label = QLabel(self.tr("No dataset selected"))
-        self.summary_title_label.setStyleSheet("font-weight: 600;")
-        self.summary_layout.addWidget(self.summary_title_label)
-        self.summary_meta_label = QLabel("")
-        self.summary_meta_label.setWordWrap(True)
-        self.summary_layout.addWidget(self.summary_meta_label)
-        self.summary_table = QTableWidget(3, 4)
-        self.summary_table.setFocusPolicy(Qt.NoFocus)
-        self.summary_table.setHorizontalHeaderLabels(
-            [self.tr("Metric"), self.tr("Min"), self.tr("Median / Mean"), self.tr("Max")]
-        )
-        self.summary_table.verticalHeader().setVisible(False)
-        self.summary_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.summary_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.summary_table.setSelectionMode(QAbstractItemView.NoSelection)
-        self.summary_layout.addWidget(self.summary_table)
-        self.summary_note_label = QLabel()
-        self.summary_note_label.setWordWrap(True)
-        self.summary_note_label.setFrameShape(QFrame.StyledPanel)
-        self.summary_note_label.setStyleSheet("color: #7f8c8d; padding: 8px;")
-        self.summary_layout.addWidget(self.summary_note_label)
-        self.review_tabs.addTab(self.summary_tab, self.tr("Summary"))
-
-        self.raw_spores_text = QPlainTextEdit()
-        self.raw_spores_text.setReadOnly(True)
-        self.review_tabs.addTab(self.raw_spores_text, self.tr("Raw spores"))
-
-        self.method_tab = QWidget()
-        self.method_form = QFormLayout(self.method_tab)
-        self.method_form.setContentsMargins(8, 8, 8, 8)
-        self.method_form.setSpacing(8)
-        self._method_labels: dict[str, QLabel] = {}
-        for key, label in (
-            ("mount", self.tr("Mount medium:")),
-            ("stain", self.tr("Stain:")),
-            ("sample_type", self.tr("Sample type:")),
-            ("contrast", self.tr("Contrast:")),
-            ("objective", self.tr("Objective / profile:")),
-            ("scale", self.tr("Scale / calibration:")),
-        ):
-            value_label = QLabel("—")
-            value_label.setWordWrap(True)
-            self._method_labels[key] = value_label
-            self.method_form.addRow(label, value_label)
-        self.review_tabs.addTab(self.method_tab, self.tr("Method"))
-
-        self.calibration_text = QPlainTextEdit()
-        self.calibration_text.setReadOnly(True)
-        self.review_tabs.addTab(self.calibration_text, self.tr("Calibration"))
-
-        self.provenance_text = QPlainTextEdit()
-        self.provenance_text.setReadOnly(True)
-        self.review_tabs.addTab(self.provenance_text, self.tr("Provenance"))
+        self._preview_pane = ReferencePreviewPane()
+        right_layout.addWidget(self._preview_pane, 1)
 
         splitter.addWidget(right_panel)
         splitter.setStretchFactor(0, 3)
@@ -365,6 +308,46 @@ class CloudReferenceDialog(QDialog):
         except ValueError:
             pass
         worker.deleteLater()
+
+    # ------------------------------------------------------------------
+    # Delegating properties — keep existing attribute names working
+    # ------------------------------------------------------------------
+
+    @property
+    def review_tabs(self) -> QTabWidget:
+        return self._preview_pane.review_tabs
+
+    @property
+    def summary_title_label(self) -> QLabel:
+        return self._preview_pane.summary_title_label
+
+    @property
+    def summary_meta_label(self) -> QLabel:
+        return self._preview_pane.summary_meta_label
+
+    @property
+    def summary_table(self) -> QTableWidget:
+        return self._preview_pane.summary_table
+
+    @property
+    def summary_note_label(self) -> QLabel:
+        return self._preview_pane.summary_note_label
+
+    @property
+    def raw_spores_text(self) -> QPlainTextEdit:
+        return self._preview_pane.raw_spores_text
+
+    @property
+    def _method_labels(self) -> dict[str, QLabel]:
+        return self._preview_pane._method_labels
+
+    @property
+    def calibration_text(self) -> QPlainTextEdit:
+        return self._preview_pane.calibration_text
+
+    @property
+    def provenance_text(self) -> QPlainTextEdit:
+        return self._preview_pane.provenance_text
 
     def closeEvent(self, event) -> None:
         if self._search_worker is not None:
@@ -785,23 +768,7 @@ class CloudReferenceDialog(QDialog):
         self.results_table.resizeRowsToContents()
 
     def _reset_preview(self) -> None:
-        self.summary_title_label.setText(self.tr("No dataset selected"))
-        self.summary_meta_label.setText(
-            self.tr("Search by genus (or genus + species) and choose a result to review stats, method, calibration, and provenance.")
-        )
-        self.summary_note_label.setText(
-            self.tr("Import actions stay disabled until a search result is selected and loaded.")
-        )
-        for row, metric in enumerate((self.tr("Length"), self.tr("Width"), self.tr("Q"))):
-            self.summary_table.setItem(row, 0, QTableWidgetItem(metric))
-            self.summary_table.setItem(row, 1, QTableWidgetItem("—"))
-            self.summary_table.setItem(row, 2, QTableWidgetItem("—"))
-            self.summary_table.setItem(row, 3, QTableWidgetItem("—"))
-        self.raw_spores_text.setPlainText(self.tr("Select a community result to review raw spore points."))
-        for label in self._method_labels.values():
-            label.setText("—")
-        self.calibration_text.setPlainText(self.tr("Select a community result to review calibration details."))
-        self.provenance_text.setPlainText(self.tr("Select a community result to review contributor and source provenance."))
+        self._preview_pane.clear()
         self.footer_hint.setText("")
         self.import_summary_button.setEnabled(False)
         self.plot_points_button.setEnabled(False)

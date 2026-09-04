@@ -355,6 +355,51 @@ def _parmasto(context: ReviewContext):
     return dialog
 
 
+def _community_preview(context: ReviewContext):
+    from ui.reference_preview_pane import ReferencePreviewPane
+
+    pane = ReferencePreviewPane(context.host)
+    pane.set_summary(
+        title="Cantharellus cibarius Fr. (Observation dataset) — Niskanen, Liimatainen & Kytövuori 2018, a comprehensive revision of northern European Cantharellus species with extensive morphological notes",
+        meta="Contributor: sporely_community_user_42  •  Date: 2024-07-15  •  n=48",
+        rows=[
+            ("Length", "7.50", "9.20", "11.40"),
+            ("Width", "4.10", "5.30", "6.60"),
+            ("Q", "1.65", "1.73", "1.95"),
+        ],
+        note="QC signals: Mount recorded, Stain recorded, Scale recorded, Measurement points recorded",
+    )
+    pane.set_raw_spores(
+        "L=7.50  W=4.10  Q=1.83\n"
+        "L=8.40  W=4.60  Q=1.83\n"
+        "L=9.10  W=4.90  Q=1.86\n"
+        "L=9.40  W=5.00  Q=1.88\n"
+        "L=9.70  W=5.10  Q=1.90\n"
+        "L=10.00  W=5.30  Q=1.89\n"
+        "L=10.40  W=5.50  Q=1.89\n"
+        "L=11.40  W=6.60  Q=1.73"
+    )
+    pane.set_method(
+        {
+            "mount": "Melzer's reagent",
+            "stain": "Congo red",
+            "sample_type": "Fresh fruitbody",
+            "contrast": "Phase contrast",
+            "objective": "100× oil immersion",
+            "scale": "0.08 µm/px",
+        }
+    )
+    pane.set_calibration("Scale: 0.08 µm/px\nCalibration details come from image/objective metadata in the synced observation dataset.")
+    pane.set_provenance(
+        "Kind: observation\n"
+        "Contributor: sporely_community_user_42\n"
+        "Date: 2024-07-15\n"
+        "Observation id: obs-00042\n"
+        "Location and private observation content are intentionally excluded from this review flow."
+    )
+    return pane
+
+
 def register_reference_scenarios(registry: ScenarioRegistry) -> None:
     scenarios = (
         ReviewScenario(
@@ -437,6 +482,23 @@ def register_reference_scenarios(registry: ScenarioRegistry) -> None:
             description="The real dark palette and stylesheet exercise inputs, selection, disabled states, and buttons.",
             viewport=(980, 520),
             build=_make_attach_dialog,
+            theme="dark",
+        ),
+        ReviewScenario(
+            id="reference.community-preview",
+            group="reference-library",
+            title="Community review pane — ReferencePreviewPane standalone (light)",
+            description="Exercises ReferencePreviewPane with a full summary table, long title, method fields, raw spores, and provenance in light theme.",
+            viewport=(600, 500),
+            build=_community_preview,
+        ),
+        ReviewScenario(
+            id="reference.community-preview-dark",
+            group="reference-library",
+            title="Community review pane — ReferencePreviewPane standalone (dark)",
+            description="Same ReferencePreviewPane state in dark theme to verify palette correctness.",
+            viewport=(600, 500),
+            build=_community_preview,
             theme="dark",
         ),
     )
