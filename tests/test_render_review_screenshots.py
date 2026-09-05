@@ -251,3 +251,52 @@ def test_failed_scenario_names_its_id_and_does_not_publish_manifest(tmp_path) ->
     ):
         render_scenarios((scenario,), output_dir)
     assert not (output_dir / "manifest.json").exists()
+
+
+def test_capture_natural_size_preserves_builder_initial_size(tmp_path):
+    from PySide6.QtWidgets import QWidget
+    from PySide6.QtGui import QImage
+
+    def build(context):
+        widget = QWidget(context.host)
+        widget.resize(321, 123)
+        return widget
+
+    scenario = ReviewScenario(
+        id="test.natural", group="test", title="Natural size",
+        description="Initial dimensions survive capture.", build=build,
+        viewport=(900, 700), natural_size=True,
+    )
+    manifest = render_scenarios([scenario], tmp_path)
+    assert manifest["screens"][0]["viewport"] == "321x123"
+    image = QImage(str(tmp_path / scenario.filename))
+    assert (image.width(), image.height()) == (321, 123)
+
+
+def test_capture_open_popup_uses_popup_surface(tmp_path):
+    from PySide6.QtWidgets import QComboBox
+    from PySide6.QtGui import QImage
+
+    size = []
+
+    def build(context):
+        combo = QComboBox(context.host)
+        combo.addItems(["Own observation", "Long vernacular æøå 82%", "Candidate 41%"])
+        return combo
+
+    def popup(combo):
+        combo.showPopup()
+        surface = combo.view().window()
+        assert surface.isVisible()
+        size.append((surface.width(), surface.height()))
+        return surface
+
+    scenario = ReviewScenario(
+        id="test.popup", group="test", title="Open popup",
+        description="Capture the actual separate popup window.", build=build,
+        viewport=(500, 40), capture_target=popup,
+    )
+    manifest = render_scenarios([scenario], tmp_path)
+    image = QImage(str(tmp_path / scenario.filename))
+    assert (image.width(), image.height()) == size[0]
+    assert manifest["screens"][0]["viewport"] == f"{size[0][0]}x{size[0][1]}"

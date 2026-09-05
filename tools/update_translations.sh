@@ -21,6 +21,9 @@ files=(
   "ui/add_reference_dialog.py"
   "ui/reference_library_manager_dialog.py"
   "ui/curated_reference_catalogue_dialog.py"
+  "ui/comparison_panel.py"
+  "ui/cloud_reference_dialog.py"
+  "ui/reference_preview_pane.py"
 )
 
 if [[ -x ".venv/bin/pyside6-lupdate" ]]; then

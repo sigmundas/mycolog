@@ -11539,10 +11539,18 @@ class MainWindow(GeometryMixin, QMainWindow):
             return
         captured_observation_id = int(observation_id)
         excluded = self._current_attached_measurement_set_ids()
-        taxon_getter = getattr(self, "_active_sporely_taxon_id", None)
-        active_taxon = taxon_getter() if callable(taxon_getter) else None
-        genus = self._clean_ref_genus_text(self.ref_genus_input.text()) if hasattr(self, "ref_genus_input") else ""
-        species = self._clean_ref_species_text(self.ref_species_input.text()) if hasattr(self, "ref_species_input") else ""
+        # Capture name and identity from the same observation snapshot; the
+        # legacy panel can independently display an AI comparison target.
+        obs_for_own_target = ObservationDB.get_observation(captured_observation_id) or {}
+        active_taxon = self._active_sporely_taxon_id(obs_for_own_target)
+        genus = self._clean_ref_genus_text(obs_for_own_target.get("genus")) if obs_for_own_target else ""
+        species = (
+            self._clean_ref_species_text(
+                obs_for_own_target.get("species") or obs_for_own_target.get("species_guess")
+            )
+            if obs_for_own_target
+            else ""
+        )
         taxon_label = " ".join(part for part in (genus, species) if part).strip()
 
         def _add_callback(identifier: str, role: str) -> None:
@@ -13090,20 +13098,22 @@ class MainWindow(GeometryMixin, QMainWindow):
                 ),
             )
 
-    def _active_sporely_taxon_id(self) -> int | None:
+    def _active_sporely_taxon_id(self, observation: dict | None = None) -> int | None:
         """Return the sporely_taxon_id of the active observation, or None.
 
         The value drives the normalized measurement-set/attach path in
         ReferenceAddDialog. Fails soft on any lookup error so the legacy
         reference-add flow keeps working.
         """
-        obs_id = getattr(self, "active_observation_id", None)
-        if not obs_id:
-            return None
-        try:
-            obs = ObservationDB.get_observation(int(obs_id))
-        except Exception:
-            return None
+        obs = observation
+        if obs is None:
+            obs_id = getattr(self, "active_observation_id", None)
+            if not obs_id:
+                return None
+            try:
+                obs = ObservationDB.get_observation(int(obs_id))
+            except Exception:
+                return None
         if not obs:
             return None
         raw = obs.get("sporely_taxon_id")

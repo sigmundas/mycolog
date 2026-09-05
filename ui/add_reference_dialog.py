@@ -45,7 +45,7 @@ import json
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
-from PySide6.QtCore import QSettings, QSize, Qt, Signal
+from PySide6.QtCore import QCoreApplication, QSettings, QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -287,9 +287,9 @@ class AddReferenceDialog(GeometryMixin, QDialog):
         self._my_observations: list[PersonalObservationCandidate] = []
         self._selected_observation: PersonalObservationCandidate | None = None
 
-        title = self.tr("Add reference")
+        title = QCoreApplication.translate("AddReferenceDialog", "Add reference")
         if taxon_label:
-            title = self.tr("Add reference — {taxon}").format(taxon=taxon_label)
+            title = QCoreApplication.translate("AddReferenceDialog", "Add reference — {taxon}").format(taxon=taxon_label)
         self.setWindowTitle(title)
         self.setModal(True)
 
@@ -311,16 +311,16 @@ class AddReferenceDialog(GeometryMixin, QDialog):
         root.addWidget(self._body_splitter, 1)
 
         self._build_library_tab()
-        self.tabs.addTab(self._library_tab, self.tr("Library"))
+        self.tabs.addTab(self._library_tab, QCoreApplication.translate("AddReferenceDialog", "Library"))
         self._build_community_tab()
-        self._community_tab_index = self.tabs.addTab(self._community_tab, self.tr("Community"))
+        self._community_tab_index = self.tabs.addTab(self._community_tab, QCoreApplication.translate("AddReferenceDialog", "Community"))
         self._build_my_observations_tab()
         self._my_observations_tab_index = self.tabs.addTab(
-            self._my_observations_tab, self.tr("My observations")
+            self._my_observations_tab, QCoreApplication.translate("AddReferenceDialog", "My observations")
         )
         self.tabs.addTab(
-            _StubTabPane(self.tr("Coming in a later stage")),
-            self.tr("Enter manually"),
+            _StubTabPane(QCoreApplication.translate("AddReferenceDialog", "Coming in a later stage")),
+            QCoreApplication.translate("AddReferenceDialog", "Enter manually"),
         )
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
@@ -328,10 +328,10 @@ class AddReferenceDialog(GeometryMixin, QDialog):
         self.status_hint_label = QLabel("", self)
         self.status_hint_label.setStyleSheet("color: #7f8c8d;")
         footer.addWidget(self.status_hint_label, 1)
-        self.cancel_btn = QPushButton(self.tr("Cancel"), self)
+        self.cancel_btn = QPushButton(QCoreApplication.translate("AddReferenceDialog", "Cancel"), self)
         self.cancel_btn.clicked.connect(self.reject)
         footer.addWidget(self.cancel_btn)
-        self.add_to_plot_btn = QPushButton(self.tr("Add to plot"), self)
+        self.add_to_plot_btn = QPushButton(QCoreApplication.translate("AddReferenceDialog", "Add to plot"), self)
         self.add_to_plot_btn.setEnabled(False)
         self.add_to_plot_btn.setDefault(True)
         self.add_to_plot_btn.clicked.connect(self._on_add_to_plot_clicked)
@@ -357,6 +357,7 @@ class AddReferenceDialog(GeometryMixin, QDialog):
         self._restore_splitter_state()
         self.finished.connect(self._save_geometry)
         self.finished.connect(self._save_splitter_state)
+        self.finished.connect(self._community_pane.close)
 
     def _derive_minimum_size(self) -> tuple[QSize, int, int]:
         """Derive the smallest size at which all four source tabs and all
@@ -415,13 +416,13 @@ class AddReferenceDialog(GeometryMixin, QDialog):
     def _build_taxon_target_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
         row.setSpacing(8)
-        row.addWidget(QLabel(self.tr("Compare against:"), self))
+        row.addWidget(QLabel(QCoreApplication.translate("AddReferenceDialog", "Compare against:"), self))
         self.taxon_target_combo = QComboBox(self)
         self.taxon_target_combo.setEditable(True)
         self.taxon_target_combo.setInsertPolicy(QComboBox.NoInsert)
         self.taxon_target_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.taxon_target_combo.setToolTip(
-            self.tr(
+            QCoreApplication.translate("AddReferenceDialog",
                 "Choose which taxon's published spore data to compare "
                 "against -- an AI suggestion, or type a genus and species. "
                 "This never changes the observation's own identification."
@@ -446,9 +447,9 @@ class AddReferenceDialog(GeometryMixin, QDialog):
         combo.clear()
         own_label = self._own_taxon_display_label()
         combo.addItem(
-            self.tr("This observation: {taxon}").format(taxon=own_label)
+            QCoreApplication.translate("AddReferenceDialog", "This observation: {taxon}").format(taxon=own_label)
             if own_label
-            else self.tr("This observation's taxon"),
+            else QCoreApplication.translate("AddReferenceDialog", "This observation's taxon"),
             {
                 "genus": self._own_genus,
                 "species": self._own_species,
@@ -485,7 +486,24 @@ class AddReferenceDialog(GeometryMixin, QDialog):
         )
 
     def _on_taxon_target_text_entered(self) -> None:
-        text = self.taxon_target_combo.currentText().strip()
+        combo = self.taxon_target_combo
+        text = combo.currentText().strip()
+        current_index = combo.currentIndex()
+        if current_index >= 0 and text == combo.itemText(current_index).strip():
+            # Display text is unchanged from the selected item (e.g. Return
+            # pressed right after an AI-candidate selection): reapply its
+            # structured genus/species/ID instead of re-parsing the label,
+            # which can otherwise fold a match percentage or vernacular name
+            # into the taxon.
+            data = combo.itemData(current_index)
+            if isinstance(data, dict):
+                self._apply_taxon_target(
+                    genus=data.get("genus") or "",
+                    species=data.get("species") or "",
+                    taxon_id=data.get("taxon_id"),
+                    label=data.get("label") or "",
+                )
+            return
         parts = text.split(None, 1)
         if len(parts) < 2:
             return
@@ -506,9 +524,9 @@ class AddReferenceDialog(GeometryMixin, QDialog):
             part for part in (self._genus, self._species) if part
         ).strip()
         self.setWindowTitle(
-            self.tr("Add reference — {taxon}").format(taxon=display_label)
+            QCoreApplication.translate("AddReferenceDialog", "Add reference — {taxon}").format(taxon=display_label)
             if display_label
-            else self.tr("Add reference")
+            else QCoreApplication.translate("AddReferenceDialog", "Add reference")
         )
         self._selected_candidate = None
         self._populate_results_list()
@@ -541,12 +559,12 @@ class AddReferenceDialog(GeometryMixin, QDialog):
         filter_row.setSpacing(8)
         self.search_input = QLineEdit(self._library_tab)
         self.search_input.setPlaceholderText(
-            self.tr("Filter by publication, taxon, or raw expression…")
+            QCoreApplication.translate("AddReferenceDialog", "Filter by publication, taxon, or raw expression…")
         )
         self.search_input.setClearButtonEnabled(True)
         self.search_input.textChanged.connect(self._on_filter_changed)
         filter_row.addWidget(self.search_input, 1)
-        self.only_this_taxon_checkbox = QCheckBox(self.tr("Only this taxon"), self._library_tab)
+        self.only_this_taxon_checkbox = QCheckBox(QCoreApplication.translate("AddReferenceDialog", "Only this taxon"), self._library_tab)
         # Default checked: unfiltered, library rows show only publication
         # and range (see _add_candidate_item), so without this the user has
         # no way to tell which species several "Funga Nordica (2008)" rows
@@ -602,23 +620,23 @@ class AddReferenceDialog(GeometryMixin, QDialog):
         visible = self._filtered_candidates()
         for candidate in visible:
             self._add_candidate_item(candidate)
-        new_pub_item = QListWidgetItem(self.tr("+ New publication…"))
+        new_pub_item = QListWidgetItem(QCoreApplication.translate("AddReferenceDialog", "+ New publication…"))
         new_pub_item.setData(Qt.UserRole, _NEW_PUBLICATION_ROLE)
         new_pub_item.setForeground(self.palette().link())
         self.results_list.addItem(new_pub_item)
 
         if not visible:
             self.status_hint_label.setText(
-                self.tr("No matching measurement sets in the library.")
+                QCoreApplication.translate("AddReferenceDialog", "No matching measurement sets in the library.")
                 if self._candidates
-                else self.tr("The reference library has no measurement sets yet.")
+                else QCoreApplication.translate("AddReferenceDialog", "The reference library has no measurement sets yet.")
             )
         else:
             self.status_hint_label.setText("")
         self.preview_pane.clear()
 
     def _add_candidate_item(self, candidate: MeasurementSetCandidate) -> None:
-        label = candidate.short_label or candidate.name_as_published or self.tr("Untitled")
+        label = candidate.short_label or candidate.name_as_published or QCoreApplication.translate("AddReferenceDialog", "Untitled")
         # short_label conventionally already ends with the year (see
         # database.reference_citation.build_short_label); only append it
         # when genuinely missing, to avoid "... 2018 (2018)".
@@ -668,16 +686,16 @@ class AddReferenceDialog(GeometryMixin, QDialog):
         measurement_set: MeasurementSet | None = MeasurementSetRepository.get(
             candidate.measurement_set_id
         )
-        title = candidate.short_label or candidate.name_as_published or self.tr("Untitled")
+        title = candidate.short_label or candidate.name_as_published or QCoreApplication.translate("AddReferenceDialog", "Untitled")
         meta = candidate.name_as_published or ""
         if candidate.locator_text:
             meta = f"{meta} · {candidate.locator_text}" if meta else candidate.locator_text
         rows: list[tuple[str, str, str, str]] = []
         if measurement_set is not None:
             for label, prefix in (
-                (self.tr("Length"), "length"),
-                (self.tr("Width"), "width"),
-                (self.tr("Q"), "q"),
+                (QCoreApplication.translate("AddReferenceDialog", "Length"), "length"),
+                (QCoreApplication.translate("AddReferenceDialog", "Width"), "width"),
+                (QCoreApplication.translate("AddReferenceDialog", "Q"), "q"),
             ):
                 vmin = getattr(measurement_set, f"{prefix}_min", None)
                 vmax = getattr(measurement_set, f"{prefix}_max", None)
@@ -690,7 +708,7 @@ class AddReferenceDialog(GeometryMixin, QDialog):
                         self._format_stat(vmax),
                     )
                 )
-        note = candidate.raw_text or self.tr("No additional notes.")
+        note = candidate.raw_text or QCoreApplication.translate("AddReferenceDialog", "No additional notes.")
         self.preview_pane.set_summary(title, meta, rows, note)
 
         if measurement_set is not None and measurement_set.raw_points_json:
@@ -698,7 +716,7 @@ class AddReferenceDialog(GeometryMixin, QDialog):
         else:
             # Range-kind measurement sets have no raw points to show.
             self.preview_pane.set_raw_spores(
-                self.tr("This is a range summary; no raw spore points are stored.")
+                QCoreApplication.translate("AddReferenceDialog", "This is a range summary; no raw spore points are stored.")
             )
         if measurement_set is not None:
             self.preview_pane.set_method(
@@ -710,10 +728,10 @@ class AddReferenceDialog(GeometryMixin, QDialog):
                 }
             )
             self.preview_pane.set_calibration(
-                measurement_set.notes or self.tr("No calibration details recorded.")
+                measurement_set.notes or QCoreApplication.translate("AddReferenceDialog", "No calibration details recorded.")
             )
         self.preview_pane.set_provenance(
-            self.tr("Publication: {work}").format(work=candidate.work_title or candidate.name_as_published or "—")
+            QCoreApplication.translate("AddReferenceDialog", "Publication: {work}").format(work=candidate.work_title or candidate.name_as_published or "—")
         )
 
     @staticmethod
@@ -752,8 +770,8 @@ class AddReferenceDialog(GeometryMixin, QDialog):
         except Exception as exc:
             QMessageBox.warning(
                 self,
-                self.tr("New publication"),
-                self.tr("Reference library editor is unavailable: {error}").format(error=str(exc)),
+                QCoreApplication.translate("AddReferenceDialog", "New publication"),
+                QCoreApplication.translate("AddReferenceDialog", "Reference library editor is unavailable: {error}").format(error=str(exc)),
             )
             self._populate_results_list()
             return
@@ -825,19 +843,19 @@ class AddReferenceDialog(GeometryMixin, QDialog):
             self._add_observation_item(candidate)
         self.my_observations_status_label.setText(
             "" if self._my_observations
-            else self.tr("No previous observations of this taxon have spore measurements.")
+            else QCoreApplication.translate("AddReferenceDialog", "No previous observations of this taxon have spore measurements.")
         )
         if self.tabs.currentIndex() == self._my_observations_tab_index:
             self.preview_pane.clear()
 
     def _add_observation_item(self, candidate: PersonalObservationCandidate) -> None:
         label = (
-            self.tr("My observation — {author}").format(author=candidate.author)
+            QCoreApplication.translate("AddReferenceDialog", "My observation — {author}").format(author=candidate.author)
             if candidate.author
-            else self.tr("My observation")
+            else QCoreApplication.translate("AddReferenceDialog", "My observation")
         )
         detail_parts = [candidate.date] if candidate.date else []
-        detail_parts.append(self.tr("n = {count}").format(count=candidate.n))
+        detail_parts.append(QCoreApplication.translate("AddReferenceDialog", "n = {count}").format(count=candidate.n))
         if candidate.location:
             detail_parts.append(candidate.location)
         detail = " · ".join(detail_parts)
@@ -873,9 +891,9 @@ class AddReferenceDialog(GeometryMixin, QDialog):
             self.preview_pane.clear()
             return
         title = (
-            self.tr("My observation — {author}").format(author=candidate.author)
+            QCoreApplication.translate("AddReferenceDialog", "My observation — {author}").format(author=candidate.author)
             if candidate.author
-            else self.tr("My observation")
+            else QCoreApplication.translate("AddReferenceDialog", "My observation")
         )
         meta_parts = [candidate.date] if candidate.date else []
         if candidate.location:
@@ -885,9 +903,9 @@ class AddReferenceDialog(GeometryMixin, QDialog):
         stats = self._min_mean_max_from_points(candidate.points)
         rows: list[tuple[str, str, str, str]] = []
         for label, prefix in (
-            (self.tr("Length"), "length"),
-            (self.tr("Width"), "width"),
-            (self.tr("Q"), "q"),
+            (QCoreApplication.translate("AddReferenceDialog", "Length"), "length"),
+            (QCoreApplication.translate("AddReferenceDialog", "Width"), "width"),
+            (QCoreApplication.translate("AddReferenceDialog", "Q"), "q"),
         ):
             rows.append(
                 (
@@ -897,7 +915,7 @@ class AddReferenceDialog(GeometryMixin, QDialog):
                     self._format_stat(stats.get(f"{prefix}_max")),
                 )
             )
-        note = self.tr("n = {count} spore measurements").format(count=candidate.n)
+        note = QCoreApplication.translate("AddReferenceDialog", "n = {count} spore measurements").format(count=candidate.n)
         self.preview_pane.set_summary(title, meta, rows, note)
 
         self.preview_pane.set_raw_spores(
@@ -912,12 +930,12 @@ class AddReferenceDialog(GeometryMixin, QDialog):
             }
         )
         self.preview_pane.set_calibration(
-            self.tr("Not applicable: this is a personal observation, not a normalized library entry.")
+            QCoreApplication.translate("AddReferenceDialog", "Not applicable: this is a personal observation, not a normalized library entry.")
         )
         self.preview_pane.set_provenance(
-            self.tr("Personal observation, {date}").format(date=candidate.date)
+            QCoreApplication.translate("AddReferenceDialog", "Personal observation, {date}").format(date=candidate.date)
             if candidate.date
-            else self.tr("Personal observation")
+            else QCoreApplication.translate("AddReferenceDialog", "Personal observation")
         )
 
     # ------------------------------------------------------------------

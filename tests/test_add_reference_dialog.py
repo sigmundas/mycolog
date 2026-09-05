@@ -14,7 +14,9 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import pytest
 from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from database.reference_library import MeasurementSetCandidate
@@ -25,6 +27,20 @@ from ui.add_reference_dialog import (
     filter_library_candidates,
     format_ai_candidate_display,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolated_picker_settings(tmp_path, monkeypatch):
+    from PySide6.QtCore import QSettings
+    import ui.add_reference_dialog as picker
+    import ui.window_state as geometry
+
+    def settings(*_args):
+        return QSettings(str(tmp_path / "picker.ini"), QSettings.IniFormat)
+
+    monkeypatch.setattr(picker.MeasurementSetRepository, "get", lambda _id: None)
+    monkeypatch.setattr(picker, "QSettings", settings)
+    monkeypatch.setattr(geometry, "QSettings", settings)
 
 
 def _app() -> QApplication:
@@ -84,6 +100,7 @@ def _make_dialog(**kwargs) -> AddReferenceDialog:
         # Injected (even empty) so the Community tab never spawns a real
         # network search thread just from constructing the dialog.
         "community_results": [],
+        "my_observations": [],
     }
     defaults.update(kwargs)
     return AddReferenceDialog(None, **defaults)
@@ -414,6 +431,7 @@ def _community_results() -> list[dict]:
 def _make_community_dialog(**kwargs) -> AddReferenceDialog:
     _app()
     kwargs.setdefault("community_results", _community_results())
+    kwargs.setdefault("my_observations", [])
     return AddReferenceDialog(
         None,
         taxon_label="Cortinarius limonius",
@@ -521,3 +539,137 @@ def test_default_my_observation_candidates_filters_by_taxon_and_requires_points(
     assert [c.observation_id for c in result] == [201]
     assert result[0].location == "Oppland"
     assert result[0].n == 1
+
+
+# ---------------------------------------------------------------------
+# Return-through-the-real-signal-path taxon target regressions
+# (stage-4b-fix2 Part 2 -- see review at
+# ui/add_reference_dialog.py:425-428,488-498)
+# ---------------------------------------------------------------------
+
+
+def test_return_after_selecting_ai_candidate_preserves_structured_taxon():
+    """Selecting an AI candidate (vernacular name + 82% in its label), then
+    pressing Return through the actual Qt input/signal path, must retain the
+    candidate's exact structured genus/species rather than re-parsing the
+    combo's display text -- which would fold "(Bittersnerlerørsopp)  82%"
+    into the species. Must also not trigger an unintended dialog submission.
+    """
+    dialog = _make_dialog(
+        genus="Cortinarius", species="limonius", ai_candidates=_ai_candidates()
+    )
+    accepted = []
+    dialog.accepted.connect(lambda: accepted.append(True))
+    dialog.show()
+    QTest.keyClick(dialog.taxon_target_combo, Qt.Key_Down)
+    dialog.add_to_plot_btn.setEnabled(True)
+    submissions = []
+    dialog.add_to_plot_btn.clicked.connect(lambda: submissions.append(True))
+    assert dialog._species == "rubellus"
+
+    line_edit = dialog.taxon_target_combo.lineEdit()
+    line_edit.setFocus()
+    QTest.keyClick(line_edit, Qt.Key_Return)
+
+    assert dialog._genus == "Cortinarius"
+    assert dialog._species == "rubellus"
+    assert dialog._taxon_id is None
+    assert "82%" in dialog.taxon_target_combo.currentText()
+    assert accepted == []
+    assert submissions == []
+    dialog.reject()
+
+
+def test_return_after_own_taxon_selection_unchanged_keeps_own_target():
+    """Same sequence for the default own-taxon entry (index 0): Return with
+    unchanged display text must not corrupt the own genus/species/ID either.
+    """
+    dialog = _make_dialog(genus="Cortinarius", species="limonius", taxon_id=7)
+    line_edit = dialog.taxon_target_combo.lineEdit()
+    line_edit.setFocus()
+    QTest.keyClick(line_edit, Qt.Key_Return)
+
+    assert dialog._genus == "Cortinarius"
+    assert dialog._species == "limonius"
+    assert dialog._taxon_id == "7"
+
+
+def test_return_with_deliberately_edited_text_still_parses_free_taxon():
+    """Editing the combo's text to a genus/species absent from any item, then
+    pressing Return through the real signal path, must still parse the free
+    text using the existing supported genus/species semantics and update the
+    filter/title -- the correction must not disable arbitrary entry.
+    """
+    dialog = _make_dialog(genus="Cortinarius", species="limonius")
+    line_edit = dialog.taxon_target_combo.lineEdit()
+    dialog.taxon_target_combo.setCurrentText("Amanita muscaria")
+    QTest.keyClick(line_edit, Qt.Key_Return)
+
+    assert dialog._genus == "Amanita"
+    assert dialog._species == "muscaria"
+    assert "Amanita muscaria" in dialog.windowTitle()
+    assert dialog._filtered_candidates() == []
+    assert dialog._community_pane._genus == "Amanita"
+    assert dialog._community_pane._species == "muscaria"
+
+
+# ---------------------------------------------------------------------
+# Host integration -- MainWindow._on_add_reference_clicked
+# (stage-4b-fix2 Part 3 -- see review at ui/main_window.py:11540-11545)
+# ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("observation", [
+    {"genus": "Cortinarius", "species": "limonius", "sporely_taxon_id": 7},
+    {"genus": "Cortinarius", "species": "limonius", "sporely_taxon_id": None},
+    {"genus": "", "species": "", "sporely_taxon_id": None},
+])
+def test_host_own_target_uses_captured_observation(monkeypatch, observation):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    import ui.main_window as host
+
+    _app()
+    reads = Mock(return_value=dict(observation))
+    monkeypatch.setattr(host.ObservationDB, "get_observation", reads)
+    captured = []
+    writes = Mock(side_effect=AssertionError("picker must not write identity"))
+    monkeypatch.setattr(host.ObservationDB, "update_observation", writes)
+    window = SimpleNamespace(
+        active_observation_id=42,
+        species_availability=SimpleNamespace(),
+        ref_genus_input=SimpleNamespace(text=lambda: "Amanita"),
+        ref_species_input=SimpleNamespace(text=lambda: "muscaria"),
+        _current_attached_measurement_set_ids=lambda: set(),
+        _collect_reference_ai_suggestions=_ai_candidates,
+    )
+    for name in ("_clean_ref_genus_text", "_clean_ref_species_text", "_active_sporely_taxon_id"):
+        setattr(window, name, getattr(host.MainWindow, name).__get__(window))
+
+    class Dialog:
+        def __init__(self, parent, **kwargs):
+            captured.append(kwargs)
+
+        def exec(self):
+            kwargs = dict(captured[0])
+            kwargs.update(candidates=_candidates(), my_observations=[], community_results=[])
+            dialog = AddReferenceDialog(None, **kwargs)
+            own = dialog.taxon_target_combo.itemData(0)
+            assert own["genus"] == observation["genus"]
+            assert own["species"] == observation["species"]
+            dialog.taxon_target_combo.setCurrentIndex(1)
+            dialog.taxon_target_combo.activated.emit(1)
+            dialog.reject()
+            return 0
+
+    monkeypatch.setattr(host, "AddReferenceDialog", Dialog)
+    host.MainWindow._on_add_reference_clicked(window)
+    kwargs = captured[0]
+    assert kwargs["taxon_id"] == observation["sporely_taxon_id"]
+    assert kwargs["genus"] == observation["genus"]
+    assert kwargs["species"] == observation["species"]
+    assert kwargs["taxon_label"] == " ".join(
+        part for part in (observation["genus"], observation["species"]) if part
+    )
+    assert all(call.args == (42,) for call in reads.call_args_list)
+    writes.assert_not_called()

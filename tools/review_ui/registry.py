@@ -27,6 +27,10 @@ class ReviewScenario:
     theme: str = "light"
     locale: str = "en"
     default: bool = True
+    # Preserve the widget's initial size instead of applying the viewport.
+    natural_size: bool = False
+    # Optional post-show hook, e.g. open a popup and return its capture surface.
+    capture_target: Callable[["QWidget"], "QWidget"] | None = None
 
     def __post_init__(self) -> None:
         if not _SEMANTIC_ID.fullmatch(self.id):

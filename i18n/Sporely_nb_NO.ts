@@ -49,169 +49,298 @@
         <translation>Artsside på GBIF</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="260"/>
-        <source>Add reference</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/cloud_reference_dialog.py" line="151"/>
+        <source>Reference values</source>
+        <translation>Referanseverdier</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="262"/>
-        <source>Add reference — {taxon}</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/cloud_reference_dialog.py" line="159"/>
+        <source>Community observation {date}</source>
+        <translation>Fellesskapsobservasjon {date}</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="283"/>
-        <source>Library</source>
-        <translation type="unfinished">Bibliotek</translation>
+        <location filename="../ui/cloud_reference_dialog.py" line="161"/>
+        <source>Community observation</source>
+        <translation>Fellesskapsobservasjon</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="285"/>
-        <location filename="../ui/add_reference_dialog.py" line="293"/>
-        <source>Coming in a later stage</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/cloud_reference_dialog.py" line="189"/>
+        <source>Cloud reference</source>
+        <translation>Skyreferanse</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="286"/>
-        <source>Community</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/cloud_reference_dialog.py" line="192"/>
+        <source>Cloud observation</source>
+        <translation>Skyobservasjon</translation>
     </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="320"/>
+        <source>Community dataset</source>
+        <translation>Fellesskapsdatasett</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="325"/>
+        <source>Contributor: {contributor}  •  Date: {date}  •  n={count}</source>
+        <translation>Bidragsyter: {contributor}  •  Dato: {date}  •  n={count}</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="349"/>
+        <source>Mount recorded</source>
+        <translation>Montering registrert</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="350"/>
+        <source>Stain recorded</source>
+        <translation>Farging registrert</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="351"/>
+        <source>Sample type recorded</source>
+        <translation>Prøvetype registrert</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="352"/>
+        <source>Contrast recorded</source>
+        <translation>Kontrast registrert</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="353"/>
+        <source>Objective recorded</source>
+        <translation>Objektiv registrert</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="354"/>
+        <source>Scale recorded</source>
+        <translation>Skala registrert</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="355"/>
+        <source>Measurement points recorded</source>
+        <translation>Målepunkter registrert</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="359"/>
+        <source>QC signals: {signals}</source>
+        <translation>Kvalitetskontroll: {signals}</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="360"/>
+        <source>No extra QC metadata</source>
+        <translation>Ingen ekstra kvalitetskontroll-metadata</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="373"/>
+        <source>No raw point data returned.</source>
+        <translation>Ingen rå punktdata returnert.</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="407"/>
+        <source>Calibration details come from image/objective metadata in the synced observation dataset.</source>
+        <translation>Kalibreringsdetaljer hentes fra bilde-/objektivmetadata i det synkroniserte observasjonsdatasettet.</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="410"/>
+        <source>Reference rows currently expose summary values only.</source>
+        <translation>Referanserader viser for øyeblikket kun sammendragsverdier.</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="420"/>
+        <source>Imported reference values are currently treated as shared reference material.</source>
+        <translation>Importerte referanseverdier behandles for øyeblikket som delt referansemateriale.</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="423"/>
+        <source>Location and private observation content are intentionally excluded from this review flow.</source>
+        <translation>Sted og privat observasjonsinnhold er bevisst utelatt fra denne gjennomgangsflyten.</translation>
+    </message>
+</context>
+<context>
+    <name>AddReferenceDialog</name>
     <message>
         <location filename="../ui/add_reference_dialog.py" line="290"/>
+        <location filename="../ui/add_reference_dialog.py" line="529"/>
+        <source>Add reference</source>
+        <translation>Legg til referanse</translation>
+    </message>
+    <message>
+        <location filename="../ui/add_reference_dialog.py" line="292"/>
+        <location filename="../ui/add_reference_dialog.py" line="527"/>
+        <source>Add reference — {taxon}</source>
+        <translation>Legg til referanse – {taxon}</translation>
+    </message>
+    <message>
+        <location filename="../ui/add_reference_dialog.py" line="314"/>
+        <source>Library</source>
+        <translation>Bibliotek</translation>
+    </message>
+    <message>
+        <location filename="../ui/add_reference_dialog.py" line="316"/>
+        <source>Community</source>
+        <translation>Fellesskap</translation>
+    </message>
+    <message>
+        <location filename="../ui/add_reference_dialog.py" line="319"/>
         <source>My observations</source>
-        <translation type="unfinished"></translation>
+        <translation>Mine observasjoner</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="294"/>
+        <location filename="../ui/add_reference_dialog.py" line="322"/>
+        <source>Coming in a later stage</source>
+        <translation>Kommer i et senere trinn</translation>
+    </message>
+    <message>
+        <location filename="../ui/add_reference_dialog.py" line="323"/>
         <source>Enter manually</source>
-        <translation type="unfinished"></translation>
+        <translation>Skriv inn manuelt</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="302"/>
+        <location filename="../ui/add_reference_dialog.py" line="331"/>
         <source>Cancel</source>
-        <translation type="unfinished">Avbryt</translation>
+        <translation>Avbryt</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="305"/>
+        <location filename="../ui/add_reference_dialog.py" line="334"/>
         <source>Add to plot</source>
-        <translation type="unfinished"></translation>
+        <translation>Legg til i diagram</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="339"/>
-        <source>Filter by publication, taxon, or raw expression…</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/add_reference_dialog.py" line="419"/>
+        <source>Compare against:</source>
+        <translation>Sammenlign med:</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="344"/>
-        <source>Only this taxon</source>
-        <translation type="unfinished">Bare denne taxonen</translation>
+        <location filename="../ui/add_reference_dialog.py" line="425"/>
+        <source>Choose which taxon&apos;s published spore data to compare against -- an AI suggestion, or type a genus and species. This never changes the observation&apos;s own identification.</source>
+        <translation>Velg hvilken takson sine publiserte sporedata du vil sammenligne med – et AI-forslag, eller skriv inn slekt og art. Dette endrer aldri observasjonens egen identifikasjon.</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="390"/>
-        <source>+ New publication…</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/add_reference_dialog.py" line="450"/>
+        <source>This observation: {taxon}</source>
+        <translation>Denne observasjonen: {taxon}</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="397"/>
-        <source>No matching measurement sets in the library.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/add_reference_dialog.py" line="399"/>
-        <source>The reference library has no measurement sets yet.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/add_reference_dialog.py" line="406"/>
         <location filename="../ui/add_reference_dialog.py" line="452"/>
+        <source>This observation&apos;s taxon</source>
+        <translation>Denne observasjonens takson</translation>
+    </message>
+    <message>
+        <location filename="../ui/add_reference_dialog.py" line="562"/>
+        <source>Filter by publication, taxon, or raw expression…</source>
+        <translation>Filtrer etter publikasjon, takson eller råuttrykk…</translation>
+    </message>
+    <message>
+        <location filename="../ui/add_reference_dialog.py" line="567"/>
+        <source>Only this taxon</source>
+        <translation>Kun denne taksonen</translation>
+    </message>
+    <message>
+        <location filename="../ui/add_reference_dialog.py" line="623"/>
+        <source>+ New publication…</source>
+        <translation>+ Ny publikasjon…</translation>
+    </message>
+    <message>
+        <location filename="../ui/add_reference_dialog.py" line="630"/>
+        <source>No matching measurement sets in the library.</source>
+        <translation>Ingen samsvarende målesett i biblioteket.</translation>
+    </message>
+    <message>
+        <location filename="../ui/add_reference_dialog.py" line="632"/>
+        <source>The reference library has no measurement sets yet.</source>
+        <translation>Referansebiblioteket har ingen målesett ennå.</translation>
+    </message>
+    <message>
+        <location filename="../ui/add_reference_dialog.py" line="639"/>
+        <location filename="../ui/add_reference_dialog.py" line="689"/>
         <source>Untitled</source>
-        <translation type="unfinished"></translation>
+        <translation>Uten tittel</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="459"/>
-        <location filename="../ui/add_reference_dialog.py" line="649"/>
+        <location filename="../ui/add_reference_dialog.py" line="696"/>
+        <location filename="../ui/add_reference_dialog.py" line="906"/>
         <source>Length</source>
-        <translation type="unfinished">Lengde</translation>
+        <translation>Lengde</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="460"/>
-        <location filename="../ui/add_reference_dialog.py" line="650"/>
+        <location filename="../ui/add_reference_dialog.py" line="697"/>
+        <location filename="../ui/add_reference_dialog.py" line="907"/>
         <source>Width</source>
-        <translation type="unfinished">Bredde</translation>
+        <translation>Bredde</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="461"/>
-        <location filename="../ui/add_reference_dialog.py" line="651"/>
+        <location filename="../ui/add_reference_dialog.py" line="698"/>
+        <location filename="../ui/add_reference_dialog.py" line="908"/>
         <source>Q</source>
-        <translation type="unfinished">Q</translation>
+        <translation>Q</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="474"/>
+        <location filename="../ui/add_reference_dialog.py" line="711"/>
         <source>No additional notes.</source>
-        <translation type="unfinished"></translation>
+        <translation>Ingen tilleggsnotater.</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="482"/>
+        <location filename="../ui/add_reference_dialog.py" line="719"/>
         <source>This is a range summary; no raw spore points are stored.</source>
-        <translation type="unfinished"></translation>
+        <translation>Dette er et intervallsammendrag; ingen rå sporepunkter er lagret.</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="494"/>
+        <location filename="../ui/add_reference_dialog.py" line="731"/>
         <source>No calibration details recorded.</source>
-        <translation type="unfinished"></translation>
+        <translation>Ingen kalibreringsdetaljer registrert.</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="497"/>
+        <location filename="../ui/add_reference_dialog.py" line="734"/>
         <source>Publication: {work}</source>
-        <translation type="unfinished"></translation>
+        <translation>Publikasjon: {work}</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="536"/>
+        <location filename="../ui/add_reference_dialog.py" line="773"/>
         <source>New publication</source>
-        <translation type="unfinished">Ny publikasjon</translation>
+        <translation>Ny publikasjon</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="537"/>
+        <location filename="../ui/add_reference_dialog.py" line="774"/>
         <source>Reference library editor is unavailable: {error}</source>
-        <translation type="unfinished">Redigeringsprogrammet for referansebiblioteket er utilgjengelig: {error}</translation>
+        <translation>Referansebibliotek-redigering er utilgjengelig: {error}</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="589"/>
+        <location filename="../ui/add_reference_dialog.py" line="846"/>
         <source>No previous observations of this taxon have spore measurements.</source>
         <translation>Ingen tidligere observasjoner av denne taksonen har sporemålinger.</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="596"/>
-        <location filename="../ui/add_reference_dialog.py" line="637"/>
+        <location filename="../ui/add_reference_dialog.py" line="853"/>
+        <location filename="../ui/add_reference_dialog.py" line="894"/>
         <source>My observation — {author}</source>
         <translation>Min observasjon — {author}</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="598"/>
-        <location filename="../ui/add_reference_dialog.py" line="639"/>
+        <location filename="../ui/add_reference_dialog.py" line="855"/>
+        <location filename="../ui/add_reference_dialog.py" line="896"/>
         <source>My observation</source>
         <translation>Min observasjon</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="601"/>
+        <location filename="../ui/add_reference_dialog.py" line="858"/>
         <source>n = {count}</source>
         <translation>n = {count}</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="661"/>
+        <location filename="../ui/add_reference_dialog.py" line="918"/>
         <source>n = {count} spore measurements</source>
         <translation>n = {count} sporemålinger</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="676"/>
+        <location filename="../ui/add_reference_dialog.py" line="933"/>
         <source>Not applicable: this is a personal observation, not a normalized library entry.</source>
         <translation>Ikke relevant: dette er en personlig observasjon, ikke en normalisert biblioteksoppføring.</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="679"/>
+        <location filename="../ui/add_reference_dialog.py" line="936"/>
         <source>Personal observation, {date}</source>
         <translation>Personlig observasjon, {date}</translation>
     </message>
     <message>
-        <location filename="../ui/add_reference_dialog.py" line="681"/>
+        <location filename="../ui/add_reference_dialog.py" line="938"/>
         <source>Personal observation</source>
         <translation>Personlig observasjon</translation>
     </message>
@@ -2616,6 +2745,257 @@ Vil du oppdatere disse bildene til å bruke den nye kalibreringen og beregne må
     </message>
 </context>
 <context>
+    <name>CloudReferenceDialog</name>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="453"/>
+        <source>Search Community Spore Data</source>
+        <translation>Søk i fellesskapets sporedata</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="483"/>
+        <source>Search public and friend-visible community spore datasets, review measurement quality, and import only after checking the method and calibration context.</source>
+        <translation>Søk i offentlige og vennesynlige fellesskapsdatasett for sporer, vurder målekvaliteten, og importer først etter å ha sjekket metode og kalibreringskontekst.</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="502"/>
+        <source>e.g., Flammulina</source>
+        <translation>f.eks. Flammulina</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="504"/>
+        <location filename="../ui/cloud_reference_dialog.py" line="709"/>
+        <source>e.g., velutipes</source>
+        <translation>f.eks. velutipes</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="507"/>
+        <source>Genus:</source>
+        <translation>Slekt:</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="508"/>
+        <source>Species:</source>
+        <translation>Art:</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="514"/>
+        <source>Search</source>
+        <translation>Søk</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="536"/>
+        <source>Results</source>
+        <translation>Resultater</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="543"/>
+        <source>Source</source>
+        <translation>Kilde</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="543"/>
+        <source>n</source>
+        <translation>n</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="543"/>
+        <source>Q / L-W</source>
+        <translation>Q / L-B</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="543"/>
+        <source>Contributor</source>
+        <translation>Bidragsyter</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="569"/>
+        <source>Review</source>
+        <translation>Gjennomgang</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="588"/>
+        <source>Import summary as reference</source>
+        <translation>Importer sammendrag som referanse</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="593"/>
+        <source>Use raw points for plot</source>
+        <translation>Bruk rådata-punkter i diagram</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="598"/>
+        <source>Close</source>
+        <translation>Lukk</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="679"/>
+        <source>Common name</source>
+        <translation>Vanlig navn</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1061"/>
+        <source>Missing Genus</source>
+        <translation>Manglende slekt</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1062"/>
+        <source>Enter at least a genus to search community spore data.</source>
+        <translation>Skriv inn minst én slekt for å søke i fellesskapets sporedata.</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1072"/>
+        <source>Searching community spore data...</source>
+        <translation>Søker i fellesskapets sporedata …</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1087"/>
+        <source>Found {count} community source(s). Select one to review before importing.</source>
+        <translation>Fant {count} fellesskapskilde(r). Velg én for gjennomgang før import.</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1093"/>
+        <source>Community aggregate: {datasets} dataset(s), n={count}.</source>
+        <translation>Fellesskapsaggregat: {datasets} datasett, n={count}.</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1099"/>
+        <source>Use Import summary to save a local reference, or Use raw points for a temporary comparison plot.</source>
+        <translation>Bruk «Importer sammendrag» for å lagre en lokal referanse, eller «Bruk rådata-punkter» for et midlertidig sammenligningsdiagram.</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1106"/>
+        <source>No community spore results found for {taxon}.</source>
+        <translation>Ingen fellesskapsresultater for sporer funnet for {taxon}.</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1112"/>
+        <source>Community search failed.</source>
+        <translation>Fellesskapssøk mislyktes.</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1125"/>
+        <source>Loading review details...</source>
+        <translation>Laster gjennomgangsdetaljer …</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1127"/>
+        <source>Loading dataset details...</source>
+        <translation>Laster datasettdetaljer …</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1143"/>
+        <source>Could not load dataset</source>
+        <translation>Kunne ikke laste datasett</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1145"/>
+        <source>This result could not be reviewed.</source>
+        <translation>Dette resultatet kunne ikke gjennomgås.</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1165"/>
+        <source>Review complete. Import summary saves a local reference; Use raw points adds a temporary comparison plot.</source>
+        <translation>Gjennomgang fullført. «Importer sammendrag» lagrer en lokal referanse; «Bruk rådata-punkter» legger til et midlertidig sammenligningsdiagram.</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1186"/>
+        <location filename="../ui/cloud_reference_dialog.py" line="1195"/>
+        <source>Missing Data</source>
+        <translation>Manglende data</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1186"/>
+        <source>No summary data is loaded for import.</source>
+        <translation>Ingen sammendragsdata er lastet for import.</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1195"/>
+        <source>No raw spore points are available for plotting.</source>
+        <translation>Ingen rå sporepunkter er tilgjengelige for diagram.</translation>
+    </message>
+</context>
+<context>
+    <name>CommunityResultsPane</name>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1275"/>
+        <source>Range summary</source>
+        <translation>Intervallsammendrag</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1276"/>
+        <source>Raw points (n=0)</source>
+        <translation>Rådata-punkter (n=0)</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1332"/>
+        <source>No taxon selected — enter a genus and species first.</source>
+        <translation>Ingen takson valgt – skriv inn slekt og art først.</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1335"/>
+        <source>Searching community spore data...</source>
+        <translation>Søker i fellesskapets sporedata …</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1382"/>
+        <source>Community search failed.</source>
+        <translation>Fellesskapssøk mislyktes.</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1387"/>
+        <source>Found {count} community source(s). Select one to review before adding.</source>
+        <translation>Fant {count} fellesskapskilde(r). Velg én for gjennomgang før tillegg.</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1392"/>
+        <source>No community spore results found for this taxon.</source>
+        <translation>Ingen fellesskapsresultater for sporer funnet for denne taksonen.</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1398"/>
+        <source>n = {count}</source>
+        <translation>n = {count}</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1401"/>
+        <source>Q {range}</source>
+        <translation>Q {range}</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1449"/>
+        <source>Loading review details...</source>
+        <translation>Laster gjennomgangsdetaljer …</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1452"/>
+        <source>Loading dataset details...</source>
+        <translation>Laster datasettdetaljer …</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1482"/>
+        <source>Could not load dataset</source>
+        <translation>Kunne ikke laste datasett</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1485"/>
+        <source>This result could not be reviewed.</source>
+        <translation>Dette resultatet kunne ikke gjennomgås.</translation>
+    </message>
+    <message>
+        <location filename="../ui/cloud_reference_dialog.py" line="1507"/>
+        <source>Raw points (n={count})</source>
+        <translation>Rådata-punkter (n={count})</translation>
+    </message>
+</context>
+<context>
+    <name>ComparisonListWidget</name>
+    <message>
+        <location filename="../ui/comparison_panel.py" line="331"/>
+        <source>Reference data applies to spore measurements.</source>
+        <translation>Referansedata gjelder sporemålinger.</translation>
+    </message>
+</context>
+<context>
     <name>DatabaseBundleOptionsDialog</name>
     <message>
         <location filename="../ui/main_window.py" line="882"/>
@@ -4008,27 +4388,27 @@ Mangler skala: {missing}</translation>
         <translation>Kalibrering</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="20478"/>
+        <location filename="../ui/main_window.py" line="20551"/>
         <source>Spores</source>
         <translation>Sporer</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="20585"/>
+        <location filename="../ui/main_window.py" line="20658"/>
         <source>No measurements</source>
         <translation>Ingen målinger</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="21680"/>
+        <location filename="../ui/main_window.py" line="21753"/>
         <source>Profile</source>
         <translation>Profil</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="21693"/>
+        <location filename="../ui/main_window.py" line="21766"/>
         <source>Name</source>
         <translation>Navn</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="21694"/>
+        <location filename="../ui/main_window.py" line="21767"/>
         <source>Email</source>
         <translation>E-post</translation>
     </message>
@@ -4102,20 +4482,20 @@ Nyeste versjon: {latest}</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="8464"/>
-        <location filename="../ui/main_window.py" line="13922"/>
-        <location filename="../ui/main_window.py" line="13945"/>
+        <location filename="../ui/main_window.py" line="13987"/>
+        <location filename="../ui/main_window.py" line="14010"/>
         <source>Calibration: --</source>
         <translation>Kalibrering: --</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="9351"/>
-        <location filename="../ui/main_window.py" line="22427"/>
+        <location filename="../ui/main_window.py" line="22500"/>
         <source>Axis equal</source>
         <translation>Lik akse</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="9352"/>
-        <location filename="../ui/main_window.py" line="22428"/>
+        <location filename="../ui/main_window.py" line="22501"/>
         <source>Use the same scale on X and Y axes</source>
         <translation>Bruk samme skala på X- og Y-aksen</translation>
     </message>
@@ -4172,47 +4552,47 @@ Nyeste versjon: {latest}</translation>
         <translation>Velg en kilde for denne arten eller legg til en ny kilde.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="10833"/>
+        <location filename="../ui/main_window.py" line="10849"/>
         <source>Remove this plot</source>
         <translation>Fjern dette plottet</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13098"/>
+        <location filename="../ui/main_window.py" line="13163"/>
         <source>The active observation changed while this dialog was open. No normalized library entry was created. Reopen the observation and try again.</source>
         <translation>Den aktive observasjonen ble endret mens dialogboksen var åpen. Ingen normalisert bibliotekoppføring ble opprettet. Åpne observasjonen på nytt og prøv igjen.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13121"/>
+        <location filename="../ui/main_window.py" line="13186"/>
         <source>The observation&apos;s taxon changed while this dialog was open. No normalized library entry was created. Reopen the observation and try again.</source>
         <translation>Observasjonens takson ble endret mens dialogboksen var åpen. Ingen normalisert bibliotekoppføring ble opprettet. Åpne observasjonen på nytt og prøv igjen.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13188"/>
+        <location filename="../ui/main_window.py" line="13253"/>
         <source>The species entered in the panel ({panel}) differs from the observation&apos;s taxon record ({observation}). If you want to record the published name as a synonym or historical name, click Yes. If this is an accidental edit, click No — the normalized library will remain unchanged.</source>
         <translation>Arten som er angitt i panelet ({panel}), er forskjellig fra observasjonens taksonoppføring ({observation}). Hvis du vil registrere det publiserte navnet som et synonym eller historisk navn, klikker du Ja. Hvis dette er en utilsiktet endring, klikker du Nei — det normaliserte biblioteket forblir uendret.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13581"/>
+        <location filename="../ui/main_window.py" line="13646"/>
         <source>Edit selected reference data</source>
         <translation>Rediger valgte referansedata</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13836"/>
+        <location filename="../ui/main_window.py" line="13901"/>
         <source>Not set</source>
         <translation>Ikke satt</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13942"/>
+        <location filename="../ui/main_window.py" line="14007"/>
         <source>Calibration: &lt;a href=&quot;calibration&quot;&gt;{date}&lt;/a&gt;</source>
         <translation>Kalibrering: &lt;a href=&quot;calibration&quot;&gt;{date}&lt;/a&gt;</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13955"/>
+        <location filename="../ui/main_window.py" line="14020"/>
         <source>Scale: {scale:.1f} nm/px</source>
         <translation>Skala: {scale:.1f} nm/px</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13957"/>
+        <location filename="../ui/main_window.py" line="14022"/>
         <source>Scale: -- nm/px</source>
         <translation>Skala: -- nm/px</translation>
     </message>
@@ -4239,13 +4619,13 @@ Nyeste versjon: {latest}</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="9149"/>
-        <location filename="../ui/main_window.py" line="22274"/>
+        <location filename="../ui/main_window.py" line="22347"/>
         <source>Bins:</source>
         <translation>Klasser:</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="9358"/>
-        <location filename="../ui/main_window.py" line="22263"/>
+        <location filename="../ui/main_window.py" line="22336"/>
         <source>Plot settings</source>
         <translation>Plottinnstillinger</translation>
     </message>
@@ -4265,24 +4645,24 @@ Nyeste versjon: {latest}</translation>
         <translation>Orienter</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="15813"/>
+        <location filename="../ui/main_window.py" line="15878"/>
         <source>Stopped - Start measuring</source>
         <translation>Stoppet - start måling</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="16962"/>
+        <location filename="../ui/main_window.py" line="17027"/>
         <source>Show grayscale</source>
         <translation>Vis gråtoner</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="9334"/>
-        <location filename="../ui/main_window.py" line="22399"/>
+        <location filename="../ui/main_window.py" line="22472"/>
         <source>Plot Avg Q</source>
         <translation>Plott gjennomsnitt Q</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="9345"/>
-        <location filename="../ui/main_window.py" line="22408"/>
+        <location filename="../ui/main_window.py" line="22481"/>
         <source>Plot Q min/max</source>
         <translation>Plott Q min/maks</translation>
     </message>
@@ -4292,26 +4672,26 @@ Nyeste versjon: {latest}</translation>
         <translation>Måling</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="19083"/>
-        <location filename="../ui/main_window.py" line="20162"/>
+        <location filename="../ui/main_window.py" line="19156"/>
+        <location filename="../ui/main_window.py" line="20235"/>
         <source>Length (μm)</source>
         <translation>Lengde (μm)</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="19084"/>
-        <location filename="../ui/main_window.py" line="20164"/>
+        <location filename="../ui/main_window.py" line="19157"/>
+        <location filename="../ui/main_window.py" line="20237"/>
         <source>Width (μm)</source>
         <translation>Bredde (μm)</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="9383"/>
-        <location filename="../ui/main_window.py" line="20440"/>
+        <location filename="../ui/main_window.py" line="20513"/>
         <source>Length</source>
         <translation>Lengde</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="9382"/>
-        <location filename="../ui/main_window.py" line="20440"/>
+        <location filename="../ui/main_window.py" line="20513"/>
         <source>Width</source>
         <translation>Bredde</translation>
     </message>
@@ -4331,45 +4711,45 @@ Nyeste versjon: {latest}</translation>
         <translation>Info</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="14438"/>
-        <location filename="../ui/main_window.py" line="14440"/>
+        <location filename="../ui/main_window.py" line="14503"/>
+        <location filename="../ui/main_window.py" line="14505"/>
         <source>Field photo - no scale set</source>
         <translation>Feltfoto - ingen skala satt</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="15910"/>
+        <location filename="../ui/main_window.py" line="15975"/>
         <source>Aborted - Start measuring</source>
         <translation>Avbrutt - start måling</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="15920"/>
+        <location filename="../ui/main_window.py" line="15985"/>
         <source>Start measuring to begin</source>
         <translation>Start måling for å begynne</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="15924"/>
+        <location filename="../ui/main_window.py" line="15989"/>
         <source>Rectangle: Click point 1</source>
         <translation>Rektangel: Klikk punkt 1</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="16202"/>
+        <location filename="../ui/main_window.py" line="16267"/>
         <source>Rectangle: Click point 2</source>
         <translation>Rektangel: Klikk punkt 2</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="16225"/>
+        <location filename="../ui/main_window.py" line="16290"/>
         <source>Rectangle: Set width, click point 3</source>
         <translation>Rektangel: Sett bredde, klikk punkt 3</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="16250"/>
+        <location filename="../ui/main_window.py" line="16315"/>
         <source>Rectangle: Adjust start line, click point 4</source>
         <translation>Rektangel: Juster startlinje, klikk punkt 4</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="16073"/>
-        <location filename="../ui/main_window.py" line="16176"/>
-        <location filename="../ui/main_window.py" line="17582"/>
+        <location filename="../ui/main_window.py" line="16138"/>
+        <location filename="../ui/main_window.py" line="16241"/>
+        <location filename="../ui/main_window.py" line="17647"/>
         <source>Click to measure next</source>
         <translation>Klikk for å måle neste</translation>
     </message>
@@ -4379,7 +4759,7 @@ Nyeste versjon: {latest}</translation>
         <translation>Eksporter galleri</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="20660"/>
+        <location filename="../ui/main_window.py" line="20733"/>
         <source>Save stats</source>
         <translation>Lagre statistikk</translation>
     </message>
@@ -4416,41 +4796,41 @@ Nyeste versjon: {latest}</translation>
         <translation>Vanlig navn</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13648"/>
+        <location filename="../ui/main_window.py" line="13713"/>
         <source>Missing Species</source>
         <translation>Mangler art</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13649"/>
+        <location filename="../ui/main_window.py" line="13714"/>
         <source>Please enter genus and species to save.</source>
         <translation>Vennligst skriv inn slekt og art for å lagre.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="14114"/>
-        <location filename="../ui/main_window.py" line="14154"/>
+        <location filename="../ui/main_window.py" line="14179"/>
+        <location filename="../ui/main_window.py" line="14219"/>
         <source>Warning: Older calibration standard used.</source>
         <translation>Advarsel: Eldre kalibreringsstandard brukt.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="15366"/>
+        <location filename="../ui/main_window.py" line="15431"/>
         <source>Delete image?</source>
         <translation>Slette bilde?</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="15366"/>
+        <location filename="../ui/main_window.py" line="15431"/>
         <source>Confirm Delete</source>
         <translation>Bekreft sletting</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="16887"/>
+        <location filename="../ui/main_window.py" line="16952"/>
         <source>Auto: Edge not found</source>
         <translation>Auto: Kant ikke funnet</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11963"/>
-        <location filename="../ui/main_window.py" line="11966"/>
-        <location filename="../ui/main_window.py" line="11978"/>
-        <location filename="../ui/main_window.py" line="20561"/>
+        <location filename="../ui/main_window.py" line="12026"/>
+        <location filename="../ui/main_window.py" line="12029"/>
+        <location filename="../ui/main_window.py" line="12041"/>
+        <location filename="../ui/main_window.py" line="20634"/>
         <source>Observation</source>
         <translation>Observasjon</translation>
     </message>
@@ -4465,25 +4845,25 @@ Nyeste versjon: {latest}</translation>
         <translation>Datasett</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="10529"/>
-        <location filename="../ui/main_window.py" line="10544"/>
-        <location filename="../ui/main_window.py" line="11415"/>
-        <location filename="../ui/main_window.py" line="11987"/>
+        <location filename="../ui/main_window.py" line="10540"/>
+        <location filename="../ui/main_window.py" line="10555"/>
+        <location filename="../ui/main_window.py" line="11440"/>
+        <location filename="../ui/main_window.py" line="12050"/>
         <source>Reference</source>
         <translation>Referanse</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="12464"/>
+        <location filename="../ui/main_window.py" line="12527"/>
         <source>Personal measurements</source>
         <translation>Egne målinger</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="12468"/>
+        <location filename="../ui/main_window.py" line="12531"/>
         <source>Shared measurements</source>
         <translation>Delte målinger</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="12472"/>
+        <location filename="../ui/main_window.py" line="12535"/>
         <source>Published measurements</source>
         <translation>Publiserte målinger</translation>
     </message>
@@ -4511,7 +4891,7 @@ Nyeste versjon: {latest}</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="8503"/>
-        <location filename="../ui/main_window.py" line="15827"/>
+        <location filename="../ui/main_window.py" line="15892"/>
         <source>Start measuring (M)</source>
         <translation>Start måling (M)</translation>
     </message>
@@ -4527,7 +4907,7 @@ Nyeste versjon: {latest}</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="8657"/>
-        <location filename="../ui/main_window.py" line="14621"/>
+        <location filename="../ui/main_window.py" line="14686"/>
         <source>Length of the displayed scale bar in micrometers.</source>
         <translation>Lengden på den viste skalastreken i mikrometer.</translation>
     </message>
@@ -4538,7 +4918,7 @@ Nyeste versjon: {latest}</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="8673"/>
-        <location filename="../ui/main_window.py" line="16652"/>
+        <location filename="../ui/main_window.py" line="16717"/>
         <source>No image loaded</source>
         <translation>Ingen bilde lastet inn</translation>
     </message>
@@ -4549,33 +4929,33 @@ Nyeste versjon: {latest}</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="9163"/>
-        <location filename="../ui/main_window.py" line="22280"/>
+        <location filename="../ui/main_window.py" line="22353"/>
         <source>Plot:</source>
         <translation>Plot:</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="9166"/>
         <location filename="../ui/main_window.py" line="10104"/>
-        <location filename="../ui/main_window.py" line="22282"/>
-        <location filename="../ui/main_window.py" line="22419"/>
+        <location filename="../ui/main_window.py" line="22355"/>
+        <location filename="../ui/main_window.py" line="22492"/>
         <source>Ellipse</source>
         <translation>Ellipse</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="9167"/>
-        <location filename="../ui/main_window.py" line="22283"/>
+        <location filename="../ui/main_window.py" line="22356"/>
         <source>Kernel density</source>
         <translation>Kernel density</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="9168"/>
-        <location filename="../ui/main_window.py" line="22284"/>
+        <location filename="../ui/main_window.py" line="22357"/>
         <source>Mean range</source>
         <translation>Mean range</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="9190"/>
-        <location filename="../ui/main_window.py" line="22286"/>
+        <location filename="../ui/main_window.py" line="22359"/>
         <source>Show data ellipses for the current specimen and any spore-point reference sets. Coverage is set by the slider below.</source>
         <translation>Show data ellipses for the current specimen and any spore-point reference sets. Coverage is set by the slider below.</translation>
     </message>
@@ -4592,8 +4972,8 @@ Nyeste versjon: {latest}</translation>
     <message>
         <location filename="../ui/main_window.py" line="9206"/>
         <location filename="../ui/main_window.py" line="9286"/>
-        <location filename="../ui/main_window.py" line="22310"/>
-        <location filename="../ui/main_window.py" line="22363"/>
+        <location filename="../ui/main_window.py" line="22383"/>
+        <location filename="../ui/main_window.py" line="22436"/>
         <source>Coverage:</source>
         <translation>Coverage:</translation>
     </message>
@@ -4605,13 +4985,13 @@ Nyeste versjon: {latest}</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="9238"/>
-        <location filename="../ui/main_window.py" line="22327"/>
+        <location filename="../ui/main_window.py" line="22400"/>
         <source>Bandwidth:</source>
         <translation>Bandwidth:</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="9263"/>
-        <location filename="../ui/main_window.py" line="22346"/>
+        <location filename="../ui/main_window.py" line="22419"/>
         <source>Contours:</source>
         <translation>Contours:</translation>
     </message>
@@ -4635,25 +5015,25 @@ Nyeste versjon: {latest}</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="9329"/>
-        <location filename="../ui/main_window.py" line="22395"/>
+        <location filename="../ui/main_window.py" line="22468"/>
         <source>Image color</source>
         <translation>Bildefarge</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="9339"/>
-        <location filename="../ui/main_window.py" line="22403"/>
+        <location filename="../ui/main_window.py" line="22476"/>
         <source>Plot Q 90% range (5%-95%)</source>
         <translation>Plot Q 90% range (5%-95%)</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="9340"/>
-        <location filename="../ui/main_window.py" line="22404"/>
+        <location filename="../ui/main_window.py" line="22477"/>
         <source>Show Q lines for the 5th to 95th percentile range</source>
         <translation>Show Q lines for the 5th to 95th percentile range</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="9346"/>
-        <location filename="../ui/main_window.py" line="22409"/>
+        <location filename="../ui/main_window.py" line="22482"/>
         <source>Show Q lines for the true minimum and maximum values</source>
         <translation>Show Q lines for the true minimum and maximum values</translation>
     </message>
@@ -5030,7 +5410,7 @@ Nyeste versjon: {latest}</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="10025"/>
-        <location filename="../ui/main_window.py" line="12873"/>
+        <location filename="../ui/main_window.py" line="12936"/>
         <source>No AI suggestions</source>
         <translation>Ingen AI-forslag</translation>
     </message>
@@ -5046,13 +5426,13 @@ Nyeste versjon: {latest}</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="10100"/>
-        <location filename="../ui/main_window.py" line="22417"/>
+        <location filename="../ui/main_window.py" line="22490"/>
         <source>Shape:</source>
         <translation>Form:</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="10105"/>
-        <location filename="../ui/main_window.py" line="22420"/>
+        <location filename="../ui/main_window.py" line="22493"/>
         <source>Square</source>
         <translation>Kvadrat</translation>
     </message>
@@ -5102,158 +5482,158 @@ Nyeste versjon: {latest}</translation>
         <translation>Skriv inn en art først for å søke i fellesskapets sporedata</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="10615"/>
+        <location filename="../ui/main_window.py" line="10631"/>
         <source>A</source>
         <translation>A</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="10619"/>
+        <location filename="../ui/main_window.py" line="10635"/>
         <source>Auto ({color})</source>
         <translation>Auto ({color})</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="10657"/>
+        <location filename="../ui/main_window.py" line="10673"/>
         <source>Auto</source>
         <translation>Auto</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="10667"/>
-        <location filename="../ui/main_window.py" line="10710"/>
+        <location filename="../ui/main_window.py" line="10683"/>
+        <location filename="../ui/main_window.py" line="10726"/>
         <source>Darker</source>
         <translation>Darker</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="10668"/>
-        <location filename="../ui/main_window.py" line="10711"/>
+        <location filename="../ui/main_window.py" line="10684"/>
+        <location filename="../ui/main_window.py" line="10727"/>
         <source>Medium</source>
         <translation>Medium</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="10669"/>
-        <location filename="../ui/main_window.py" line="10712"/>
+        <location filename="../ui/main_window.py" line="10685"/>
+        <location filename="../ui/main_window.py" line="10728"/>
         <source>Lighter</source>
         <translation>Lighter</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="10816"/>
+        <location filename="../ui/main_window.py" line="10832"/>
         <source>Show or hide this reference plot</source>
         <translation>Show or hide this reference plot</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="10831"/>
+        <location filename="../ui/main_window.py" line="10847"/>
         <source>Detach from observation</source>
         <translation>Fjern fra observasjon</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="10857"/>
+        <location filename="../ui/main_window.py" line="10873"/>
         <source>Change the plot color</source>
         <translation>Change the plot color</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="10863"/>
+        <location filename="../ui/main_window.py" line="10879"/>
         <source>Update</source>
         <translation>Oppdater</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="10874"/>
+        <location filename="../ui/main_window.py" line="10890"/>
         <source>Update from library</source>
         <translation>Oppdater fra biblioteket</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11054"/>
-        <location filename="../ui/main_window.py" line="11060"/>
+        <location filename="../ui/main_window.py" line="11079"/>
+        <location filename="../ui/main_window.py" line="11085"/>
         <source>Could not detach library reference: {error}</source>
         <translation>Kunne ikke fjerne bibliotekreferansen: {error}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11150"/>
+        <location filename="../ui/main_window.py" line="11175"/>
         <source>This attachment&apos;s persisted snapshot cannot be plotted. Detach it to remove the row.</source>
         <translation>Dette vedleggets vedvarende øyeblikksbilde kan ikke plottes. Løsne den for å fjerne raden.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11156"/>
+        <location filename="../ui/main_window.py" line="11181"/>
         <source>Raw: {raw}</source>
         <translation>Rå: {raw}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11159"/>
+        <location filename="../ui/main_window.py" line="11184"/>
         <source>Role: {role}</source>
         <translation>Rolle: {role}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11167"/>
+        <location filename="../ui/main_window.py" line="11192"/>
         <source>Revision: {revision}</source>
         <translation>Revisjon: {revision}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11171"/>
+        <location filename="../ui/main_window.py" line="11196"/>
         <source>Library update available</source>
         <translation>Bibliotekoppdatering tilgjengelig</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11175"/>
+        <location filename="../ui/main_window.py" line="11200"/>
         <source>Library source unavailable; the saved historical snapshot is still in use.</source>
         <translation>Bibliotekkilden er utilgjengelig; det lagrede historiske øyeblikksbildet er fortsatt i bruk.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11342"/>
-        <location filename="../ui/main_window.py" line="11356"/>
+        <location filename="../ui/main_window.py" line="11367"/>
+        <location filename="../ui/main_window.py" line="11381"/>
         <source>Update library reference</source>
         <translation>Oppdater bibliotekreferanse</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11273"/>
-        <location filename="../ui/main_window.py" line="11344"/>
+        <location filename="../ui/main_window.py" line="11298"/>
+        <location filename="../ui/main_window.py" line="11369"/>
         <source>The active observation changed. Reopen the reference and try again.</source>
         <translation>Den aktive observasjonen ble endret. Åpne referansen på nytt og prøv igjen.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="10879"/>
+        <location filename="../ui/main_window.py" line="10895"/>
         <source>Review successor…</source>
         <translation>Se gjennom etterfølger…</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="10890"/>
+        <location filename="../ui/main_window.py" line="10906"/>
         <source>Review and adopt the latest explicit successor</source>
         <translation>Se gjennom og ta i bruk den nyeste eksplisitte etterfølgeren</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11181"/>
+        <location filename="../ui/main_window.py" line="11206"/>
         <source>A newer successor measurement set is available.</source>
         <translation>Et nyere etterfølgende målesett er tilgjengelig.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11185"/>
+        <location filename="../ui/main_window.py" line="11210"/>
         <source>Multiple successor measurement sets exist; none can be selected automatically.</source>
         <translation>Det finnes flere etterfølgende målesett; ingen kan velges automatisk.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11192"/>
+        <location filename="../ui/main_window.py" line="11217"/>
         <source>The successor chain is cyclic; the historical attachment is unchanged.</source>
         <translation>Etterfølgerkjeden er syklisk; det historiske vedlegget er uendret.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11199"/>
+        <location filename="../ui/main_window.py" line="11224"/>
         <source>The successor source is incomplete; the historical attachment is unchanged.</source>
         <translation>Etterfølgerkilden er ufullstendig; det historiske vedlegget er uendret.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11206"/>
+        <location filename="../ui/main_window.py" line="11231"/>
         <source>The successor cannot be plotted safely; the historical attachment is unchanged.</source>
         <translation>Etterfølgeren kan ikke plottes trygt; det historiske vedlegget er uendret.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11245"/>
+        <location filename="../ui/main_window.py" line="11270"/>
         <source>Review successor measurement set</source>
         <translation>Se gjennom etterfølgende målesett</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11248"/>
+        <location filename="../ui/main_window.py" line="11273"/>
         <source>Adopting the successor replaces this observation&apos;s frozen reference snapshot.</source>
         <translation>Hvis du tar i bruk etterfølgeren, erstattes observasjonens fryste referanseøyeblikksbilde.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11236"/>
+        <location filename="../ui/main_window.py" line="11261"/>
         <source>Currently attached:</source>
         <translation>Tilknyttet nå:</translation>
     </message>
@@ -5268,239 +5648,241 @@ Nyeste versjon: {latest}</translation>
         <translation>Opprett og legg ved referencedata for den aktive observasjonen</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11238"/>
+        <location filename="../ui/main_window.py" line="11263"/>
         <source>Proposed successor:</source>
         <translation>Foreslått etterfølger:</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11254"/>
-        <location filename="../ui/main_window.py" line="11271"/>
-        <location filename="../ui/main_window.py" line="11284"/>
-        <location filename="../ui/main_window.py" line="11293"/>
-        <location filename="../ui/main_window.py" line="11313"/>
+        <location filename="../ui/main_window.py" line="11279"/>
+        <location filename="../ui/main_window.py" line="11296"/>
+        <location filename="../ui/main_window.py" line="11309"/>
+        <location filename="../ui/main_window.py" line="11318"/>
+        <location filename="../ui/main_window.py" line="11338"/>
         <source>Adopt successor</source>
         <translation>Ta i bruk etterfølger</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11285"/>
+        <location filename="../ui/main_window.py" line="11310"/>
         <source>Could not review the successor: {error}</source>
         <translation>Kunne ikke se gjennom etterfølgeren: {error}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11295"/>
+        <location filename="../ui/main_window.py" line="11320"/>
         <source>This successor is no longer available. The historical attachment was not changed.</source>
         <translation>Denne etterfølgeren er ikke lenger tilgjengelig. Det historiske vedlegget ble ikke endret.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11314"/>
+        <location filename="../ui/main_window.py" line="11339"/>
         <source>Could not adopt the successor: {error}</source>
         <translation>Kunne ikke ta i bruk etterfølgeren: {error}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11329"/>
+        <location filename="../ui/main_window.py" line="11354"/>
         <source>Successor measurement set adopted.</source>
         <translation>Etterfølgende målesett er tatt i bruk.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11357"/>
+        <location filename="../ui/main_window.py" line="11382"/>
         <source>Could not update from the library: {error}</source>
         <translation>Kunne ikke oppdatere fra biblioteket: {error}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11368"/>
+        <location filename="../ui/main_window.py" line="11393"/>
         <source>Reference snapshot updated from the library.</source>
         <translation>Referanseøyeblikksbildet ble oppdatert fra biblioteket.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11416"/>
+        <location filename="../ui/main_window.py" line="11441"/>
         <source>[!] Unplottable snapshot: {label}</source>
         <translation>[!] Uplottbart øyeblikksbilde: {label}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11440"/>
+        <location filename="../ui/main_window.py" line="11465"/>
         <source>Could not load library references: {error}</source>
         <translation>Kunne ikke laste bibliotekreferanser: {error}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11482"/>
+        <location filename="../ui/main_window.py" line="11507"/>
         <source>Skipped {count} malformed reference attachment(s).</source>
         <translation>Hoppet over {count} ugyldig(e) referansetilknytning(er).</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11603"/>
-        <location filename="../ui/main_window.py" line="11638"/>
-        <location filename="../ui/main_window.py" line="11688"/>
-        <location filename="../ui/main_window.py" line="11730"/>
-        <location filename="../ui/main_window.py" line="11745"/>
-        <location filename="../ui/main_window.py" line="11763"/>
-        <location filename="../ui/main_window.py" line="11774"/>
-        <location filename="../ui/main_window.py" line="11787"/>
-        <location filename="../ui/main_window.py" line="12944"/>
+        <location filename="../ui/main_window.py" line="11666"/>
+        <location filename="../ui/main_window.py" line="11701"/>
+        <location filename="../ui/main_window.py" line="11751"/>
+        <location filename="../ui/main_window.py" line="11793"/>
+        <location filename="../ui/main_window.py" line="11808"/>
+        <location filename="../ui/main_window.py" line="11826"/>
+        <location filename="../ui/main_window.py" line="11837"/>
+        <location filename="../ui/main_window.py" line="11850"/>
+        <location filename="../ui/main_window.py" line="13007"/>
         <source>Attach library reference</source>
         <translation>Legg ved bibliotekreferanse</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11604"/>
-        <location filename="../ui/main_window.py" line="11731"/>
+        <location filename="../ui/main_window.py" line="11667"/>
+        <location filename="../ui/main_window.py" line="11794"/>
         <source>Select an observation first before attaching a reference.</source>
         <translation>Velg en observasjon før du legger ved en referanse.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11640"/>
+        <location filename="../ui/main_window.py" line="11703"/>
         <source>The active observation changed while the attachment chooser was open. Reopen the observation and try again — no reference was attached.</source>
         <translation>Den aktive observasjonen endret seg mens vedleggsvelgeren var åpen. Åpne observasjonen på nytt og prøv igjen - ingen referanse ble vedlagt.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11690"/>
+        <location filename="../ui/main_window.py" line="11753"/>
         <source>The active observation changed while the reference library was open, so the attachment was cancelled. Re-open the library from the intended observation to try again.</source>
         <translation>Den aktive observasjonen endret seg mens referansebiblioteket var åpent, så vedlegget ble kansellert. Åpne biblioteket på nytt fra den tiltenkte observasjonen for å prøve igjen.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11746"/>
-        <location filename="../ui/main_window.py" line="12945"/>
+        <location filename="../ui/main_window.py" line="11809"/>
+        <location filename="../ui/main_window.py" line="13008"/>
         <source>Could not attach reference: {error}</source>
         <translation>Kunne ikke legge ved referansen: {error}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11765"/>
+        <location filename="../ui/main_window.py" line="11828"/>
         <source>Attachment could not be plotted and the rollback of the persisted row failed: {error}. The row with id {use_id} may still be present; please detach it manually.</source>
         <translation>Vedlegg kunne ikke plottes og tilbakeføringen av den vedvarende raden mislyktes: {error}. Raden med ID {use_id} kan fortsatt være til stede; vennligst koble den fra manuelt.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11775"/>
+        <location filename="../ui/main_window.py" line="11838"/>
         <source>The attachment snapshot could not be translated for the plot.</source>
         <translation>Referansetilknytningens øyeblikksbilde kunne ikke omgjøres til et plott.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11789"/>
+        <location filename="../ui/main_window.py" line="11852"/>
         <source>This reference is already attached but its stored snapshot cannot be plotted. It is shown as a warning row so you can detach it.</source>
         <translation>Denne referansen er allerede vedlagt, men dets lagrede øyeblikksbilde kan ikke plottes. Den vises som en advarselsrad slik at du kan ta den av.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="12480"/>
+        <location filename="../ui/main_window.py" line="12543"/>
         <source>My data</source>
         <translation>My data</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="12871"/>
+        <location filename="../ui/main_window.py" line="12934"/>
         <source>Select an AI suggestion...</source>
         <translation>Velg et AI-forslag...</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13017"/>
-        <location filename="../ui/main_window.py" line="13030"/>
-        <location filename="../ui/main_window.py" line="13096"/>
-        <location filename="../ui/main_window.py" line="13119"/>
-        <location filename="../ui/main_window.py" line="13153"/>
-        <location filename="../ui/main_window.py" line="13186"/>
-        <location filename="../ui/main_window.py" line="13238"/>
-        <location filename="../ui/main_window.py" line="13268"/>
-        <location filename="../ui/main_window.py" line="13287"/>
-        <location filename="../ui/main_window.py" line="13310"/>
-        <location filename="../ui/main_window.py" line="13341"/>
-        <location filename="../ui/main_window.py" line="13356"/>
-        <location filename="../ui/main_window.py" line="13399"/>
-        <location filename="../ui/main_window.py" line="13512"/>
-        <location filename="../ui/main_window.py" line="13539"/>
-        <location filename="../ui/main_window.py" line="13634"/>
+        <location filename="../ui/main_window.py" line="13080"/>
+        <location filename="../ui/main_window.py" line="13093"/>
+        <location filename="../ui/main_window.py" line="13161"/>
+        <location filename="../ui/main_window.py" line="13184"/>
+        <location filename="../ui/main_window.py" line="13218"/>
+        <location filename="../ui/main_window.py" line="13251"/>
+        <location filename="../ui/main_window.py" line="13303"/>
+        <location filename="../ui/main_window.py" line="13333"/>
+        <location filename="../ui/main_window.py" line="13352"/>
+        <location filename="../ui/main_window.py" line="13375"/>
+        <location filename="../ui/main_window.py" line="13406"/>
+        <location filename="../ui/main_window.py" line="13421"/>
+        <location filename="../ui/main_window.py" line="13464"/>
+        <location filename="../ui/main_window.py" line="13577"/>
+        <location filename="../ui/main_window.py" line="13604"/>
+        <location filename="../ui/main_window.py" line="13699"/>
         <source>Reference library</source>
         <translation>Referansebibliotek</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13154"/>
+        <location filename="../ui/main_window.py" line="13219"/>
         <source>Could not build the normalized measurement set: {error}</source>
         <translation>Kunne ikke bygge det normaliserte målesettet: {error}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13239"/>
-        <location filename="../ui/main_window.py" line="13513"/>
+        <location filename="../ui/main_window.py" line="13304"/>
+        <location filename="../ui/main_window.py" line="13578"/>
         <source>Could not add the library reference: {error}</source>
         <translation>Kunne ikke legge til bibliotekreferansen: {error}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13269"/>
+        <location filename="../ui/main_window.py" line="13334"/>
         <source>Could not read treatments: {error}</source>
         <translation>Kunne ikke lese behandlinger: {error}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13289"/>
+        <location filename="../ui/main_window.py" line="13354"/>
         <source>This publication already has more than one treatment matching the observation&apos;s taxon. Open the reference library manager to pick one and attach it manually.</source>
         <translation>Denne publikasjonen har allerede mer enn én behandling som samsvarer med observasjonens takson. Åpne referansebibliotekbehandlingen for å velge en og legg den ved manuelt.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13262"/>
+        <location filename="../ui/main_window.py" line="13327"/>
         <source>Unspecified taxon</source>
         <translation>Uspesifisert takson</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="10180"/>
         <source>Add reference…</source>
-        <translation type="unfinished"></translation>
+        <translation>Legg til referanse…</translation>
     </message>
     <message>
         <location filename="../ui/main_window.py" line="10184"/>
         <source>Search the reference library, community data, or your own observations for a reference to plot</source>
-        <translation type="unfinished"></translation>
+        <translation>Søk i referansebiblioteket, fellesskapsdata eller dine egne observasjoner etter en referanse å legge i diagrammet</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="10951"/>
+        <location filename="../ui/main_window.py" line="10976"/>
         <source>This observation</source>
         <translation>Denne observasjonen</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11501"/>
-        <location filename="../ui/main_window.py" line="11521"/>
-        <location filename="../ui/main_window.py" line="11577"/>
+        <location filename="../ui/main_window.py" line="11536"/>
+        <location filename="../ui/main_window.py" line="11564"/>
+        <location filename="../ui/main_window.py" line="11589"/>
+        <location filename="../ui/main_window.py" line="11640"/>
         <source>Add reference</source>
-        <translation type="unfinished"></translation>
+        <translation>Legg til referanse</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11502"/>
+        <location filename="../ui/main_window.py" line="11537"/>
         <source>Select an observation first before adding a reference.</source>
-        <translation type="unfinished"></translation>
+        <translation>Velg en observasjon først før du legger til en referanse.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11523"/>
+        <location filename="../ui/main_window.py" line="11566"/>
+        <location filename="../ui/main_window.py" line="11591"/>
         <source>The active observation changed while the picker was open. Reopen the observation and try again — no reference was attached.</source>
-        <translation type="unfinished"></translation>
+        <translation>Den aktive observasjonen endret seg mens velgeren var åpen. Åpne observasjonen på nytt og prøv igjen – ingen referanse ble lagt til.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="11578"/>
+        <location filename="../ui/main_window.py" line="11641"/>
         <source>This observation has no usable spore measurements.</source>
         <translation>Denne observasjonen har ingen brukbare sporemålinger.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13006"/>
+        <location filename="../ui/main_window.py" line="13069"/>
         <source>Assign reference to library</source>
         <translation>Tilknytt referanse til bibliotek</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13019"/>
+        <location filename="../ui/main_window.py" line="13082"/>
         <source>This reference was not plotted because it needs a publication assignment before it can be attached to the observation.</source>
         <translation>Denne referansen ble ikke plottet fordi den trenger en publikasjonstilknytning før den kan knyttes til observasjonen.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13032"/>
+        <location filename="../ui/main_window.py" line="13095"/>
         <source>This reference was not plotted because a publication assignment is required for a durable observation comparison.</source>
         <translation>Denne referansen ble ikke plottet fordi en publikasjonstilknytning er nødvendig for en varig observasjonssammenligning.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13311"/>
+        <location filename="../ui/main_window.py" line="13376"/>
         <source>Could not create treatment: {error}</source>
         <translation>Kunne ikke opprette behandling: {error}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13343"/>
+        <location filename="../ui/main_window.py" line="13408"/>
         <source>Could not create measurement set ({error}); the compensating cleanup of taxon_treatment {tid} also failed ({rollback}). Please review the reference library manager.</source>
         <translation>Kunne ikke opprette målesett ({error}); den kompenserende oppryddingen av taxon_treatment {tid} mislyktes også ({rollback}). Se gjennom referansebiblioteksjefen.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13357"/>
+        <location filename="../ui/main_window.py" line="13422"/>
         <source>Could not create measurement set: {error}</source>
         <translation>Kunne ikke opprette målesett: {error}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13401"/>
+        <location filename="../ui/main_window.py" line="13466"/>
         <source>Attachment failed and the compensating cleanup could not fully roll back. The following rows may still be present and should be reviewed in the reference library manager:
 
 {errors}</source>
@@ -5509,527 +5891,527 @@ Nyeste versjon: {latest}</translation>
 {errors}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13540"/>
-        <location filename="../ui/main_window.py" line="13635"/>
+        <location filename="../ui/main_window.py" line="13605"/>
+        <location filename="../ui/main_window.py" line="13700"/>
         <source>Reference stored locally, but library sync failed: {error}</source>
         <translation>Referanse lagret lokalt, men biblioteksynkronisering mislyktes: {error}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13715"/>
+        <location filename="../ui/main_window.py" line="13780"/>
         <source>Measurement Fine tune</source>
         <translation>Finjustering av måling</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13734"/>
+        <location filename="../ui/main_window.py" line="13799"/>
         <source>Measurements</source>
         <translation>Målinger</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="13837"/>
+        <location filename="../ui/main_window.py" line="13902"/>
         <source>From scalebar</source>
         <translation>Fra skalastrek</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="14202"/>
+        <location filename="../ui/main_window.py" line="14267"/>
         <source>No stain</source>
         <translation>Ingen farging</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="14219"/>
+        <location filename="../ui/main_window.py" line="14284"/>
         <source>Objective</source>
         <translation>Objektiv</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="14225"/>
+        <location filename="../ui/main_window.py" line="14290"/>
         <source>Contrast</source>
         <translation>Kontrast</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="14382"/>
+        <location filename="../ui/main_window.py" line="14447"/>
         <source>Warning: Image resolution mismatch!</source>
         <translation>Advarsel: Oppløsningen stemmer ikke!</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="14385"/>
+        <location filename="../ui/main_window.py" line="14450"/>
         <source>Calibration image: {cal}MP. This image: {img}MP. This is ok if you are working on a cropped image.</source>
         <translation>Kalibreringsbilde: {cal}MP. Dette bildet: {img}MP. Dette er ok hvis du arbeider med et beskåret bilde.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="14463"/>
+        <location filename="../ui/main_window.py" line="14528"/>
         <source>Scale: {scale:.3f} mm/px</source>
         <translation>Skala: {scale:.3f} mm/px</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="14465"/>
+        <location filename="../ui/main_window.py" line="14530"/>
         <source>Scale: -- mm/px</source>
         <translation>Skala: -- mm/px</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="14613"/>
+        <location filename="../ui/main_window.py" line="14678"/>
         <source>Length of the displayed scale bar in millimeters.</source>
         <translation>Lengde på vist målestokk i millimeter.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="15330"/>
+        <location filename="../ui/main_window.py" line="15395"/>
         <source>Selected images will be edited</source>
         <translation>Valgte bilder vil bli redigert</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="15385"/>
+        <location filename="../ui/main_window.py" line="15450"/>
         <source>Delete failed</source>
         <translation>Delete failed</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="15386"/>
+        <location filename="../ui/main_window.py" line="15451"/>
         <source>Could not delete image: {error}</source>
         <translation>Could not delete image: {error}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="15499"/>
+        <location filename="../ui/main_window.py" line="15564"/>
         <source>{n} observations selected</source>
         <translation>{n} observasjoner valgt</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="15822"/>
+        <location filename="../ui/main_window.py" line="15887"/>
         <source>Stop measuring (M)</source>
         <translation>Stopp måling (M)</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="15857"/>
+        <location filename="../ui/main_window.py" line="15922"/>
         <source>Set scale first using &apos;Set from scalebar&apos;.</source>
         <translation>Sett først skala med &apos;Sett fra målestokk&apos;.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="15861"/>
+        <location filename="../ui/main_window.py" line="15926"/>
         <source>Set scale first (objective or &apos;Set from scalebar&apos;).</source>
         <translation>Sett først skala (objektiv eller &apos;Sett fra målestokk&apos;).</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="15927"/>
+        <location filename="../ui/main_window.py" line="15992"/>
         <source>Multi-line: Click start point</source>
         <translation>Flerlinje: Klikk startpunkt</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="15930"/>
-        <location filename="../ui/main_window.py" line="15992"/>
+        <location filename="../ui/main_window.py" line="15995"/>
+        <location filename="../ui/main_window.py" line="16057"/>
         <source>Line: Click start point</source>
         <translation>Linje: Klikk startpunkt</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="15978"/>
+        <location filename="../ui/main_window.py" line="16043"/>
         <source>Multi-line: Click next point, Right-click to finish</source>
         <translation>Flerlinje: Klikk neste punkt, høyreklikk for å avslutte</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="16002"/>
+        <location filename="../ui/main_window.py" line="16067"/>
         <source>Line: Click end point</source>
         <translation>Linje: Klikk endepunkt</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="16934"/>
+        <location filename="../ui/main_window.py" line="16999"/>
         <source>Auto Measure Debug</source>
         <translation>Feilsøking for automåling</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="16956"/>
+        <location filename="../ui/main_window.py" line="17021"/>
         <source>Threshold:</source>
         <translation>Terskel:</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="17625"/>
+        <location filename="../ui/main_window.py" line="17690"/>
         <source>Changing calibration</source>
         <translation>Endrer kalibrering</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="17627"/>
+        <location filename="../ui/main_window.py" line="17692"/>
         <source>You changed the calibration measurement. Do you want to rescale all other measurements for this image to match the new scale?</source>
         <translation>Du endret kalibreringsmålingen. Vil du skalere alle andre målinger for dette bildet på nytt slik at de matcher den nye skalaen?</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="17630"/>
+        <location filename="../ui/main_window.py" line="17695"/>
         <source>Rescale</source>
         <translation>Skaler på nytt</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="17631"/>
+        <location filename="../ui/main_window.py" line="17696"/>
         <source>Keep as-is</source>
         <translation>Behold som den er</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="17842"/>
-        <location filename="../ui/main_window.py" line="17870"/>
+        <location filename="../ui/main_window.py" line="17907"/>
+        <location filename="../ui/main_window.py" line="17935"/>
         <source>All except spores</source>
         <translation>All except spores</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="18075"/>
-        <location filename="../ui/main_window.py" line="21951"/>
+        <location filename="../ui/main_window.py" line="18140"/>
+        <location filename="../ui/main_window.py" line="22024"/>
         <source>Refreshing spore plot and gallery...</source>
         <translation>Oppdaterer sporeplott og galleri...</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="18205"/>
+        <location filename="../ui/main_window.py" line="18278"/>
         <source>Rendering spore thumbnails {done}/{total}...</source>
         <translation>Rendrer sporeminiatyrer {done}/{total}...</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="18593"/>
+        <location filename="../ui/main_window.py" line="18666"/>
         <source>Rotate 180</source>
         <translation>Roter 180</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="20640"/>
-        <location filename="../ui/main_window.py" line="20648"/>
+        <location filename="../ui/main_window.py" line="20713"/>
+        <location filename="../ui/main_window.py" line="20721"/>
         <source>No Observation</source>
         <translation>Ingen observasjon</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="20640"/>
-        <location filename="../ui/main_window.py" line="20648"/>
+        <location filename="../ui/main_window.py" line="20713"/>
+        <location filename="../ui/main_window.py" line="20721"/>
         <source>Select an observation first.</source>
         <translation>Velg en observasjon først.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="20672"/>
+        <location filename="../ui/main_window.py" line="20745"/>
         <source>Save Failed</source>
         <translation>Lagring mislyktes</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="20729"/>
+        <location filename="../ui/main_window.py" line="20802"/>
         <source>Edit photo</source>
         <translation>Rediger bilde</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="21099"/>
+        <location filename="../ui/main_window.py" line="21172"/>
         <source>Parmasto specimen: Lm={lm}, Wm={wm}, Qm={qm}</source>
         <translation>Parmasto specimen: Lm={lm}, Wm={wm}, Qm={qm}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="21106"/>
+        <location filename="../ui/main_window.py" line="21179"/>
         <source>Parmasto variation: VindL={vindl}%, VindW={vindw}%, VindE={vinde}%</source>
         <translation>Parmasto variation: VindL={vindl}%, VindW={vindw}%, VindE={vinde}%</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="21128"/>
+        <location filename="../ui/main_window.py" line="21201"/>
         <source>Outlier</source>
         <translation>Outlier</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="21141"/>
+        <location filename="../ui/main_window.py" line="21214"/>
         <source>Parmasto warning: specimen spore shape is more variable than typical (VindE {specimen}% &gt; reference {reference}%).</source>
         <translation>Parmasto warning: specimen spore shape is more variable than typical (VindE {specimen}% &gt; reference {reference}%).</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="21684"/>
+        <location filename="../ui/main_window.py" line="21757"/>
         <source>Name is used for the copyright watermark on images.
 Name and email (optional) are added to observations in the database, useful if you share your observations with others.</source>
         <translation>Navn brukes for opphavsrettsvannmerket pa bilder.
 Navn og e-post (valgfritt) legges til observasjoner i databasen, nyttig hvis du deler observasjonene dine med andre.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="21953"/>
+        <location filename="../ui/main_window.py" line="22026"/>
         <source>Resorting spore thumbnails...</source>
         <translation>Sorterer sporeminiatyrer på nytt...</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="21955"/>
+        <location filename="../ui/main_window.py" line="22028"/>
         <source>Rotating spore thumbnails...</source>
         <translation>Roterer sporeminiatyrer...</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="21957"/>
+        <location filename="../ui/main_window.py" line="22030"/>
         <source>Filtering measurements and refreshing gallery...</source>
         <translation>Filtrerer målinger og oppdaterer galleri...</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="21964"/>
-        <location filename="../ui/main_window.py" line="22723"/>
+        <location filename="../ui/main_window.py" line="22037"/>
+        <location filename="../ui/main_window.py" line="22796"/>
         <source>Updating spore plot...</source>
         <translation>Oppdaterer sporeplott...</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="21998"/>
+        <location filename="../ui/main_window.py" line="22071"/>
         <source>Updating reference overlays...</source>
         <translation>Oppdaterer referanseoverlegg...</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22289"/>
+        <location filename="../ui/main_window.py" line="22362"/>
         <source>Show Gaussian KDE filled density bands for the measured spore distribution.</source>
         <translation>Show Gaussian KDE filled density bands for the measured spore distribution.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22292"/>
+        <location filename="../ui/main_window.py" line="22365"/>
         <source>Parmasto-style mean comparison with mean point, mean Q line, and expected mean range.</source>
         <translation>Parmasto-style mean comparison with mean point, mean Q line, and expected mean range.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22742"/>
+        <location filename="../ui/main_window.py" line="22815"/>
         <source>A Sporely backup is already running.</source>
         <translation>En sikkerhetskopiering av Sporely pågår allerede.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22749"/>
+        <location filename="../ui/main_window.py" line="22822"/>
         <source>Back Up Sporely</source>
         <translation>Sikkerhetskopier Sporely</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22751"/>
-        <location filename="../ui/main_window.py" line="23056"/>
+        <location filename="../ui/main_window.py" line="22824"/>
+        <location filename="../ui/main_window.py" line="23129"/>
         <source>Sporely Backups (*.sporely)</source>
         <translation>Sporely-sikkerhetskopier (*.sporely)</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22759"/>
-        <location filename="../ui/main_window.py" line="22787"/>
+        <location filename="../ui/main_window.py" line="22832"/>
+        <location filename="../ui/main_window.py" line="22860"/>
         <source>Creating Sporely backup…</source>
         <translation>Oppretter Sporely-sikkerhetskopi…</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22774"/>
+        <location filename="../ui/main_window.py" line="22847"/>
         <source>Preparing backup…</source>
         <translation>Forbereder sikkerhetskopi…</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22775"/>
+        <location filename="../ui/main_window.py" line="22848"/>
         <source>Checking backup size and free space…</source>
         <translation>Kontrollerer størrelsen på sikkerhetskopien og ledig plass…</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22776"/>
+        <location filename="../ui/main_window.py" line="22849"/>
         <source>Checking backup files…</source>
         <translation>Kontrollerer sikkerhetskopifiler…</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22777"/>
+        <location filename="../ui/main_window.py" line="22850"/>
         <source>Writing backup…</source>
         <translation>Skriver sikkerhetskopi…</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22778"/>
+        <location filename="../ui/main_window.py" line="22851"/>
         <source>Verifying backup…</source>
         <translation>Verifiserer sikkerhetskopi…</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22779"/>
+        <location filename="../ui/main_window.py" line="22852"/>
         <source>Backup complete.</source>
         <translation>Sikkerhetskopieringen er fullført.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22803"/>
+        <location filename="../ui/main_window.py" line="22876"/>
         <source>Backup created: {name}. {count} referenced files were missing.</source>
         <translation>Sikkerhetskopien ble opprettet: {name}. {count} refererte filer manglet.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22807"/>
+        <location filename="../ui/main_window.py" line="22880"/>
         <source>Backup created: {name}.</source>
         <translation>Sikkerhetskopien ble opprettet: {name}.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22814"/>
+        <location filename="../ui/main_window.py" line="22887"/>
         <source>Backup failed: {error}</source>
         <translation>Sikkerhetskopieringen mislyktes: {error}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22836"/>
+        <location filename="../ui/main_window.py" line="22909"/>
         <source>An observation export is already running.</source>
         <translation>En observasjonseksport kjører allerede.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22842"/>
+        <location filename="../ui/main_window.py" line="22915"/>
         <source>Export Selected Observations</source>
         <translation>Eksporter valgte observasjoner</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22844"/>
+        <location filename="../ui/main_window.py" line="22917"/>
         <source>Sporely Archives (*.sporely)</source>
         <translation>Sporely-arkiver (*.sporely)</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22852"/>
-        <location filename="../ui/main_window.py" line="22880"/>
+        <location filename="../ui/main_window.py" line="22925"/>
+        <location filename="../ui/main_window.py" line="22953"/>
         <source>Exporting selected observations…</source>
         <translation>Eksporterer valgte observasjoner…</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22867"/>
+        <location filename="../ui/main_window.py" line="22940"/>
         <source>Preparing observation export…</source>
         <translation>Forbereder observasjonseksport…</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22868"/>
+        <location filename="../ui/main_window.py" line="22941"/>
         <source>Checking export size and free space…</source>
         <translation>Kontrollerer eksportstørrelse og ledig plass…</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22869"/>
+        <location filename="../ui/main_window.py" line="22942"/>
         <source>Checking export files…</source>
         <translation>Kontrollerer eksportfiler…</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22870"/>
+        <location filename="../ui/main_window.py" line="22943"/>
         <source>Writing observation export…</source>
         <translation>Skriver observasjonseksport…</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22871"/>
+        <location filename="../ui/main_window.py" line="22944"/>
         <source>Verifying observation export…</source>
         <translation>Verifiserer observasjonseksport…</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22872"/>
+        <location filename="../ui/main_window.py" line="22945"/>
         <source>Observation export complete.</source>
         <translation>Observasjonseksport fullført.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22893"/>
+        <location filename="../ui/main_window.py" line="22966"/>
         <source>Observation export created: {name}.</source>
         <translation>Observasjonseksport opprettet: {name}.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22902"/>
+        <location filename="../ui/main_window.py" line="22975"/>
         <source>Observation export failed: {error}</source>
         <translation>Observasjonseksport mislyktes: {error}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22919"/>
+        <location filename="../ui/main_window.py" line="22992"/>
         <source>Import Observations</source>
         <translation>Importer observasjoner</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22922"/>
+        <location filename="../ui/main_window.py" line="22995"/>
         <source>Sporely Archives (*.sporely);;Legacy Sporely Data Packages (*.zip)</source>
         <translation>Sporely-arkiver (*.sporely);;Eldre Sporely-datapakker (*.zip)</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22933"/>
+        <location filename="../ui/main_window.py" line="23006"/>
         <source>The archive could not be identified safely: {error}</source>
         <translation>Arkivet kunne ikke identifiseres på en sikker måte: {error}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22944"/>
-        <location filename="../ui/main_window.py" line="23081"/>
+        <location filename="../ui/main_window.py" line="23017"/>
+        <location filename="../ui/main_window.py" line="23154"/>
         <source>Wrong Archive Type</source>
         <translation>Feil arkivtype</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22946"/>
+        <location filename="../ui/main_window.py" line="23019"/>
         <source>This is a full Sporely backup. Use Restore Sporely Backup instead.</source>
         <translation>Dette er en fullstendig Sporely-sikkerhetskopi. Bruk Gjenopprett Sporely-sikkerhetskopi i stedet.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22954"/>
+        <location filename="../ui/main_window.py" line="23027"/>
         <source>Validating observation archive…</source>
         <translation>Validerer observasjonsarkiv…</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22932"/>
-        <location filename="../ui/main_window.py" line="22973"/>
-        <location filename="../ui/main_window.py" line="22998"/>
+        <location filename="../ui/main_window.py" line="23005"/>
+        <location filename="../ui/main_window.py" line="23046"/>
+        <location filename="../ui/main_window.py" line="23071"/>
         <source>Invalid Sporely Archive</source>
         <translation>Ugyldig Sporely-arkiv</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22974"/>
-        <location filename="../ui/main_window.py" line="22999"/>
+        <location filename="../ui/main_window.py" line="23047"/>
+        <location filename="../ui/main_window.py" line="23072"/>
         <source>The archive could not be validated: {error}</source>
         <translation>Arkivet kunne ikke valideres: {error}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22983"/>
+        <location filename="../ui/main_window.py" line="23056"/>
         <source>Importing observations…</source>
         <translation>Importerer observasjoner…</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23027"/>
+        <location filename="../ui/main_window.py" line="23100"/>
         <source>Import Failed</source>
         <translation>Importen mislyktes</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23028"/>
+        <location filename="../ui/main_window.py" line="23101"/>
         <source>The observations could not be imported: {error}</source>
         <translation>Observasjonene kunne ikke importeres: {error}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23017"/>
+        <location filename="../ui/main_window.py" line="23090"/>
         <source>Observation import complete: {imported} new, {reused} already imported.</source>
         <translation>Observasjonsimporten er fullført: {imported} nye, {reused} allerede importert.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="22889"/>
+        <location filename="../ui/main_window.py" line="22962"/>
         <source>Observation export created: {name}. Missing referenced source files: {count}.</source>
         <translation>Observasjonseksport opprettet: {name}. Manglende refererte kildefiler: {count}.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23043"/>
-        <location filename="../ui/main_window.py" line="23048"/>
-        <location filename="../ui/main_window.py" line="23054"/>
-        <location filename="../ui/main_window.py" line="23085"/>
-        <location filename="../ui/main_window.py" line="23224"/>
+        <location filename="../ui/main_window.py" line="23116"/>
+        <location filename="../ui/main_window.py" line="23121"/>
+        <location filename="../ui/main_window.py" line="23127"/>
+        <location filename="../ui/main_window.py" line="23158"/>
+        <location filename="../ui/main_window.py" line="23297"/>
         <source>Restore Sporely Backup</source>
         <translation>Gjenopprett Sporely-sikkerhetskopi</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23043"/>
+        <location filename="../ui/main_window.py" line="23116"/>
         <source>Wait for the current backup to finish before restoring.</source>
         <translation>Vent til den gjeldende sikkerhetskopieringen er ferdig før du gjenoppretter.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23049"/>
+        <location filename="../ui/main_window.py" line="23122"/>
         <source>A Sporely restore is already being prepared.</source>
         <translation>En Sporely-gjenoppretting klargjøres allerede.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23065"/>
+        <location filename="../ui/main_window.py" line="23138"/>
         <source>Invalid Sporely Backup</source>
         <translation>Ugyldig Sporely-sikkerhetskopi</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23066"/>
+        <location filename="../ui/main_window.py" line="23139"/>
         <source>The backup could not be identified safely: {error}</source>
         <translation>Sikkerhetskopien kunne ikke identifiseres på en sikker måte: {error}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23074"/>
+        <location filename="../ui/main_window.py" line="23147"/>
         <source>Legacy Sporely data packages are not full backups and cannot be restored here.</source>
         <translation>Eldre Sporely-datapakker er ikke fullstendige sikkerhetskopier og kan ikke gjenopprettes her.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23078"/>
+        <location filename="../ui/main_window.py" line="23151"/>
         <source>Observation archives are not full backups and cannot be restored here.</source>
         <translation>Observasjonsarkiver er ikke fullstendige sikkerhetskopier og kan ikke gjenopprettes her.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23085"/>
+        <location filename="../ui/main_window.py" line="23158"/>
         <source>Wait for background work to finish before restoring.</source>
         <translation>Vent til bakgrunnsarbeidet er ferdig før du gjenoppretter.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23091"/>
+        <location filename="../ui/main_window.py" line="23164"/>
         <source>Preparing and validating Sporely backup…</source>
         <translation>Klargjør og validerer Sporely-sikkerhetskopi…</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23299"/>
+        <location filename="../ui/main_window.py" line="23372"/>
         <source>Restore preparation failed.</source>
         <translation>Klargjøring av gjenoppretting mislyktes.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23342"/>
+        <location filename="../ui/main_window.py" line="23415"/>
         <source>The restore could not be rolled back safely. Recovery copies were preserved. Restart Sporely before continuing: {error}</source>
         <translation>Gjenopprettingen kunne ikke tilbakerulles på en trygg måte. Gjenopprettingskopiene ble bevart. Start Sporely på nytt før du fortsetter: {error}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23368"/>
+        <location filename="../ui/main_window.py" line="23441"/>
         <source>Sporely backup restored.</source>
         <translation>Sporely-sikkerhetskopien er gjenopprettet.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23371"/>
+        <location filename="../ui/main_window.py" line="23444"/>
         <source>Restore Complete</source>
         <translation>Gjenoppretting fullført</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23372"/>
+        <location filename="../ui/main_window.py" line="23445"/>
         <source>The backup was restored successfully. Restart Sporely to load the restored installation.
 
 Safety backup: {path}</source>
@@ -6038,94 +6420,94 @@ Safety backup: {path}</source>
 Sikkerhetskopi: {path}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23340"/>
-        <location filename="../ui/main_window.py" line="23379"/>
+        <location filename="../ui/main_window.py" line="23413"/>
+        <location filename="../ui/main_window.py" line="23452"/>
         <source>Restore Failed</source>
         <translation>Gjenoppretting mislyktes</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23379"/>
+        <location filename="../ui/main_window.py" line="23452"/>
         <source>The backup was not restored: {error}</source>
         <translation>Sikkerhetskopien ble ikke gjenopprettet: {error}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23380"/>
+        <location filename="../ui/main_window.py" line="23453"/>
         <source>Restore failed.</source>
         <translation>Gjenoppretting mislyktes.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23423"/>
+        <location filename="../ui/main_window.py" line="23496"/>
         <source>Updated DB.</source>
         <translation>Oppdaterte databasen.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23430"/>
+        <location filename="../ui/main_window.py" line="23503"/>
         <source>; and {count} more</source>
         <translation>; og {count} til</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23431"/>
+        <location filename="../ui/main_window.py" line="23504"/>
         <source>Warnings: {text}</source>
         <translation>Advarsler: {text}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23449"/>
+        <location filename="../ui/main_window.py" line="23522"/>
         <source>Import failed: {error}</source>
         <translation>Import mislyktes: {error}</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23503"/>
+        <location filename="../ui/main_window.py" line="23576"/>
         <source>Measurement deleted</source>
         <translation>Måling slettet</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23659"/>
+        <location filename="../ui/main_window.py" line="23732"/>
         <source>Changing image scale</source>
         <translation>Endrer bildeskala</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23660"/>
+        <location filename="../ui/main_window.py" line="23733"/>
         <source>Changing image scale: This will update previous measurements to match the new scale.</source>
         <translation>Endring av bildeskala: Dette vil oppdatere tidligere målinger slik at de matcher den nye skalaen.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="24113"/>
+        <location filename="../ui/main_window.py" line="24186"/>
         <source>Calibration failed: zero-length line. Try again.</source>
         <translation>Kalibrering mislyktes: linjen har null lengde. Prøv igjen.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="24159"/>
+        <location filename="../ui/main_window.py" line="24232"/>
         <source>Scale set: {scale:.4f} mm/px</source>
         <translation>Skala satt: {scale:.4f} mm/px</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="24161"/>
+        <location filename="../ui/main_window.py" line="24234"/>
         <source>Scale set: {scale:.2f} nm/px</source>
         <translation>Skala satt: {scale:.2f} nm/px</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="21128"/>
-        <location filename="../ui/main_window.py" line="21697"/>
-        <location filename="../ui/main_window.py" line="22433"/>
-        <location filename="../ui/main_window.py" line="23661"/>
+        <location filename="../ui/main_window.py" line="21201"/>
+        <location filename="../ui/main_window.py" line="21770"/>
+        <location filename="../ui/main_window.py" line="22506"/>
+        <location filename="../ui/main_window.py" line="23734"/>
         <source>OK</source>
         <translation>OK</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="21698"/>
-        <location filename="../ui/main_window.py" line="22434"/>
-        <location filename="../ui/main_window.py" line="23662"/>
+        <location filename="../ui/main_window.py" line="21771"/>
+        <location filename="../ui/main_window.py" line="22507"/>
+        <location filename="../ui/main_window.py" line="23735"/>
         <source>Cancel</source>
         <translation>Avbryt</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="14646"/>
-        <location filename="../ui/main_window.py" line="24067"/>
+        <location filename="../ui/main_window.py" line="14711"/>
+        <location filename="../ui/main_window.py" line="24140"/>
         <source>Load an image first to calibrate</source>
         <translation>Last inn et bilde først for å kalibrere</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23214"/>
+        <location filename="../ui/main_window.py" line="23287"/>
         <source>Created: {created}
 App version: {version}
 Observations: {observations}
@@ -6135,33 +6517,33 @@ The backup is validated. A fresh safety backup will be created before replacemen
         <translation>Sikkerhetskopien er validert. En ny sikkerhetskopi opprettes før erstatningen. Gjenopprette nå?</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23232"/>
+        <location filename="../ui/main_window.py" line="23305"/>
         <source>Creating safety backup and restoring Sporely…</source>
         <translation>Oppretter sikkerhetskopi og gjenoppretter Sporely…</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23309"/>
+        <location filename="../ui/main_window.py" line="23382"/>
         <source>Restore rollback completed.</source>
         <translation>Tilbakerulling av gjenopprettingen er fullført.</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23387"/>
-        <location filename="../ui/main_window.py" line="23395"/>
+        <location filename="../ui/main_window.py" line="23460"/>
+        <location filename="../ui/main_window.py" line="23468"/>
         <source>Import Legacy Sporely Data Package</source>
         <translation>Importer eldre Sporely-datapakke</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="23389"/>
+        <location filename="../ui/main_window.py" line="23462"/>
         <source>Legacy Sporely Data Packages (*.zip)</source>
         <translation>Eldre Sporely-datapakker (*.zip)</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="24080"/>
+        <location filename="../ui/main_window.py" line="24153"/>
         <source>CALIBRATION: Click first point on scale bar</source>
         <translation>KALIBRERING: Klikk første punkt på skalalinjen</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="24094"/>
+        <location filename="../ui/main_window.py" line="24167"/>
         <source>CALIBRATION: Click second point on scale bar</source>
         <translation>KALIBRERING: Klikk andre punkt på skalalinjen</translation>
     </message>
@@ -10057,6 +10439,130 @@ maks</translation>
     </message>
 </context>
 <context>
+    <name>ReferencePreviewPane</name>
+    <message>
+        <location filename="../ui/reference_preview_pane.py" line="50"/>
+        <location filename="../ui/reference_preview_pane.py" line="118"/>
+        <source>No dataset selected</source>
+        <translation>Ingen datasett valgt</translation>
+    </message>
+    <message>
+        <location filename="../ui/reference_preview_pane.py" line="61"/>
+        <source>Metric</source>
+        <translation>Mål</translation>
+    </message>
+    <message>
+        <location filename="../ui/reference_preview_pane.py" line="61"/>
+        <source>Min</source>
+        <translation>Min</translation>
+    </message>
+    <message>
+        <location filename="../ui/reference_preview_pane.py" line="61"/>
+        <source>Median / Mean</source>
+        <translation>Median / Gjennomsnitt</translation>
+    </message>
+    <message>
+        <location filename="../ui/reference_preview_pane.py" line="61"/>
+        <source>Max</source>
+        <translation>Maks</translation>
+    </message>
+    <message>
+        <location filename="../ui/reference_preview_pane.py" line="75"/>
+        <source>Summary</source>
+        <translation>Sammendrag</translation>
+    </message>
+    <message>
+        <location filename="../ui/reference_preview_pane.py" line="80"/>
+        <source>Raw spores</source>
+        <translation>Rå sporer</translation>
+    </message>
+    <message>
+        <location filename="../ui/reference_preview_pane.py" line="89"/>
+        <source>Mount medium:</source>
+        <translation>Monteringsmedium:</translation>
+    </message>
+    <message>
+        <location filename="../ui/reference_preview_pane.py" line="90"/>
+        <source>Stain:</source>
+        <translation>Farging:</translation>
+    </message>
+    <message>
+        <location filename="../ui/reference_preview_pane.py" line="91"/>
+        <source>Sample type:</source>
+        <translation>Prøvetype:</translation>
+    </message>
+    <message>
+        <location filename="../ui/reference_preview_pane.py" line="92"/>
+        <source>Contrast:</source>
+        <translation>Kontrast:</translation>
+    </message>
+    <message>
+        <location filename="../ui/reference_preview_pane.py" line="93"/>
+        <source>Objective / profile:</source>
+        <translation>Objektiv / profil:</translation>
+    </message>
+    <message>
+        <location filename="../ui/reference_preview_pane.py" line="94"/>
+        <source>Scale / calibration:</source>
+        <translation>Skala / kalibrering:</translation>
+    </message>
+    <message>
+        <location filename="../ui/reference_preview_pane.py" line="100"/>
+        <source>Method</source>
+        <translation>Metode</translation>
+    </message>
+    <message>
+        <location filename="../ui/reference_preview_pane.py" line="105"/>
+        <source>Calibration</source>
+        <translation>Kalibrering</translation>
+    </message>
+    <message>
+        <location filename="../ui/reference_preview_pane.py" line="110"/>
+        <source>Provenance</source>
+        <translation>Opprinnelse</translation>
+    </message>
+    <message>
+        <location filename="../ui/reference_preview_pane.py" line="121"/>
+        <source>Search by genus (or genus + species) and choose a result to review stats, method, calibration, and provenance.</source>
+        <translation>Søk etter slekt (eller slekt + art), og velg et resultat for å se statistikk, metode, kalibrering og opprinnelse.</translation>
+    </message>
+    <message>
+        <location filename="../ui/reference_preview_pane.py" line="125"/>
+        <source>Import actions stay disabled until a search result is selected and loaded.</source>
+        <translation>Importhandlinger forblir deaktivert til et søkeresultat er valgt og lastet.</translation>
+    </message>
+    <message>
+        <location filename="../ui/reference_preview_pane.py" line="128"/>
+        <source>Length</source>
+        <translation>Lengde</translation>
+    </message>
+    <message>
+        <location filename="../ui/reference_preview_pane.py" line="128"/>
+        <source>Width</source>
+        <translation>Bredde</translation>
+    </message>
+    <message>
+        <location filename="../ui/reference_preview_pane.py" line="128"/>
+        <source>Q</source>
+        <translation>Q</translation>
+    </message>
+    <message>
+        <location filename="../ui/reference_preview_pane.py" line="135"/>
+        <source>Select a community result to review raw spore points.</source>
+        <translation>Velg et fellesskapsresultat for å se rå sporepunkter.</translation>
+    </message>
+    <message>
+        <location filename="../ui/reference_preview_pane.py" line="140"/>
+        <source>Select a community result to review calibration details.</source>
+        <translation>Velg et fellesskapsresultat for å se kalibreringsdetaljer.</translation>
+    </message>
+    <message>
+        <location filename="../ui/reference_preview_pane.py" line="144"/>
+        <source>Select a community result to review contributor and source provenance.</source>
+        <translation>Velg et fellesskapsresultat for å se bidragsyter og kildeopprinnelse.</translation>
+    </message>
+</context>
+<context>
     <name>ReferenceValuesDialog</name>
     <message>
         <location filename="../ui/main_window.py" line="4577"/>
@@ -11308,6 +11814,29 @@ Dette vil overskrive skymetadatafeltene som er oppført nedenfor.
         <location filename="../ui/calibration_dialog.py" line="783"/>
         <source>Could not prepare a raster crop for calibration.</source>
         <translation>Kunne ikke forberede en rasteravskjæring for kalibrering.</translation>
+    </message>
+</context>
+<context>
+    <name>_ComparisonRowWidget</name>
+    <message>
+        <location filename="../ui/comparison_panel.py" line="282"/>
+        <source>Change color…</source>
+        <translation>Endre farge…</translation>
+    </message>
+    <message>
+        <location filename="../ui/comparison_panel.py" line="284"/>
+        <source>Edit measurement set…</source>
+        <translation>Rediger målesett…</translation>
+    </message>
+    <message>
+        <location filename="../ui/comparison_panel.py" line="286"/>
+        <source>View details…</source>
+        <translation>Vis detaljer…</translation>
+    </message>
+    <message>
+        <location filename="../ui/comparison_panel.py" line="288"/>
+        <source>Remove</source>
+        <translation>Fjern</translation>
     </message>
 </context>
 <context>

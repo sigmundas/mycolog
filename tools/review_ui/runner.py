@@ -38,15 +38,19 @@ def _capture(
                 )
 
             width, height = scenario.viewport
-            widget.resize(width, height)
+            if not scenario.natural_size:
+                widget.resize(width, height)
             widget.show()
             context.app.processEvents()
             context.app.sendPostedEvents()
             context.app.processEvents()
+            capture_widget = scenario.capture_target(widget) if scenario.capture_target else widget
+            context.app.processEvents()
+            captured_size = (capture_widget.width(), capture_widget.height())
 
             target = _target_for(output_dir, scenario)
             try:
-                if not widget.grab().save(str(target), "PNG"):
+                if not capture_widget.grab().save(str(target), "PNG"):
                     raise RuntimeError(f"could not save screenshot: {target}")
             except Exception as error:
                 raise RuntimeError(f"{scenario.id}: failed to capture widget: {error}") from error
@@ -65,7 +69,11 @@ def _capture(
         "path": scenario.filename,
         "title": scenario.title,
         "description": scenario.description,
-        "viewport": f"{scenario.viewport[0]}x{scenario.viewport[1]}",
+        "viewport": (
+            f"{captured_size[0]}x{captured_size[1]}"
+            if scenario.natural_size or scenario.capture_target
+            else f"{scenario.viewport[0]}x{scenario.viewport[1]}"
+        ),
     }
 
 

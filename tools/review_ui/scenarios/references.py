@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from unittest.mock import patch
 
+from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QTableWidgetItem
 
 from database import schema as db_schema
@@ -13,6 +14,17 @@ from ..registry import ReviewScenario, ScenarioRegistry
 
 
 def _fixture(context: ReviewContext):
+    # Each builder starts with empty geometry/splitter settings, including
+    # the legacy geometry lookup. Never consult the user's application state.
+    import ui.add_reference_dialog as picker
+    import ui.window_state as geometry
+
+    index = context.state.get("reference.settings_index", 0) + 1
+    context.state["reference.settings_index"] = index
+    settings_path = context.temporary_root / f"reference-settings-{index}.ini"
+    factory = lambda *_args: QSettings(str(settings_path), QSettings.IniFormat)
+    context.enter_fixture(patch.object(picker, "QSettings", factory))
+    context.enter_fixture(patch.object(geometry, "QSettings", factory))
     cached = context.state.get("reference.fixture")
     if cached is not None:
         return cached
@@ -791,7 +803,7 @@ def _add_dialog_taxon_selector_candidates() -> list[dict]:
         {
             "source": "arts",
             "scientific_name": "Cortinarius rubellus",
-            "vernacular": "Bittersnerlerørsopp",
+            "vernacular": "Svært langt norsk navn — bittersnerlerørsopp fra blåbærskog æøå",
             "genus": "Cortinarius",
             "species": "rubellus",
             "score": 0.82,
@@ -811,10 +823,8 @@ def _add_dialog_taxon_selector(context: ReviewContext):
     """The taxon target selector with an AI candidate active, showing its
     match percentage and the re-filtered Library tab (stage-4b-fix Part 3).
 
-    The combo's own popup is a separate top-level window the offscreen
-    grab() capture cannot include; this instead shows the selector after
-    picking an AI candidate, so its "NN%" display and the retitled dialog
-    are both visible evidence of the feature.
+    The base scenario captures the selected dialog. Open-popup scenarios
+    use the shared post-show capture hook to grab the actual popup window.
     """
     from ui.add_reference_dialog import AddReferenceDialog
 
@@ -839,9 +849,7 @@ def _add_dialog_taxon_selector(context: ReviewContext):
 
 
 def _add_dialog_default_size(context: ReviewContext):
-    """The dialog at its derived default size: all four source tabs and all
-    five preview sub-tabs visible with no scroll arrows (stage-4b-fix
-    Part 2.2). The scenario's own viewport is set to this size."""
+    """Initial production size with empty isolated geometry/splitter settings."""
     from ui.add_reference_dialog import AddReferenceDialog
 
     _fixture(context)
@@ -856,6 +864,11 @@ def _add_dialog_default_size(context: ReviewContext):
     )
     dialog.results_list.setCurrentRow(0)
     return dialog
+
+
+def _open_taxon_popup(dialog):
+    dialog.taxon_target_combo.showPopup()
+    return dialog.taxon_target_combo.view().window()
 
 
 def register_reference_scenarios(registry: ScenarioRegistry) -> None:
@@ -1099,6 +1112,7 @@ def register_reference_scenarios(registry: ScenarioRegistry) -> None:
             description="All four source tabs and all five preview sub-tabs are visible with no scroll arrows at the dialog's own derived minimum/default size.",
             viewport=(1400, 760),
             build=_add_dialog_default_size,
+            natural_size=True,
         ),
         ReviewScenario(
             id="reference.add-dialog-taxon-selector",
@@ -1111,3 +1125,28 @@ def register_reference_scenarios(registry: ScenarioRegistry) -> None:
     )
     for scenario in scenarios:
         registry.register(scenario)
+
+    for theme in ("light", "dark"):
+        for suffix, builder, viewport, natural, capture in (
+            ("suppressed", _comparison_list_suppressed, (420, 260), False, None),
+            ("colors", _comparison_list_colors, (420, 260), False, None),
+            ("natural", _add_dialog_default_size, (1400, 760), True, None),
+            ("popup", _add_dialog_taxon_selector, (1400, 760), True, _open_taxon_popup),
+        ):
+            registry.register(ReviewScenario(
+                id=f"reference.fix2-{suffix}-{theme}", group="reference-library",
+                title=f"Reference correction — {suffix} ({theme})",
+                description=f"Deterministic {suffix} evidence with isolated settings.",
+                build=builder, viewport=viewport, theme=theme,
+                natural_size=natural, capture_target=capture,
+            ))
+    for suffix, builder, viewport, capture in (
+        ("selector", _add_dialog_taxon_selector, (1400, 760), _open_taxon_popup),
+        ("hint", _comparison_list_suppressed, (620, 260), None),
+    ):
+        registry.register(ReviewScenario(
+            id=f"reference.fix2-{suffix}-nb-no", group="reference-library",
+            title=f"Norwegian reference {suffix}",
+            description="Scoped Norwegian catalogue loaded by the production Qt translator.",
+            build=builder, viewport=viewport, locale="nb_NO", capture_target=capture,
+        ))

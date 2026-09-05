@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Callable
 
-from PySide6.QtCore import QEvent, QModelIndex, QStringListModel, QThread, Qt, QTimer, Signal
+from PySide6.QtCore import QCoreApplication, QEvent, QModelIndex, QStringListModel, QThread, Qt, QTimer, Signal
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -1246,6 +1246,11 @@ class CommunityResultsPane(QWidget):
         self._search_worker: _CloudSearchWorker | None = None
         self._detail_worker: _CloudDetailWorker | None = None
         self._worker_refs: list[QThread] = []
+        # Bumped on every target change (refresh) and every detail request, so a
+        # superseded worker's completion/error can be told apart from the
+        # latest one and ignored instead of overwriting current state.
+        self._search_generation = 0
+        self._detail_generation = 0
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -1267,8 +1272,8 @@ class CommunityResultsPane(QWidget):
 
         mode_row = QHBoxLayout()
         mode_row.setSpacing(12)
-        self.range_summary_radio = QRadioButton(self.tr("Range summary"), self)
-        self.raw_points_radio = QRadioButton(self.tr("Raw points (n=0)"), self)
+        self.range_summary_radio = QRadioButton(QCoreApplication.translate("CommunityResultsPane", "Range summary"), self)
+        self.raw_points_radio = QRadioButton(QCoreApplication.translate("CommunityResultsPane", "Raw points (n=0)"), self)
         self.raw_points_radio.setEnabled(False)
         self.range_summary_radio.setChecked(True)
         self._mode_group = QButtonGroup(self)
@@ -1298,6 +1303,17 @@ class CommunityResultsPane(QWidget):
 
     def refresh(self) -> None:
         """(Re)load results for the fixed taxon. Clears any current selection."""
+        # Invalidate any outstanding search/detail request for the previous
+        # target: their completion/error must not be able to populate results,
+        # replace status/preview, or leave an attachable stale payload under
+        # the new target. The old worker keeps running and is still cleaned
+        # up via _worker_refs; only its effect on this pane's state is cut.
+        self._search_generation += 1
+        search_generation = self._search_generation
+        self._detail_generation += 1
+        self._search_worker = None
+        self._detail_worker = None
+
         self._results = []
         self._selected_result = None
         self._selected_detail = None
@@ -1313,15 +1329,15 @@ class CommunityResultsPane(QWidget):
             return
         if not self._genus:
             self.status_label.setText(
-                self.tr("No taxon selected — enter a genus and species first.")
+                QCoreApplication.translate("CommunityResultsPane", "No taxon selected — enter a genus and species first.")
             )
             return
-        if self._search_worker is not None:
-            return
-        self.status_label.setText(self.tr("Searching community spore data..."))
+        self.status_label.setText(QCoreApplication.translate("CommunityResultsPane", "Searching community spore data..."))
         worker = _CloudSearchWorker(self._genus, self._species)
-        worker.search_done.connect(self._on_search_finished)
-        worker.error.connect(self._on_search_error)
+        worker.search_done.connect(
+            lambda results, summary, gen=search_generation: self._on_search_finished(results, summary, gen)
+        )
+        worker.error.connect(lambda message, gen=search_generation: self._on_search_error(message, gen))
         self._search_worker = worker
         self._track_worker(worker)
         worker.start()
@@ -1338,42 +1354,51 @@ class CommunityResultsPane(QWidget):
         worker.deleteLater()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
-        if self._search_worker is not None:
-            self._search_worker.wait()
-            self._search_worker = None
-        if self._detail_worker is not None:
-            self._detail_worker.wait()
-            self._detail_worker = None
+        self._search_generation += 1
+        self._detail_generation += 1
+        self._selected_result = None
+        self._selected_detail = None
+        # Wait for every tracked worker, not only the current search/detail
+        # one: a superseded worker from an earlier target/selection can still
+        # be outstanding and must not survive the pane's close.
+        for worker in list(self._worker_refs):
+            worker.wait()
+        self._search_worker = None
+        self._detail_worker = None
         super().closeEvent(event)
 
-    def _on_search_finished(self, results: list, summary: dict) -> None:
+    def _on_search_finished(self, results: list, summary: dict, generation: int) -> None:
+        if generation != self._search_generation:
+            return
         self._search_worker = None
         self._results = [dict(row or {}) for row in (results or [])]
         self._populate_results_list()
         self._update_status_after_results()
 
-    def _on_search_error(self, message: str) -> None:
+    def _on_search_error(self, message: str, generation: int) -> None:
+        if generation != self._search_generation:
+            return
         self._search_worker = None
-        self.status_label.setText(str(message or "").strip() or self.tr("Community search failed."))
+        self.status_label.setText(str(message or "").strip() or QCoreApplication.translate("CommunityResultsPane", "Community search failed."))
 
     def _update_status_after_results(self) -> None:
         if self._results:
             self.status_label.setText(
-                self.tr("Found {count} community source(s). Select one to review before adding.").format(
+                QCoreApplication.translate("CommunityResultsPane", "Found {count} community source(s). Select one to review before adding.").format(
                     count=len(self._results)
                 )
             )
         else:
-            self.status_label.setText(self.tr("No community spore results found for this taxon."))
+            self.status_label.setText(QCoreApplication.translate("CommunityResultsPane", "No community spore results found for this taxon."))
 
     def _row_detail_text(self, row_data: dict[str, Any]) -> str:
         parts = []
         n = int(row_data.get("measurement_count") or 0)
         if n:
-            parts.append(self.tr("n = {count}").format(count=n))
+            parts.append(QCoreApplication.translate("CommunityResultsPane", "n = {count}").format(count=n))
         q_label = community_result_q_range_label(row_data)
         if q_label != "—":
-            parts.append(self.tr("Q {range}").format(range=q_label))
+            parts.append(QCoreApplication.translate("CommunityResultsPane", "Q {range}").format(range=q_label))
         contributor = str(row_data.get("contributor_label") or "").strip()
         if contributor:
             parts.append(contributor)
@@ -1397,8 +1422,13 @@ class CommunityResultsPane(QWidget):
     # ------------------------------------------------------------------
 
     def _on_result_selection_changed(self) -> None:
-        if self._detail_worker is not None:
-            return
+        # A new selection always supersedes any in-flight detail request for
+        # the previous one; bumping the generation here (rather than blocking
+        # on self._detail_worker) lets rapid selection changes each start
+        # their own request instead of being ignored while an older one loads.
+        self._detail_generation += 1
+        detail_generation = self._detail_generation
+        self._detail_worker = None
         items = self.results_list.selectedItems()
         if not items:
             self._selected_result = None
@@ -1416,39 +1446,43 @@ class CommunityResultsPane(QWidget):
         self._selected_result = dict(self._results[row])
         self._selected_detail = None
         self._preview_pane.set_summary(
-            self.tr("Loading review details..."),
+            QCoreApplication.translate("CommunityResultsPane", "Loading review details..."),
             community_result_source_label(self._selected_result, self.tr),
             [],
-            self.tr("Loading dataset details..."),
+            QCoreApplication.translate("CommunityResultsPane", "Loading dataset details..."),
         )
         self.selection_changed.emit()
 
         if self._injected_results is not None:
             # Deterministic fixtures already carry full detail fields.
-            self._on_detail_finished(self._selected_result)
+            self._on_detail_finished(self._selected_result, detail_generation)
             return
         worker = _CloudDetailWorker(self._selected_result)
-        worker.detail_done.connect(self._on_detail_finished)
-        worker.error.connect(self._on_detail_error)
+        worker.detail_done.connect(lambda detail, gen=detail_generation: self._on_detail_finished(detail, gen))
+        worker.error.connect(lambda message, gen=detail_generation: self._on_detail_error(message, gen))
         self._detail_worker = worker
         self._track_worker(worker)
         worker.start()
 
-    def _on_detail_finished(self, detail: dict) -> None:
+    def _on_detail_finished(self, detail: dict, generation: int) -> None:
+        if generation != self._detail_generation:
+            return
         self._detail_worker = None
         self._selected_detail = dict(detail or {})
         self._apply_detail_to_preview()
         self._update_mode_radio_state()
         self.selection_changed.emit()
 
-    def _on_detail_error(self, message: str) -> None:
+    def _on_detail_error(self, message: str, generation: int) -> None:
+        if generation != self._detail_generation:
+            return
         self._detail_worker = None
         self._selected_detail = None
         self._preview_pane.set_summary(
-            self.tr("Could not load dataset"),
+            QCoreApplication.translate("CommunityResultsPane", "Could not load dataset"),
             str(message or "").strip(),
             [],
-            self.tr("This result could not be reviewed."),
+            QCoreApplication.translate("CommunityResultsPane", "This result could not be reviewed."),
         )
         self._preview_pane.set_raw_spores(str(message or "").strip())
         self.selection_changed.emit()
@@ -1470,7 +1504,7 @@ class CommunityResultsPane(QWidget):
             measurements = self._selected_detail.get("measurements_json") or []
             if isinstance(measurements, list):
                 n = len(measurements)
-        self.raw_points_radio.setText(self.tr("Raw points (n={count})").format(count=n))
+        self.raw_points_radio.setText(QCoreApplication.translate("CommunityResultsPane", "Raw points (n={count})").format(count=n))
         self.raw_points_radio.setEnabled(n > 0)
         if not self.raw_points_radio.isEnabled() and self.raw_points_radio.isChecked():
             self.range_summary_radio.setChecked(True)

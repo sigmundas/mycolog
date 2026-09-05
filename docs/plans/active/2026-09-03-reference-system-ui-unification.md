@@ -6,8 +6,295 @@ approved mockups' structure/hierarchy (panel + picker), reusing existing widget
 styles and the app's global tab style. Backend/model code stays; only UI entry
 points are removed.
 
-Status: Stages 1–4a complete — see **Landed stages** at the end of this doc.
-Next up is stage 4b (Community tab). Executing stages in order; report after each.
+Status: Stages 4b (`c345ac8`) and 4b-fix (`14525ff`) are already committed.
+Fresh top-level acceptance review on 2026-09-05: **4b-fix2 confirmed** within
+its approved corrective scope. User confirmed all seven manual checks passed.
+
+## Current stage / handoff — 2026-09-05
+
+### 4b-fix2 correction — independently reviewed and manually accepted
+
+Selected prompt (archive after verified commit):
+`/Users/sigmundas/Documents/Code/sporely/.sparring/prompts/sporely-py/stage-4b-fix2.md`.
+Implementation reviewed against base `14525ff91f6b7ada1f899c03852f54eb065b1fe1`.
+All seven manual checks passed per the user in this acceptance session.
+The user authorized committing this verified correction and archiving its prompt.
+No 4c implementation was performed.
+
+This pass began with partial corrective code/tests, renderer plumbing, and
+TS/QM edits already in the working tree, in addition to AGENTS.md and the
+review/handoff edits. Those edits were preserved and the correction completed
+in place. The older claim that the working tree contains only a handoff edit
+is historical, not the present state.
+
+Corrected scope and reuse:
+- `ui/cloud_reference_dialog.py`, `CommunityResultsPane` (~1202–1570): request
+  generations in `refresh` and `_on_result_selection_changed` guard search and
+  detail success/error callbacks. Superseded requests remain in `_worker_refs`
+  until the existing `_release_worker` path releases them. `closeEvent`
+  invalidates callbacks and waits for all tracked requests, including superseded
+  ones. Target changes themselves do not wait. Existing `_CloudSearchWorker`,
+  `_CloudDetailWorker`, preview helpers and `current_mode_payload` are reused;
+  adapters, network contracts and persistence are unchanged.
+- `ui/add_reference_dialog.py`, `__init__` (~358–360) and
+  `_on_taxon_target_text_entered` (~488–517): dialog `finished` closes the
+  Community pane; unchanged selected labels reuse structured item data through
+  `_apply_taxon_target`. Deliberately edited text retains the existing parser.
+- `ui/main_window.py`, `_on_add_reference_clicked` (~11539–11559) and
+  `_active_sporely_taxon_id` (~13101–13129): one captured observation snapshot
+  supplies name and ID. The existing ID helper accepts an optional snapshot;
+  existing callers still fetch the active observation. Reused
+  `ObservationDB.get_observation`, `_clean_ref_genus_text`,
+  `_clean_ref_species_text`; existing drift guards and attach closures remain.
+- Both picker/pane modules use explicit `QCoreApplication.translate` contexts
+  for their own strings: lupdate had extracted these into the empty context,
+  where Qt could not find them at runtime. The Norwegian popup screenshot
+  exposed this despite successful QM compilation.
+- `tests/test_add_reference_dialog.py`: isolated settings and preview stubs,
+  actual Qt keyboard selection/Return, structured own-target/free-text tests,
+  synthetic host observations and a write-rejecting persistence stub. Removed
+  the incoming host tests' real SQLite-row setup. Existing filter/attach tests
+  are retained. `tests/test_community_results_pane_requests.py`: manually driven
+  fake workers, A→B→C ordering, late success/error, selection/clear invalidation,
+  worker release, post-close callbacks and rejecting the owning picker.
+- `tools/review_ui/registry.py` (`ReviewScenario`) and `runner.py` (`_capture`):
+  bounded generic options preserve builder sizing and capture a post-show
+  surface such as the real combo popup. `tests/test_render_review_screenshots.py`
+  adds two focused tests for those facilities.
+- `tools/review_ui/scenarios/references.py`: `_fixture` isolates geometry and
+  splitter QSettings per builder; existing suppressed/colour/default/selector
+  builders are reused, with both-theme and Norwegian cases. Default sizing
+  skips viewport resize/adjustSize. Popup evidence captures the actual separate
+  popup surface, not a closed combo or a composite desktop screenshot.
+- `tools/update_translations.sh` includes comparison_panel, cloud_reference_dialog
+  and reference_preview_pane. Paired `i18n/Sporely_{nb_NO,sv_SE,de_DE}.{ts,qm}`
+  refreshed, preserving incoming translations and correcting context placement.
+  Final extraction: 2318 finished translations per language, zero unfinished;
+  no unrelated unfinished entries remain to list. No backlog sweep was performed.
+- This canonical plan updated; pre-existing `AGENTS.md` edit left untouched.
+  No changes to comparison_panel production logic in this correction.
+
+Verification:
+- Pre-fix reproduction loaded exactly the three UI modules from `14525ff` into
+  an isolated Python process, then ran the corrected no-database test fixtures.
+  **11 failed, 33 passed**: AI Return, own Return, all three mismatched-host
+  cases, skipped B/C searches, stale search/detail success/error, clear-target
+  detail, and outstanding-worker cleanup. Source tree was never reverted.
+  Log: `/private/tmp/sporely-fix2-baseline.log`; harness:
+  `/private/tmp/sporely-fix2-baseline.py`. Two further close regressions were
+  added after this baseline run. Earlier incoming-fixture runs hit unintended
+  database access; these are not counted as behavioral reproduction evidence.
+- Required focused command (dialog, Community requests, comparison model,
+  comparison rebuild, palette): **62 passed in 9.39s**. Log:
+  `/private/tmp/sporely-fix2-tests.log`.
+- New renderer tests only: **2 passed, 10 deselected in 0.83s** via
+  `pytest tests/test_render_review_screenshots.py -q -k
+  'test_capture_natural_size or test_capture_open_popup'`.
+- Required `py_compile` for five named modules, plus touched renderer/test
+  Python files: passed. `git diff --check`: passed.
+- `./tools/update_translations.sh`: passed; TS/QM context fix checked through
+  actual Norwegian renderer output. No production dependencies or heavy builds.
+- `python -m tools.render_review_screenshots --list`: passed. Required
+  reference-library group: **40 screenshots**, manifest:
+  `/private/tmp/sporely-stage-4b-fix2-review/manifest.json`.
+
+Inspected manifest-listed evidence (12 scoped images; remaining group images
+were generated but are not claimed as individually reviewed):
+- `reference.fix2-suppressed-{light,dark}.png`: observation n=6 cystidia,
+  dim unchecked reference rows, bottom spore-only hint visible.
+- `reference.fix2-colors-{light,dark}.png`: blue/orange/yellow chips are distinct.
+- `reference.fix2-natural-{light,dark}.png`: actual initial **1209×438** capture,
+  all four source and five preview tabs visible without arrow scrollers, with
+  empty isolated geometry and splitter settings.
+- `reference.fix2-popup-{light,dark}.png`: actual open popup (800×45), own entry,
+  82%/41% candidates, long vernacular name and æøå visible without clipping.
+- `reference.add-dialog-library{,-dark}.png`: unchecked taxon filter, each
+  literature row identifies its taxon; long range text elides after the taxon.
+- `reference.fix2-selector-nb-no.png` and `reference.fix2-hint-nb-no.png`:
+  “Denne observasjonen” and “Referansedata gjelder sporemålinger.” load and fit.
+  Fixture names/badges intentionally remain fixture text. Popup capture is of
+  the popup alone; the natural-dialog captures establish the surrounding layout.
+All paths above are relative to the manifest directory. Static evidence does
+not establish interaction, hardware behavior, or persistence across restart.
+
+Scope adjustments with reasons: the incoming partial host tests were replaced
+because the prompt forbids database rows; explicit translation contexts were
+necessary because translated selector evidence initially remained English;
+shared renderer changes were limited to the sizing/popup facilities permitted
+by the prompt. No persistence/adapter/callback abstraction or UI redesign.
+
+Verification tier: **human-gated, now accepted**. Manual acceptance checklist —
+all seven **PASS**, explicitly confirmed by the user on 2026-09-05:
+1. With spore and cystidium measurements and an attached reference, switch
+   Spores → cystidia → Spores. Count must follow population; references dim and
+   uncheck outside Spores; original enabled states restore without flicker/loops.
+2. Compare observation/reference chips to plotted Spores series. Colours must
+   agree and be visibly distinct.
+3. Inspect a Library row in the comparison list. Its second line must show the
+   measurement range, not repeat the publication title.
+4. Open Add reference: four source and five preview tabs must fit without
+   arrows. Resize/move splitter, close/reopen, restart app/reopen. Geometry and
+   splitter must persist and tabs must still fit.
+5. Select AI targets by mouse and keyboard, press Return; type a non-AI taxon
+   and Return. Switch targets rapidly during Community loading and inspect
+   Library/Community/My observations. Title/filters must follow target; no
+   percentage/vernacular leaks, unintended add, or obsolete results/details.
+   Change the old panel target and reopen: own entry still identifies the
+   observation consistently.
+6. Uncheck Library's Only this taxon: every row must identify its taxon.
+   Recheck: filtering must return to the selected target.
+7. Reopen Edit Observation: identification unchanged — PASS.
+
+Independent acceptance review verified the targeted production diff, baseline
+harness/log (11 expected pre-fix failures), tests and renderer changes. The
+required 62 corrective tests passed again; the combined run including the full
+renderer module returned **71 passed, 3 failed in 36.26s**. All three failures
+are stale scenario-inventory expectations in
+`tests/test_render_review_screenshots.py` (lines 76, 85, 153), not capture
+failures: they omit existing reference scenarios and the portable-import group.
+The first two failures were reproduced with the reference registry loaded from
+`14525ff` (30 reference scenarios versus 10 expected); the third asserts the
+same outdated inventory after a successful default capture. The ten new scoped
+scenarios increase that inventory but do not cause the underlying mismatch.
+This is tracked test-maintenance debt, not a claim that the full suite is green.
+The two new capture tests pass. No production correction was required by review.
+
+Reviewer inspected all 12 scoped manifest images: natural-size tab bars fit in
+both themes, popup contents/percentages/æøå are visible, suppressed rows and
+colour distinctions are present, unfiltered rows identify taxa, and Norwegian
+selector/hint translations load. Compiled catalogues for nb_NO/sv_SE/de_DE
+resolve selector, Community status and comparison hint strings; all have zero
+unfinished TS entries. Syntax checks for all touched Python files and
+`git diff --check` passed. Pre-existing AGENTS.md edits are excluded from the
+stage commit. No authoritative security boundary changed; security escalation
+is not warranted.
+
+Deferred unchanged: 4c/manual entry, verdict computation, old-control removal,
+palette stability and callback unification. No fresh top-level final review
+was substituted by a subagent.
+
+### Incoming corrective handoff (preserved)
+
+Next authorized implementation: **4b-fix2**, a bounded correction within the
+approved 4b intent. Pending prompt:
+`.sparring/prompts/sporely-py/stage-4b-fix2.md` (relative to the workspace parent).
+It covers the three reviewed taxon-target blockers, failing-then-passing
+regression tests, scoped translations, and missing meaningful static evidence.
+The implementer updates this plan and stops after agent-verifiable checks,
+leaving corrective work uncommitted and the seven manual checks pending for
+the user. No 4c work is authorized. This review pass wrote only the corrective
+prompt and this handoff; it did not implement the corrections.
+
+### Prior handoff evidence
+
+At review, HEAD is `14525ff91f6b7ada1f899c03852f54eb065b1fe1`. The prompt is
+now `.sparring/prompts/sporely-py/completed/stage-4b-fix.md`; there were no
+top-level pending prompts before 4b-fix2 was authored. The earlier selector
+claim is stale.
+This pass changes only this handoff; no production implementation was duplicated.
+The pre-existing working-tree edit to `AGENTS.md` was preserved.
+
+Verification rerun:
+- Required comparison-model/dialog/widget tests: **46 passed in 3.26s**.
+- `tests/test_reference_series_palette.py`: **2 passed in 0.60s**.
+- Required `py_compile` of the four UI modules: passed.
+- Repository reference-library renderer: 30 screenshots generated; manifest at
+  `/private/tmp/sporely-stage-4b-fix-20260905/manifest.json`.
+- Inspected suppressed list (n=6 cystidia, dim unchecked references and hint),
+  color list (blue/orange/yellow), default-size dialog (four source and five
+  preview tabs visible), selected AI target (82%), and dark Library with taxon
+  filter unchecked (taxa visible). These are static evidence only.
+
+Evidence limitations: the existing AI scenario captures a selected candidate,
+not the open popup requested by the prompt; suppressed/color/default/AI scenarios
+have no dedicated dark counterparts. The default-size scenario supplies a
+1400x760 viewport, so the screenshot alone does not prove natural default sizing.
+These gaps remain for the fresh review; do not represent this as full acceptance.
+
+Existing paths confirmed: `MainWindow._reference_overlays_allowed_for_category`
+is shared by plot and comparison list; `update_gallery` refreshes the list after
+the plot (no new signal connection). `_collect_reference_ai_suggestions` reads
+stored Artsorakel/iNaturalist predictions; `_on_ref_ai_suggestion_activated` is
+the old panel fill path. `comparison_panel._format_detail` now uses library
+kind/raw text like `AddReferenceDialog._add_candidate_item`; previously it fell
+through to source text, duplicating the title's publication.
+
+Manual status: all seven 4b-fix manual items are **not run in this pass**:
+1. Switch Spores to cystidia and back; verify count and reference dimming restore.
+2. Verify distinct observation/reference colors in chips and plot.
+3. Verify library row detail is the measurement range.
+4. Verify all tabs fit and dialog size persists after resize/close/reopen.
+5. Select an AI target, then enter an arbitrary taxon; verify filter and title.
+6. Uncheck Only this taxon; verify each row identifies its taxon.
+7. Reopen Edit Observation; verify identification was unchanged.
+
+Commit status: existing implementation remains at `14525ff`; this handoff is
+uncommitted pending review of the outstanding evidence/manual gates. No push.
+Deferred: stage 4c manual entry, stage 5 verdicts, stage 6 control removal and
+palette stability. Suggested future callback unification: one typed request
+dataclass with a source-kind discriminator and explicit local-set, observation,
+cloud, or manual payload, handled by one dispatcher. Cost: adapt existing caller
+closures and dialog submission paths, plus per-variant validation/tests; no
+persistence change is inherently required. Not implemented in this stage.
+
+## Independent review — 2026-09-05
+
+Verdict: **partly confirmed**. No stage 4c prompt issued; no implementation edits.
+`.sparring/latest.md` (Captured 2026-09-05 00:01 CEST) describes an unrelated
+AGENTS.md scout, not the implementation. Review therefore used the committed
+diff, completed prompt, and current handoff. The earlier backfill already
+records stages 1–4a-fix; do not duplicate it based on the skill's stale note.
+
+Confirmed: the category suppression predicate is shared by plot and list;
+`update_gallery` refreshes the comparison rows; library details use kind/raw
+text; automatic reference colours start at index 1. Focused verification:
+`./.venv/bin/pytest tests/test_comparison_panel_model.py tests/test_add_reference_dialog.py tests/test_comparison_list_widget_rebuild.py tests/test_reference_series_palette.py -q`
+→ **48 passed in 6.66s**. `py_compile` of add_reference_dialog,
+cloud_reference_dialog, comparison_panel and main_window passed. These results
+do not settle the live acceptance checks.
+
+Blocking findings for a bounded corrective stage before 4c:
+1. `ui/cloud_reference_dialog.py:1288–1359`: `set_taxon` changes the target,
+   but `refresh` returns while an old search worker exists. Its completion
+   accepts the old results unconditionally, without launching the new target's
+   search. Reproduced offline with a real pane, a sentinel in-flight worker,
+   and synthetic completion: current target `Amanita fulva`, accepted result
+   `Cortinarius limonius`. Guard stale search/error and detail callbacks by
+   request identity and ensure the latest requested target is actually loaded;
+   `_on_detail_finished` at 1437 also accepts old detail unconditionally.
+2. `ui/add_reference_dialog.py:425–428,488–498`: Return on the editable combo
+   always parses display text, including an unchanged AI label. Calling the
+   connected handlers with an 82% candidate reproducibly changes species from
+   `rubellus` to `rubellus  82%`. Preserve structured selected-item data when
+   text is unchanged; parse only deliberately edited free text. Tests currently
+   call selection and typing handlers separately and miss this sequence.
+3. `ui/main_window.py:11540–11545`: initial genus/species come from editable
+   old reference-panel fields, while taxon ID comes from the active observation
+   (`_active_sporely_taxon_id`, 13093). The old AI handler at 12948 changes those
+   fields. After selecting another old-panel target, the dialog's “This
+   observation” entry can name that target while Library filters by the actual
+   observation ID. Initialize own-target identity consistently from the active
+   observation; keep comparison target distinct. Add a mismatched-panel fixture.
+
+Evidence/maintenance still owed: the manifest has 30 screens but the default
+scenario forces 1400x760, the AI scenario is selected rather than open, and
+suppressed/colours/default/AI lack dark counterparts. Preserve the earlier
+static inspection report as a claim; this review did not re-inspect PNGs.
+Required translation refresh was not committed: new selector/hint source
+strings are absent from the Norwegian catalogue, and comparison_panel.py is
+absent from tools/update_translations.sh's source list. Correct extraction
+coverage and refresh the paired TS/QM files under the localization rules.
+
+All seven manual checks above remain unconfirmed; “not run in this pass” is
+not proof of an earlier pass. Extend acceptance to keyboard selection/Return,
+rapid target changes with Community loading, and reopening after changing the
+old panel target. Test geometry AND splitter persistence across app restart.
+The completed prompt's split self-verifiable/post-commit gate conflicts with
+AGENTS.md's human-gated interaction rule; the existing commit is not acceptance
+and should not be rewritten. A corrective implementation must remain
+uncommitted until its human gate passes. A focused stage-boundary correctness
+review is warranted after correction; no authoritative security boundary change
+was found that warrants a security-reviewer escalation.
 
 ## Subsystem map (verified 2026-09-03)
 
