@@ -145,6 +145,10 @@ def _translate_range_or_summary(
     q_min = _float_or_none(measurements.get("q_min"))
     q_max = _float_or_none(measurements.get("q_max"))
     sample_size = measurements.get("sample_size")
+    specimen_count = measurements.get("specimen_count")
+    method = snapshot.get("method") or {}
+    if not isinstance(method, dict):
+        method = {}
 
     short_label = str(snapshot.get("short_label") or "").strip()
     name_as_published = str(snapshot.get("name_as_published") or "").strip()
@@ -208,6 +212,12 @@ def _translate_range_or_summary(
         data["q_max"] = q_max
     if isinstance(sample_size, int) and sample_size > 0:
         data["sample_size"] = int(sample_size)
+    if isinstance(specimen_count, int) and specimen_count > 0:
+        data["specimen_count"] = int(specimen_count)
+    for method_key in ("mount_medium", "stain", "preparation", "measurement_method"):
+        method_value = method.get(method_key)
+        if method_value:
+            data[method_key] = str(method_value)
 
     locator_text = str(snapshot.get("locator_text") or "").strip()
     display_label = _compose_normalized_label(
@@ -280,6 +290,17 @@ def _translate_raw_points(
     }
     if locator_text:
         data["locator_text"] = locator_text
+    measurements = snapshot.get("measurements") or {}
+    if isinstance(measurements, dict):
+        specimen_count = measurements.get("specimen_count")
+        if isinstance(specimen_count, int) and specimen_count > 0:
+            data["specimen_count"] = int(specimen_count)
+    method = snapshot.get("method") or {}
+    if isinstance(method, dict):
+        for method_key in ("mount_medium", "stain", "preparation", "measurement_method"):
+            method_value = method.get(method_key)
+            if method_value:
+                data[method_key] = str(method_value)
     display_label = _compose_normalized_label(
         short_label, name_as_published, locator_text
     ) or short_label or name_as_published or ""

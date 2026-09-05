@@ -8986,11 +8986,15 @@ class MainWindow(GeometryMixin, QMainWindow):
             parts = [part for part in (short, taxon, locator) if part]
             if parts:
                 return " — ".join(parts)
+        published = (data.get("name_as_published") or "").strip()
         genus = (data.get("genus") or "").strip()
         species = (data.get("species") or "").strip()
         kind = data.get("source_kind") or ("points" if data.get("points") else "reference")
-        genus_label = f"{genus[0].upper()}." if genus else ""
-        base = f"{genus_label} {species}".strip() if genus_label else (f"{genus} {species}".strip() or species)
+        if published:
+            base = published
+        else:
+            genus_label = f"{genus[0].upper()}." if genus else ""
+            base = f"{genus_label} {species}".strip() if genus_label else (f"{genus} {species}".strip() or species)
         if kind == "observation":
             author = (data.get("author") or "").strip()
             if not author:

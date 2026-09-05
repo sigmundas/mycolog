@@ -13,8 +13,11 @@ Stage 4c (Enter-manually tab) is described below; a second, later fresh
 independent review confirmed it and it is now committed (see "Landed stages").
 Approved plan stage 4 (Wire Community / My observations / Enter manually
 tabs) is now fully landed across its 4a/4a-fix/4b/4b-fix2/4c sub-stages.
-Stage 5 (verdict computation) is next but is not yet concretely scoped — see
-the note at the end of "Landed stages".
+Stage 5 was re-scoped 2026-09-05 from "verdict computation" to "reference
+context/provenance + badges + preview summary" (match/verdict work moved to
+`docs/plans/active/2026-07-12-parmasto-matching-foundation.md`) — see the note
+at the end of "Landed stages". A bounded stage-5 prompt now exists:
+`.sparring/prompts/sporely-py/stage-5.md`.
 
 ## Current stage / handoff — 2026-09-05 (stage 4c implementation)
 
@@ -964,19 +967,234 @@ when the mismatch is a deliberate cross-species comparison from the new
 tab — data behavior is correct, only the dialog's condition/wording needs
 a bounded follow-up.
 
-### Stage 5 — not yet scoped for an implementer prompt
 
-Approved plan stage 5 is "verdict computation (pure, unit-tested) + badges
-+ preview banner." This plan documents the existing `reference_series`
-schema and a source-kind → badge mapping (see "reference_series entry
-schema" above), but no concrete verdict algorithm, badge set, or preview-
-banner design exists anywhere in this document or its mockups. Writing a
-bounded, independently-verifiable stage-5 implementer prompt now would mean
-inventing that design unilaterally in the review session, which this
-skill's review protocol does not authorize. Per this repository's agent
-routing rules, this is exactly the kind of architecture-shaping ambiguity
-`sporely-planner` exists for, not a case for a directly-authored bounded
-stage prompt. **Recommendation: run `sporely-planner` (or an equivalent
-planning pass) to decide the verdict computation's inputs/outputs, badge
-taxonomy, and preview-banner placement before the next stage-5 prompt is
-written.**
+### Stage 5 — re-scoped 2026-09-05: reference context/provenance, not verdicts
+
+**Correction:** the approved plan's original stage 5 wording, "verdict
+computation (pure, unit-tested) + badges + preview banner", is withdrawn.
+Match/verdict/statistical-comparison work (whether an observation agrees
+with a reference, any containment/overlap/threshold rule, any green/
+yellow/red-style result) is **out of scope for this UI-unification plan
+entirely** and does not belong here even in deferred/placeholder form. That
+work's durable home is
+`docs/plans/active/2026-07-12-parmasto-matching-foundation.md`, which this
+same scoping pass expanded to explicitly own it (community-statistics
+pipeline, cohort/filter selection, manual observation inclusion/exclusion,
+transparent L/W/Q comparison, later green/yellow/red presentation,
+eventual historical-reference-vs-community comparison — see that document;
+exact thresholds and full Parmasto/Mahalanobis scoring remain deferred
+there, not designed now).
+
+Stage 5 in *this* plan is re-scoped to **reference context/provenance +
+badges + preview summary**: registering what a published or community
+source actually reported faithfully enough to support later evaluation,
+without this stage judging whether it holds up. Motivation: published spore
+ranges are often reused for decades without retaining how they were
+obtained (method, medium, sample state, count, whether a later source made
+new measurements or merely repeated an earlier one) — this stage is about
+not losing that context, not about scoring it.
+
+**`ComparisonRow.verdict` scaffold — reviewed and should be removed, not
+reused.** `ui/comparison_panel.py`'s `verdict: object | None = None` field
+(~L87) and the empty `verdict_label` `QLabel` (~L236) were added in an
+earlier stage explicitly anticipating match-state ("verdict computation
+lands in stage 5... empty while verdict is None"). That anticipated
+semantics is now out of scope for this plan, so keeping the field/widget
+around under that name would mislead a future reader into thinking a
+match/no-match slot is still coming here. **Recommendation for the stage-5
+implementer: remove `ComparisonRow.verdict` and `verdict_label` entirely**
+(update `from_resolved_entry`/`for_current_observation` and the two existing
+tests asserting `verdict is None`, `tests/test_comparison_panel_model.py`
+~L109/169, accordingly) rather than repurposing or renaming them — this
+stage's provenance context surfaces through the row's existing detail
+line/tooltip and the picker's existing Summary/Method tabs, not through a
+new verdict-shaped slot next to the source-kind badge.
+
+**What already exists and needs no schema change (confirmed by reading the
+code in this pass):**
+- `reference_measurement_sets` already has `mount_medium`, `stain`,
+  `preparation`, `measurement_method`, `sample_size`, `specimen_count`, and
+  a free-text `notes` column (`database/reference_library_schema.py`
+  ~L110-145); `reference_taxon_treatments` already has `name_as_published`,
+  `locator_text`, `page_from/page_to`, and a free-text `treatment_notes`
+  column (~L92-107).
+- `ReferencePreviewPane`'s existing Method tab (`ui/reference_preview_pane.py`
+  ~L79-100, populated at `ui/add_reference_dialog.py:737`,
+  `ui/cloud_reference_dialog.py:1158/1497`, `ui/reference_entry_editor.py:659`)
+  already surfaces `mount_medium`/`stain`/`preparation`/`measurement_method`
+  for all four source tabs today — but under labels written for an
+  observation's own microscopy setup ("Objective / profile:", "Sample
+  type:"), not for a literature/community source's reported method. The
+  labels need literature-appropriate wording, not new data plumbing.
+  `measurement_set.notes` is already read but funnelled into
+  `set_calibration(...)` (`ui/add_reference_dialog.py:745`), i.e. shown as
+  "calibration details" rather than as general source notes — another
+  existing mislabel, not a missing field.
+- `reference_taxon_treatments.treatment_notes` is captured by the schema but
+  **not read anywhere in the UI** today (confirmed: no match for
+  `treatment_notes` outside the schema file). Threading it through to the
+  picker (e.g. into the Summary tab's note area) is new plumbing, but reuses
+  an existing column — no schema change.
+- `name_as_published` already flows into a **Library-attached** row's title
+  today (`MainWindow._format_reference_series_label`, `ui/main_window.py`
+  ~L8977, the `observation_reference_use_id` branch, ~L8981-8988) but is
+  captured and then silently dropped for **Manual-tab** entries: the editor
+  already builds `"name_as_published": self.name_as_published_input.text()`
+  into its payload (`ui/reference_entry_editor.py:1158`), but the row-label
+  function's non-Library branch (~L8989 onward) only ever reconstructs a
+  label from `genus`/`species`, never reads `name_as_published`. This is a
+  concrete, already-identified bug relative to "preserve the taxon name as
+  published, separately from current taxonomic mapping" — fixing it needs
+  no new field, just reading one that already exists.
+- The Q-value/typical-range "reported vs. Sporely-derived" distinction
+  already exists as *behavior* (stage 4c's extreme→typical fallback in
+  `ReferenceEntryEditor._refresh_preview`) but not as a *visible* distinction
+  in the picker's Summary table or the comparison row — today a computed
+  fallback value renders identically to a directly reported one.
+
+**What is out of scope for Stage 5 because the schema does not capture it
+yet, and adding it is a data-model decision, not a UI task** (do not invent
+new columns for these in this stage): specimen state/age, voucher/source
+material, and geographic origin have no existing field anywhere in
+`reference_library_schema.py`. An explicit "original description vs.
+secondary/repeated reference" *structured* flag likewise does not exist.
+Where a cataloger has already typed something relevant into the existing
+free-text `notes`/`treatment_notes` columns, Stage 5 may display it
+verbatim as-is (no parsing/classification); it must not attempt to infer or
+assert original-vs-secondary status from any other signal. Treat all of the
+above as "not reported" when absent — never as a quality signal, and never
+render an icon/color that implies judgment about the reference itself.
+
+**Proposed smallest Stage 5 (engineering-only; no schema change, no new
+persistence, no match/verdict logic):**
+1. Fix `_format_reference_series_label`'s non-Library branch to prefer
+   `data.get("name_as_published")` when present, falling back to the
+   existing genus/species reconstruction only when it is absent — for
+   every source kind, not only Library-attached rows.
+2. Thread `treatment_notes` and the measurement set's `notes` through to the
+   picker/comparison row as plain, labelled, non-judgmental context (e.g. a
+   "Source notes" line/tooltip), keeping `notes` additionally available
+   under its existing Calibration-tab meaning if that reuse is still
+   accurate, or relabelling if it is not — implementer's call within
+   existing widget conventions.
+3. Re-word the existing Method tab's field labels
+   (`ui/reference_preview_pane.py`'s `_method_labels`) so they read as
+   *reported source method* ("Mounting medium (as reported):", "Preparation
+   (as reported):", etc.) rather than *current observation's own microscopy
+   setup*, and apply the existing "—" / "not reported" convention
+   consistently rather than an empty string.
+4. Add a compact, non-judgmental provenance line to the comparison row's
+   existing detail/tooltip (`ui/comparison_panel.py::_format_detail` and/or
+   `_ComparisonRowWidget`) surfacing whichever of method/medium/stain/
+   sample size/specimen count are actually present, with "not reported" for
+   the rest — reusing the row's existing elision/tooltip pattern, not a new
+   widget mechanism.
+5. Mark values in the picker's Summary table that came from the existing
+   extreme→typical fallback as derived rather than reported (e.g. a
+   footnote/tooltip on the affected cell), instead of rendering identically
+   to a directly-reported value.
+6. Remove `ComparisonRow.verdict`/`verdict_label` per the critique above.
+7. No new preview "banner" widget is required if `summary_note_label`
+   (already present, currently used for unrelated instructional copy) is
+   repurposed to show a one-line provenance summary — implementer's call
+   whether to repurpose it or add a second label, so long as the existing
+   instructional copy it currently carries in the empty/no-selection state
+   is preserved somewhere (it is still useful and unrelated to this
+   change).
+
+None of the above requires a new column, table, migration, or cloud-sync
+change, and none of it computes or persists any match/agreement judgment.
+**This is judged concrete enough for a bounded implementer stage; see
+`.sparring/prompts/sporely-py/stage-5.md`.**
+
+**Stage 5 — implemented, self-verified.** Files/symbols touched:
+
+- `ui/comparison_panel.py`: removed `ComparisonRow.verdict` and
+  `_ComparisonRowWidget.verdict_label` (dataclass field, both constructors,
+  widget slot). Added `ComparisonRow.provenance` (default `""`) and a new
+  `_format_provenance(data)` free function surfacing method/mount
+  medium/stain/sample size/specimen count as a tooltip on
+  `_ComparisonRowWidget.detail_label`, "not reported" for absent fields.
+- `references/reference_plotting.py`: `_translate_range_or_summary` and
+  `_translate_raw_points` now copy the snapshot's existing `method` sub-dict
+  (`mount_medium`/`stain`/`preparation`/`measurement_method`) and
+  `measurements.specimen_count` into the plotting `data` dict — this data was
+  already captured by `build_snapshot` (`database/reference_citation.py`) at
+  attach time but never threaded through to the comparison row.
+- `ui/main_window.py::_format_reference_series_label` (~L8977): non-Library
+  branch now prefers `data.get("name_as_published")` before the
+  genus/species reconstruction, for every source kind.
+- `ui/reference_preview_pane.py`: Method tab labels reworded to
+  "as reported" phrasing (`_build_ui`). `set_summary` gained an optional
+  `derived` parameter (parallel list of `(min,median,max)` bool flags) that
+  appends a footnote marker + tooltip to fallback-derived cells. Added
+  `provenance_summary_label` + `set_provenance_summary(text)` (a second
+  label, not a repurpose — `summary_note_label`'s existing empty-state copy
+  is untouched).
+- `database/reference_library.py::MeasurementSetCandidate`: added
+  `treatment_notes` (new plumbing reading the existing
+  `reference_taxon_treatments.treatment_notes` column, no schema change);
+  threaded through `list_attachment_candidates`'s query.
+- `ui/add_reference_dialog.py::_populate_preview`: Provenance tab gained a
+  "Source notes: {treatment_notes or Not reported}" line; kept
+  `measurement_set.notes` → Calibration wiring as-is (implementer's call:
+  still an accurate description of what that free-text column holds).
+  Added a `set_provenance_summary` call (work/year, sample size, method
+  recorded — never agreement). `_populate_observation_preview` (My
+  observations tab) clears the summary line, since a personal observation
+  isn't a published/community reference.
+- `ui/reference_entry_editor.py::_refresh_preview`: `use_existing_radio`
+  branch now fetches the paired `TaxonTreatment` for `treatment_notes` and
+  fills the previously-empty `set_provenance("")` call; also sets a
+  provenance summary line (looked up via `ReferenceWorkRepository`). The two
+  manual-entry-in-progress branches (raw points, range-entry table) set
+  `set_provenance_summary("")` — there is no external "reported by" source
+  yet for data the user is actively typing in. The range-entry branch's
+  `_bound`/`_mean` fallback helpers now return `(value, is_derived)` and
+  `_refresh_preview` passes the per-cell flags to `set_summary(..., derived=...)`.
+- `ui/cloud_reference_dialog.py::community_detail_preview_fields`: added a
+  `provenance_summary` field (contributor/date/measurement count/whether any
+  QC method flag was recorded); wired at both `set_provenance_summary` call
+  sites. Community's `detail` dict has no `reference_taxon_treatments`/
+  `reference_measurement_sets` columns at all (separate Supabase pipeline),
+  so the "Source notes" treatment_notes/measurement_set.notes threading from
+  Part 4 does not apply here — confirmed by reading
+  `community_detail_preview_fields` before concluding this.
+
+Reuse: `TaxonTreatmentRepository.get`/`ReferenceWorkRepository.get` (existing
+CRUD, same pattern already used elsewhere in `main_window.py`); the row's
+existing tooltip/elision pattern (no new widget mechanism); `set_summary`'s
+existing `note`/`summary_note_label` split (added a second label rather than
+overloading `note`, which already carries heterogeneous per-caller content).
+
+Deviations: measurement_set.notes keeps its existing Calibration-tab meaning
+rather than being relabeled — both are defensible per the prompt's
+"implementer's call, documented either way" language; a future stage could
+revisit if a cataloger reports `notes` is actually being used for citation
+context rather than calibration.
+
+Validation:
+- `./.venv/bin/pytest tests/test_comparison_panel_model.py
+  tests/test_comparison_list_widget_rebuild.py tests/test_add_reference_dialog.py
+  tests/test_reference_entry_editor.py tests/test_reference_series_palette.py
+  tests/test_reference_library_desktop_slice.py
+  tests/test_reference_successor_adoption.py
+  tests/test_community_results_pane_requests.py -q` → 144 passed.
+- `./.venv/bin/python -m py_compile` on every touched file → clean.
+- `./tools/update_translations.sh` (nb_NO/sv_SE/de_DE) → 0 unfinished after
+  filling the 26 new strings via `tools/agent_translate.py`.
+- Renderer screenshots (`--group reference-library`, light/dark/nb_NO) for
+  new scenarios `reference.provenance-preview(-method)(-dark)(-nb-no)`, plus
+  re-rendered `reference.comparison-list` and `reference.add-dialog-library`
+  — inspected directly. Method tab shows reworded labels with the "—"
+  not-reported convention in all three states; Summary table shows a `†`
+  footnote marker + tooltip only on cells derived from the typical-range
+  fallback, not on directly-reported cells; the new provenance-summary line
+  renders above the Summary table. Screenshots are layout evidence only —
+  the tooltip's actual runtime behavior is covered by
+  `test_provenance_surfaces_reported_fields_and_not_reported_for_the_rest`
+  and `test_summary_cell_derived_from_typical_range_marks_distinctly`, not
+  by the screenshot itself.
+
+No schema/persistence change; no match/verdict/threshold logic introduced.
+Self-verifiable stage — committed as its own commit.

@@ -55,6 +55,14 @@ class ReferencePreviewPane(QWidget):
         self.summary_meta_label.setWordWrap(True)
         self.summary_layout.addWidget(self.summary_meta_label)
 
+        # One-line, non-judgmental "what was reported" summary -- work/year,
+        # sample size, whether a method was recorded. Never a claim about
+        # whether the current observation agrees with this source.
+        self.provenance_summary_label = QLabel("")
+        self.provenance_summary_label.setWordWrap(True)
+        self.provenance_summary_label.setStyleSheet("color: #7f8c8d; font-style: italic;")
+        self.summary_layout.addWidget(self.provenance_summary_label)
+
         self.summary_table = QTableWidget(3, 4)
         self.summary_table.setFocusPolicy(Qt.NoFocus)
         self.summary_table.setHorizontalHeaderLabels(
@@ -86,12 +94,12 @@ class ReferencePreviewPane(QWidget):
         self.method_form.setSpacing(8)
         self._method_labels: dict[str, QLabel] = {}
         for key, label in (
-            ("mount", self.tr("Mount medium:")),
-            ("stain", self.tr("Stain:")),
-            ("sample_type", self.tr("Sample type:")),
-            ("contrast", self.tr("Contrast:")),
-            ("objective", self.tr("Objective / profile:")),
-            ("scale", self.tr("Scale / calibration:")),
+            ("mount", self.tr("Mounting medium (as reported):")),
+            ("stain", self.tr("Stain (as reported):")),
+            ("sample_type", self.tr("Preparation (as reported):")),
+            ("contrast", self.tr("Contrast (as reported):")),
+            ("objective", self.tr("Objective / method (as reported):")),
+            ("scale", self.tr("Scale (as reported):")),
         ):
             value_label = QLabel("—")
             value_label.setWordWrap(True)
@@ -124,6 +132,7 @@ class ReferencePreviewPane(QWidget):
         self.summary_note_label.setText(
             self.tr("Import actions stay disabled until a search result is selected and loaded.")
         )
+        self.provenance_summary_label.setText("")
         for row, metric in enumerate(
             (self.tr("Length"), self.tr("Width"), self.tr("Q"))
         ):
@@ -151,19 +160,39 @@ class ReferencePreviewPane(QWidget):
         meta: str,
         rows: list[tuple[str, str, str, str]],
         note: str,
+        derived: list[tuple[bool, bool, bool]] | None = None,
     ) -> None:
         """Populate the Summary tab.
 
         *rows* is a list of up to 3 ``(metric, min, median_mean, max)`` tuples.
+        *derived* (optional), if given, is a parallel list of
+        ``(min_derived, median_derived, max_derived)`` flags marking cells
+        computed via a typical-range/community fallback rather than a
+        directly reported extreme -- never a judgment about whether the
+        value holds up, only about where it came from. Derived cells render
+        with a footnote marker and an explanatory tooltip.
         """
         self.summary_title_label.setText(title)
         self.summary_meta_label.setText(meta)
+        derived_tooltip = self.tr("Derived from typical range; not directly reported")
         for row_idx, (metric, vmin, vmedian, vmax) in enumerate(rows[:3]):
+            flags = derived[row_idx] if derived and row_idx < len(derived) else (False, False, False)
             self.summary_table.setItem(row_idx, 0, QTableWidgetItem(metric))
-            self.summary_table.setItem(row_idx, 1, QTableWidgetItem(vmin))
-            self.summary_table.setItem(row_idx, 2, QTableWidgetItem(vmedian))
-            self.summary_table.setItem(row_idx, 3, QTableWidgetItem(vmax))
+            for col, text, is_derived in zip((1, 2, 3), (vmin, vmedian, vmax), flags):
+                item = QTableWidgetItem(f"{text} †" if is_derived else text)
+                if is_derived:
+                    item.setToolTip(derived_tooltip)
+                self.summary_table.setItem(row_idx, col, item)
         self.summary_note_label.setText(note)
+
+    def set_provenance_summary(self, text: str) -> None:
+        """Set the one-line "what was reported" summary above the Summary
+        table (work/year, sample size, whether a method was recorded).
+
+        Must never state or imply agreement/disagreement with the current
+        observation -- it describes only what the source itself reported.
+        """
+        self.provenance_summary_label.setText(text)
 
     def set_raw_spores(self, text: str) -> None:
         """Set the Raw spores tab content."""

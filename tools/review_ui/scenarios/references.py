@@ -412,6 +412,50 @@ def _community_preview(context: ReviewContext):
     return pane
 
 
+def _reference_provenance_preview(context: ReviewContext):
+    """Stage 5: reworded Method tab (reported-source wording, incl. a "not
+    reported" case) + a Summary table with derived-value markers visible."""
+    from ui.reference_preview_pane import ReferencePreviewPane
+
+    pane = ReferencePreviewPane(context.host)
+    pane.set_summary(
+        title="Amanita muscaria (L.) Lam.",
+        meta="Funga Nordica — pp. 145",
+        rows=[
+            ("Length", "8.00", "9.20", "12.00"),
+            ("Width", "6.00", "7.10", "9.00"),
+            ("Q", "1.20", "1.30", "1.40"),
+        ],
+        note="Range summary",
+        # Length: min directly reported, mean/max derived from the typical
+        # range. Width/Q: all three directly reported (no marker).
+        derived=[(False, True, True), (False, False, False), (False, False, False)],
+    )
+    pane.set_raw_spores("This is a range summary; no raw spore points are stored.")
+    pane.set_method(
+        {
+            "mount": "",
+            "stain": "KOH",
+            "sample_type": "",
+            "contrast": "",
+            "objective": "",
+            "scale": "",
+        }
+    )
+    pane.set_calibration("No calibration details recorded.")
+    pane.set_provenance("Source notes: not reported")
+    pane.set_provenance_summary(
+        "Reported by: Funga Nordica (2012) · sample size: not reported · method recorded: yes"
+    )
+    return pane
+
+
+def _reference_provenance_preview_method_tab(context: ReviewContext):
+    pane = _reference_provenance_preview(context)
+    pane.review_tabs.setCurrentIndex(2)  # Method tab: reworded reported-source labels
+    return pane
+
+
 def _comparison_row(
     dataset_id,
     title,
@@ -421,6 +465,7 @@ def _comparison_row(
     *,
     visible=True,
     is_observation=False,
+    provenance="",
 ):
     from ui.comparison_panel import ComparisonRow, SourceKind
 
@@ -432,6 +477,7 @@ def _comparison_row(
         color=color,
         visible=visible,
         is_observation=is_observation,
+        provenance=provenance,
     )
 
 
@@ -447,6 +493,13 @@ def _comparison_list_basic(context: ReviewContext):
             ),
             _comparison_row(
                 "lib-1", "Funga Nordica", "library", "8.5–10.8 × 4.5–5.8 µm", "#e67e22",
+                provenance=(
+                    "Method: not reported\n"
+                    "Mount medium: KOH\n"
+                    "Stain: Congo red\n"
+                    "Sample size: not reported\n"
+                    "Specimen count: not reported"
+                ),
             ),
             _comparison_row(
                 "myobs-1", "Sigmund Ås 2026-08-02", "my_obs", "n = 17", "#2ecc71",
@@ -1012,6 +1065,40 @@ def register_reference_scenarios(registry: ScenarioRegistry) -> None:
             description="Same ReferencePreviewPane state in dark theme to verify palette correctness.",
             viewport=(600, 500),
             build=_community_preview,
+            theme="dark",
+        ),
+        ReviewScenario(
+            id="reference.provenance-preview",
+            group="reference-library",
+            title="Reference review pane — reported-source wording + derived markers (light)",
+            description="Method tab reworded for reported-source context (incl. a not-reported case) and a Summary table with derived-value footnote markers.",
+            viewport=(600, 520),
+            build=_reference_provenance_preview,
+        ),
+        ReviewScenario(
+            id="reference.provenance-preview-method",
+            group="reference-library",
+            title="Reference review pane — Method tab, reported-source wording",
+            description="Method tab reworded for reported-source context, including a not-reported case (mount medium, sample type, contrast, objective, scale all blank).",
+            viewport=(600, 520),
+            build=_reference_provenance_preview_method_tab,
+        ),
+        ReviewScenario(
+            id="reference.provenance-preview-nb-no",
+            group="reference-library",
+            title="Reference review pane — Method tab, reported-source wording (Norwegian Bokmål)",
+            description="The real Norwegian translator exercises the reworded Method tab labels.",
+            viewport=(600, 520),
+            build=_reference_provenance_preview_method_tab,
+            locale="nb_NO",
+        ),
+        ReviewScenario(
+            id="reference.provenance-preview-dark",
+            group="reference-library",
+            title="Reference review pane — reported-source wording + derived markers (dark)",
+            description="Same state in dark theme to verify the footnote marker and tooltip-bearing cells stay legible.",
+            viewport=(600, 520),
+            build=_reference_provenance_preview,
             theme="dark",
         ),
         ReviewScenario(

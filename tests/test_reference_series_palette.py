@@ -39,6 +39,24 @@ def _stub_with_references(entries: list[dict]) -> SimpleNamespace:
     return stub
 
 
+def test_manual_entry_label_prefers_name_as_published_over_genus_species():
+    """Stage 5 Part 2: a manual-tab entry's ``name_as_published`` (already
+    captured by ``ReferenceEntryEditor``) must win over the genus/species
+    reconstruction for every source kind, not only Library-attached rows.
+    """
+    _app()
+    stub = _stub_with_references([])
+    label = stub._format_reference_series_label(
+        {
+            "genus": "Cortinarius",
+            "species": "limonius",
+            "name_as_published": "Cortinarius limonius (Fr.) Fr., sensu auct.",
+            "source_kind": "reference",
+        }
+    )
+    assert label == "Cortinarius limonius (Fr.) Fr., sensu auct."
+
+
 def test_first_automatic_reference_color_is_not_the_observation_color():
     """Index 0 of the palette is reserved for the current-observation row
     (comparison_panel.RESERVED_OBSERVATION_COLOR); the first reference must

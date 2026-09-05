@@ -423,6 +423,17 @@ def community_detail_preview_fields(detail: dict[str, Any], tr: Callable[[str], 
         provenance_lines.append(tr("Location and private observation content are intentionally excluded from this review flow."))
     provenance_text = "\n".join(provenance_lines)
 
+    method_recorded = bool(qc_lines)
+    not_reported = tr("not reported")
+    provenance_summary = tr(
+        "Reported by: {contributor} ({date}) · sample size: {size} · method recorded: {method}"
+    ).format(
+        contributor=contributor,
+        date=observed_on or not_reported,
+        size=measurement_count if measurement_count else not_reported,
+        method=tr("yes") if method_recorded else not_reported,
+    )
+
     return {
         "title": title,
         "meta": meta,
@@ -432,6 +443,7 @@ def community_detail_preview_fields(detail: dict[str, Any], tr: Callable[[str], 
         "method_mapping": method_mapping,
         "calibration_text": calibration_text,
         "provenance_text": provenance_text,
+        "provenance_summary": provenance_summary,
         "points_count": len(measurements) if isinstance(measurements, list) else 0,
     }
 
@@ -1158,6 +1170,7 @@ class CloudReferenceDialog(QDialog):
         self._preview_pane.set_method(fields["method_mapping"])
         self._preview_pane.set_calibration(fields["calibration_text"])
         self._preview_pane.set_provenance(fields["provenance_text"])
+        self._preview_pane.set_provenance_summary(fields["provenance_summary"])
 
         self.import_summary_button.setEnabled(True)
         self.plot_points_button.setEnabled(bool(fields["points_count"]))
@@ -1497,6 +1510,7 @@ class CommunityResultsPane(QWidget):
         self._preview_pane.set_method(fields["method_mapping"])
         self._preview_pane.set_calibration(fields["calibration_text"])
         self._preview_pane.set_provenance(fields["provenance_text"])
+        self._preview_pane.set_provenance_summary(fields["provenance_summary"])
 
     def _update_mode_radio_state(self) -> None:
         n = 0

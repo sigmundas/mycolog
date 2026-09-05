@@ -276,6 +276,7 @@ class MeasurementSetCandidate:
     taxon_id: str | None = None
     is_favorite: bool = False
     recent_use_sequence: int | None = None
+    treatment_notes: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1133,6 +1134,7 @@ class MeasurementSetRepository:
                     t.taxon_id AS t_taxon_id,
                     t.name_as_published AS t_name_as_published,
                     t.locator_text AS t_locator_text,
+                    t.treatment_notes AS t_treatment_notes,
                     w.id AS w_id,
                     w.short_label AS w_short_label,
                     w.title AS w_title,
@@ -1184,6 +1186,9 @@ class MeasurementSetRepository:
                         int(row["p_recent_use_sequence"])
                         if row["p_recent_use_sequence"] is not None
                         else None
+                    ),
+                    treatment_notes=(
+                        str(row["t_treatment_notes"]) if row["t_treatment_notes"] else None
                     ),
                 )
             )

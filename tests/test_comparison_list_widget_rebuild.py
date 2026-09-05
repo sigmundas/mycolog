@@ -38,7 +38,6 @@ def _row(key: str, visible: bool = True) -> ComparisonRow:
         color="#e67e22",
         visible=visible,
         is_observation=False,
-        verdict=None,
     )
 
 
@@ -57,7 +56,6 @@ def test_dimmed_row_renders_unchecked_and_disabled_without_mutating_visible():
         color="#e67e22",
         visible=True,
         is_observation=False,
-        verdict=None,
         dimmed=True,
     )
     widget.set_rows([row], references_suppressed=True)

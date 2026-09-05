@@ -665,7 +665,30 @@ class ReferenceEntryEditor(QWidget):
                 }
             )
             pane.set_calibration(ms.notes or QCoreApplication.translate("ReferenceAddDialog", "No calibration details recorded."))
-            pane.set_provenance("")
+            treatment = TaxonTreatmentRepository.get(ms.taxon_treatment_id)
+            treatment_notes = (getattr(treatment, "treatment_notes", None) or "").strip()
+            pane.set_provenance(
+                QCoreApplication.translate("ReferenceAddDialog", "Source notes: {notes}").format(
+                    notes=treatment_notes or QCoreApplication.translate("ReferenceAddDialog", "Not reported")
+                )
+            )
+            work = (
+                ReferenceWorkRepository.get(treatment.reference_work_id)
+                if treatment is not None
+                else None
+            )
+            method_recorded = bool(ms.mount_medium or ms.stain or ms.preparation or ms.measurement_method)
+            not_reported = QCoreApplication.translate("ReferenceAddDialog", "not reported")
+            pane.set_provenance_summary(
+                QCoreApplication.translate(
+                    "ReferenceAddDialog", "Reported by: {work} ({year}) · sample size: {size} · method recorded: {method}"
+                ).format(
+                    work=(work.title if work is not None else None) or title,
+                    year=work.year if work is not None and work.year else not_reported,
+                    size=ms.sample_size if getattr(ms, "sample_size", None) else not_reported,
+                    method=QCoreApplication.translate("ReferenceAddDialog", "yes") if method_recorded else not_reported,
+                )
+            )
             return
         if self.tabs.currentIndex() == 1:
             points = self.spore_table.get_points()
@@ -691,10 +714,18 @@ class ReferenceEntryEditor(QWidget):
                 title, "", rows,
                 QCoreApplication.translate("ReferenceAddDialog", "n = {count} spore measurements").format(count=len(points)),
             )
+            # Manually entered, not yet reported by any external source.
+            pane.set_provenance_summary("")
             pane.set_raw_spores(json.dumps(points, indent=2, ensure_ascii=False, default=str))
             pane.set_method({"mount": "", "stain": "", "sample_type": "", "objective": ""})
             pane.set_calibration(QCoreApplication.translate("ReferenceAddDialog", "Not applicable: entered manually."))
-            pane.set_provenance(QCoreApplication.translate("ReferenceAddDialog", "Manually entered"))
+            pane.set_provenance(
+                QCoreApplication.translate("ReferenceAddDialog", "Manually entered")
+                + "\n"
+                + QCoreApplication.translate("ReferenceAddDialog", "Source notes: {notes}").format(
+                    notes=QCoreApplication.translate("ReferenceAddDialog", "Not reported")
+                )
+            )
             return
         has_values = any(
             self._table_value(row, col) is not None
@@ -704,43 +735,69 @@ class ReferenceEntryEditor(QWidget):
         if not has_values:
             pane.clear()
             return
-        def _bound(row: int, extreme_col: int, typical_col: int):
+        def _bound(row: int, extreme_col: int, typical_col: int) -> tuple[float | None, bool]:
             # Extreme (parenthesised) bounds win when present; otherwise
             # fall back to the typical bound, mirroring
             # normalized_measurement_set_payload's Q min/max fallback so
             # the preview matches what "Enter new data" actually built
             # even for the common bare-typical-range literature format
-            # with no parenthesised extremes.
+            # with no parenthesised extremes. The second return value marks
+            # whether the shown value is a fallback (derived), not a directly
+            # reported extreme, so the Summary tab can present it distinctly.
             value = self._table_value(row, extreme_col)
-            return value if value is not None else self._table_value(row, typical_col)
+            if value is not None:
+                return value, False
+            typical = self._table_value(row, typical_col)
+            return typical, typical is not None
 
-        def _mean(row: int, parmasto_key: str | None):
+        def _mean(row: int, parmasto_key: str | None) -> tuple[float | None, bool]:
             value = self._table_value(row, 2)
             if value is not None or parmasto_key is None:
-                return value
-            return self._parmasto_value(parmasto_key)
+                return value, False
+            derived_value = self._parmasto_value(parmasto_key)
+            return derived_value, derived_value is not None
 
-        rows = [
-            (
-                label,
-                _format_stat(_bound(row, 0, 1)),
-                _format_stat(_mean(row, parmasto_key)),
-                _format_stat(_bound(row, 4, 3)),
+        rows: list[tuple[str, str, str, str]] = []
+        derived_cells: list[tuple[bool, bool, bool]] = []
+        for label, row, parmasto_key in (
+            (QCoreApplication.translate("ReferenceAddDialog", "Length"), 0, "parmasto_length_mean"),
+            (QCoreApplication.translate("ReferenceAddDialog", "Width"), 1, "parmasto_width_mean"),
+            (QCoreApplication.translate("ReferenceAddDialog", "Q"), 2, "parmasto_q_mean"),
+        ):
+            min_value, min_derived = _bound(row, 0, 1)
+            mean_value, mean_derived = _mean(row, parmasto_key)
+            max_value, max_derived = _bound(row, 4, 3)
+            rows.append(
+                (
+                    label,
+                    _format_stat(min_value),
+                    _format_stat(mean_value),
+                    _format_stat(max_value),
+                )
             )
-            for label, row, parmasto_key in (
-                (QCoreApplication.translate("ReferenceAddDialog", "Length"), 0, "parmasto_length_mean"),
-                (QCoreApplication.translate("ReferenceAddDialog", "Width"), 1, "parmasto_width_mean"),
-                (QCoreApplication.translate("ReferenceAddDialog", "Q"), 2, "parmasto_q_mean"),
-            )
-        ]
+            derived_cells.append((min_derived, mean_derived, max_derived))
         title = self._current_source_label() or QCoreApplication.translate("ReferenceAddDialog", "Manual entry")
-        pane.set_summary(title, "", rows, QCoreApplication.translate("ReferenceAddDialog", "Range summary"))
+        pane.set_summary(
+            title,
+            "",
+            rows,
+            QCoreApplication.translate("ReferenceAddDialog", "Range summary"),
+            derived=derived_cells,
+        )
+        # Manually entered, not yet reported by any external source.
+        pane.set_provenance_summary("")
         pane.set_raw_spores(
             QCoreApplication.translate("ReferenceAddDialog", "This is a range summary; no raw spore points are stored.")
         )
         pane.set_method({"mount": "", "stain": "", "sample_type": "", "objective": ""})
         pane.set_calibration(QCoreApplication.translate("ReferenceAddDialog", "Not applicable: entered manually."))
-        pane.set_provenance(QCoreApplication.translate("ReferenceAddDialog", "Manually entered"))
+        pane.set_provenance(
+            QCoreApplication.translate("ReferenceAddDialog", "Manually entered")
+            + "\n"
+            + QCoreApplication.translate("ReferenceAddDialog", "Source notes: {notes}").format(
+                notes=QCoreApplication.translate("ReferenceAddDialog", "Not reported")
+            )
+        )
 
     # ------------------------------------------------------------------
     # Hints

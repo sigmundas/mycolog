@@ -89,6 +89,22 @@ def test_library_row_detail_is_the_measurement_range_not_the_publication_name():
     assert row.detail == "range · 7-9.5 × 5.5-7.5"
 
 
+def test_provenance_surfaces_reported_fields_and_not_reported_for_the_rest():
+    """Stage 5 Part 5: whichever of method/mount/stain/sample size/specimen
+    count are present must surface in the row's provenance tooltip text,
+    with "not reported" for the rest -- never a judgment about the value.
+    """
+    entry = _library_entry()
+    entry["data"]["mount_medium"] = "KOH"
+    entry["data"]["stain"] = "Congo red"
+    row = ComparisonRow.from_resolved_entry(entry)
+    assert "Mount medium: KOH" in row.provenance
+    assert "Stain: Congo red" in row.provenance
+    assert "Method: not reported" in row.provenance
+    assert "Sample size: not reported" in row.provenance
+    assert "Specimen count: not reported" in row.provenance
+
+
 def test_rows_from_resolved_entries_marks_dimmed_when_suppressed():
     rows = ComparisonListWidget.rows_from_resolved_entries([_library_entry()], dimmed=True)
     assert rows[0].dimmed is True
@@ -106,7 +122,6 @@ def test_adding_dataset_produces_a_row():
     assert row.dataset_id == "lib-key"
     assert row.title == "Funga Nordica"
     assert row.source_kind == SourceKind.LIBRARY
-    assert row.verdict is None
 
 
 def test_removing_dataset_removes_the_row():
@@ -166,7 +181,6 @@ def test_current_observation_row_is_present_first_and_reserved_blue():
     assert ordered[0].source_kind == SourceKind.OBSERVATION
     assert ordered[0].color == RESERVED_OBSERVATION_COLOR
     assert ordered[0].is_observation is True
-    assert ordered[0].verdict is None
     assert ordered[0].detail == "2026-08-24 · n = 20"
 
 

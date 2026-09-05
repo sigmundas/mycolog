@@ -212,6 +212,33 @@ def test_translator_populates_p50_only_when_means_supplied():
         assert data["width_p50"] is None
 
 
+def test_translator_threads_method_fields_and_specimen_count_into_data():
+    """Stage 5 Part 5: the snapshot's ``method`` sub-dict and
+    ``measurements.specimen_count`` are already captured at attach time
+    (``build_snapshot``) but were never copied into the plotting ``data``
+    dict the comparison row reads. Method/specimen-count context must reach
+    the row without any schema change."""
+    snapshot = _range_snapshot()
+    snapshot["measurements"]["specimen_count"] = 12
+    snapshot["method"] = {
+        "mount_medium": "KOH",
+        "stain": "Congo red",
+        "preparation": "Fresh material",
+        "measurement_method": "Light microscopy",
+    }
+    use = _make_use(snapshot, use_id="use-method")
+
+    result = translate_observation_reference_use(use)
+
+    assert result is not None
+    data = result["data"]
+    assert data["mount_medium"] == "KOH"
+    assert data["stain"] == "Congo red"
+    assert data["preparation"] == "Fresh material"
+    assert data["measurement_method"] == "Light microscopy"
+    assert data["specimen_count"] == 12
+
+
 def test_translator_raw_points_keeps_only_paired_numeric_points():
     """raw_points: emit source_kind='points' with only the paired
     numeric length/width points; drop entries missing a coordinate. No

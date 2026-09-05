@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QCoreApplication, Qt, Signal
 from PySide6.QtGui import QColor, QFontMetrics
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -71,11 +71,7 @@ class SourceKind(Enum):
 
 @dataclass
 class ComparisonRow:
-    """One row in the comparison list.
-
-    ``verdict`` is always ``None`` in this stage; verdict computation lands
-    in stage 5. Badges render nothing when it is ``None``.
-    """
+    """One row in the comparison list."""
 
     dataset_id: object  # matches _reference_series_key(...) return value
     title: str
@@ -84,11 +80,14 @@ class ComparisonRow:
     color: str
     visible: bool
     is_observation: bool
-    verdict: object | None = None
     # True when the plot is not currently drawing this row (Category filter
     # outside Spores) -- rendered checkbox-disabled and faded rather than
     # hidden. Never true for the current-observation row.
     dimmed: bool = False
+    # Compact, non-judgmental "what the source reported" tooltip text (method/
+    # mount/stain/sample size/specimen count); "" for the current-observation
+    # row, which has no reported-source context to show.
+    provenance: str = ""
 
     @classmethod
     def from_resolved_entry(cls, entry: dict, *, dimmed: bool = False) -> "ComparisonRow | None":
@@ -123,8 +122,8 @@ class ComparisonRow:
             color=color,
             visible=bool(entry.get("enabled", True)),
             is_observation=False,
-            verdict=None,
             dimmed=dimmed,
+            provenance=_format_provenance(data),
         )
 
     @classmethod
@@ -136,7 +135,7 @@ class ComparisonRow:
         Unlike :meth:`from_resolved_entry`, this is never built from
         ``_resolved_reference_series_entries`` — the caller synthesizes it
         from the active observation's own measurements. Reserved blue,
-        pinned first via ``is_observation``, no verdict badge.
+        pinned first via ``is_observation``.
         """
         detail = f"{date} · n = {n}" if date else f"n = {n}"
         return cls(
@@ -147,7 +146,6 @@ class ComparisonRow:
             color=RESERVED_OBSERVATION_COLOR,
             visible=True,
             is_observation=True,
-            verdict=None,
         )
 
 
@@ -173,6 +171,40 @@ def _format_detail(data: dict) -> str:
     if length_min is not None and length_max is not None:
         return f"{length_min}–{length_max} µm"
     return str(data.get("source") or data.get("summary") or "")
+
+
+def _format_provenance(data: dict) -> str:
+    """Compact, non-judgmental "what the source reported" tooltip text.
+
+    Surfaces whichever of method/mount medium/stain/sample size/specimen
+    count are present on this row's entry, and "not reported" for the rest --
+    never an inference about whether the value holds up.
+    """
+    not_reported = QCoreApplication.translate("ComparisonPanel", "not reported")
+
+    def _value(key: str) -> str:
+        value = data.get(key)
+        text = str(value).strip() if value not in (None, "") else ""
+        return text or not_reported
+
+    lines = [
+        QCoreApplication.translate("ComparisonPanel", "Method: {value}").format(
+            value=_value("measurement_method")
+        ),
+        QCoreApplication.translate("ComparisonPanel", "Mount medium: {value}").format(
+            value=_value("mount_medium")
+        ),
+        QCoreApplication.translate("ComparisonPanel", "Stain: {value}").format(
+            value=_value("stain")
+        ),
+        QCoreApplication.translate("ComparisonPanel", "Sample size: {value}").format(
+            value=_value("sample_size")
+        ),
+        QCoreApplication.translate("ComparisonPanel", "Specimen count: {value}").format(
+            value=_value("specimen_count")
+        ),
+    ]
+    return "\n".join(lines)
 
 
 _SOURCE_KIND_LABELS = {
@@ -232,14 +264,12 @@ class _ComparisonRowWidget(QFrame):
         self.badge_label.setStyleSheet("color: #7f8c8d; font-size: 10px;")
         title_row.addWidget(self.badge_label, 0)
 
-        # Verdict badge slot: empty while verdict is None (stage 5 fills it in).
-        self.verdict_label = QLabel("", self)
-        title_row.addWidget(self.verdict_label, 0)
-
         text_col.addLayout(title_row)
 
         self.detail_label = QLabel(row.detail, self)
         self.detail_label.setStyleSheet("color: #7f8c8d; font-size: 11px;")
+        if row.provenance:
+            self.detail_label.setToolTip(row.provenance)
         text_col.addWidget(self.detail_label)
 
         layout.addLayout(text_col, 1)

@@ -197,6 +197,37 @@ def test_preview_pane_reflects_valid_range_and_clears_when_emptied():
     assert pane.summary_table.item(0, 1).text() == "—"
 
 
+def test_summary_cell_derived_from_typical_range_marks_distinctly():
+    """Stage 5 Part 6: a Summary-table cell populated via the extreme→typical
+    fallback must render distinctly (footnote marker + tooltip) from a cell
+    that reflects a directly reported extreme -- never identically."""
+    from ui.reference_preview_pane import ReferencePreviewPane
+
+    _app()
+    pane = ReferencePreviewPane(None)
+    editor = _make_editor(preview_pane=pane)
+    # Length row: only the typical bounds (cols 1/3) are entered, no
+    # parenthesised extremes, so the fallback must mark min/max derived.
+    editor.minmax_table.setItem(0, 1, QTableWidgetItem("8.50"))
+    editor.minmax_table.setItem(0, 3, QTableWidgetItem("10.80"))
+    # Width row: a directly reported extreme range must render with no
+    # marker/tooltip.
+    editor.minmax_table.setItem(1, 0, QTableWidgetItem("6.00"))
+    editor.minmax_table.setItem(1, 4, QTableWidgetItem("8.00"))
+    editor._refresh_preview()
+
+    length_min_item = pane.summary_table.item(0, 1)
+    length_max_item = pane.summary_table.item(0, 3)
+    assert "8.50" in length_min_item.text()
+    assert length_min_item.text() != "8.50"
+    assert length_min_item.toolTip()
+    assert length_max_item.toolTip()
+
+    width_min_item = pane.summary_table.item(1, 1)
+    assert width_min_item.text() == "6.00"
+    assert width_min_item.toolTip() == ""
+
+
 def test_sync_preview_repopulates_after_tab_revisit():
     from ui.reference_preview_pane import ReferencePreviewPane
 

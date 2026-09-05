@@ -725,6 +725,27 @@ class AddReferenceDialog(GeometryMixin, QDialog):
                 )
         note = candidate.raw_text or QCoreApplication.translate("AddReferenceDialog", "No additional notes.")
         self.preview_pane.set_summary(title, meta, rows, note)
+        method_recorded = bool(
+            measurement_set is not None
+            and (
+                measurement_set.mount_medium
+                or measurement_set.stain
+                or measurement_set.preparation
+                or measurement_set.measurement_method
+            )
+        )
+        sample_size = getattr(measurement_set, "sample_size", None) if measurement_set is not None else None
+        not_reported = QCoreApplication.translate("AddReferenceDialog", "not reported")
+        self.preview_pane.set_provenance_summary(
+            QCoreApplication.translate(
+                "AddReferenceDialog", "Reported by: {work} ({year}) · sample size: {size} · method recorded: {method}"
+            ).format(
+                work=candidate.work_title or candidate.name_as_published or "—",
+                year=candidate.year if candidate.year else not_reported,
+                size=sample_size if sample_size else not_reported,
+                method=QCoreApplication.translate("AddReferenceDialog", "yes") if method_recorded else not_reported,
+            )
+        )
 
         if measurement_set is not None and measurement_set.raw_points_json:
             self.preview_pane.set_raw_spores(measurement_set.raw_points_json)
@@ -745,8 +766,13 @@ class AddReferenceDialog(GeometryMixin, QDialog):
             self.preview_pane.set_calibration(
                 measurement_set.notes or QCoreApplication.translate("AddReferenceDialog", "No calibration details recorded.")
             )
+        source_notes = (candidate.treatment_notes or "").strip() or QCoreApplication.translate(
+            "AddReferenceDialog", "Not reported"
+        )
         self.preview_pane.set_provenance(
             QCoreApplication.translate("AddReferenceDialog", "Publication: {work}").format(work=candidate.work_title or candidate.name_as_published or "—")
+            + "\n"
+            + QCoreApplication.translate("AddReferenceDialog", "Source notes: {notes}").format(notes=source_notes)
         )
 
     @staticmethod
@@ -932,6 +958,9 @@ class AddReferenceDialog(GeometryMixin, QDialog):
             )
         note = QCoreApplication.translate("AddReferenceDialog", "n = {count} spore measurements").format(count=candidate.n)
         self.preview_pane.set_summary(title, meta, rows, note)
+        # A personal observation is not a published/community reference, so
+        # there is no reported-source provenance to summarize here.
+        self.preview_pane.set_provenance_summary("")
 
         self.preview_pane.set_raw_spores(
             json.dumps(candidate.points, indent=2, ensure_ascii=False, default=str)
