@@ -919,7 +919,7 @@ pre-existing renderer-inventory assertions; that debt is carried explicitly
 into 4c's scenario-test maintenance. Committed and prompt archived; 4c is the
 next bounded stage, not implemented here.
 
-### Stage 4c — `<commit-hash-below>` — Enter-manually tab wired
+### Stage 4c — `de305fb` — Enter-manually tab wired
 
 Replaced the "Enter manually" placeholder with a real, shared entry flow.
 Extracted the legacy `ReferenceAddDialog`'s ~1500-line body into a new
