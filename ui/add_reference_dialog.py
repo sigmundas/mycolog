@@ -4,8 +4,7 @@ Consolidates the reference-add entry points into one dialog: source tabs
 (Library / Community / My observations / Enter manually) sharing a single
 :class:`ReferencePreviewPane`, docked beside the tab widget in a top-level
 splitter so every tab's selection populates the same preview instance
-instead of each tab owning its own. Library, Community, and My observations
-are wired; Enter manually shows an honest, visibly-stubbed placeholder.
+instead of each tab owning its own. All four tabs are wired.
 
 The Community tab embeds :class:`~ui.cloud_reference_dialog.CommunityResultsPane`,
 which relocates ``CloudReferenceDialog``'s browse/select flow (its search
@@ -38,6 +37,24 @@ routes "Add to plot" through the same ``attach_callback``, but with an
 normalized measurement-set identity, so the host dispatches that prefix to
 the legacy ``source_kind == "observation"`` comparison-series path instead
 of the measurement-set attach path.
+
+The Enter-manually tab embeds a
+:class:`~ui.reference_entry_editor.ReferenceEntryEditor` — the same paste/
+parse table, publication picker, and Data section the legacy Quick-add
+dialog uses, without its modal Save/Cancel chrome — sharing the shared
+:class:`ReferencePreviewPane` and this dialog's "Add to plot"/Cancel footer
+instead. "Add to plot" routes through a dedicated
+``manual_attach_callback(editor) -> bool`` rather than the string-identifier
+``attach_callback``, since a manual submission can fail validation or an
+observation-drift check *after* the click and must leave the picker open
+rather than claim success — the callback's return value tells this dialog
+whether to close. Changing the "Compare against" target rebinds the
+editor's publication/treatment identity (see
+:meth:`ReferenceEntryEditor.set_comparison_target`) without discarding
+already-entered measurement values, and to the submission path,
+``ReferenceEntryEditor`` is duck-typed identically to the legacy dialog's
+own wrapper, so ``MainWindow`` reuses one shared post-validation
+persistence routine for both.
 """
 from __future__ import annotations
 
@@ -75,6 +92,7 @@ from database.reference_library import (
 from app_identity import SETTINGS_APP, SETTINGS_ORG
 
 from .cloud_reference_dialog import CommunityResultsPane
+from .reference_entry_editor import ReferenceEntryEditor
 from .reference_preview_pane import ReferencePreviewPane
 from .two_line_row import TwoLineRow
 from .window_state import GeometryMixin
@@ -210,25 +228,14 @@ def default_my_observation_candidates(
     return result
 
 
-class _StubTabPane(QWidget):
-    """Honest placeholder for a not-yet-wired source tab."""
-
-    def __init__(self, message: str, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setAlignment(Qt.AlignCenter)
-        label = QLabel(message, self)
-        label.setAlignment(Qt.AlignCenter)
-        label.setWordWrap(True)
-        label.setStyleSheet("color: #7f8c8d; font-style: italic;")
-        layout.addWidget(label)
-
-
 class AddReferenceDialog(GeometryMixin, QDialog):
     """Tabbed picker for adding a reference dataset to the comparison plot.
 
-    "Library", "Community", and "My observations" are functional; "Enter
-    manually" shows a stub pane (wired in a later stage per the plan).
+    All four source tabs are wired: "Library", "Community", "My
+    observations", and "Enter manually" (a
+    :class:`~ui.reference_entry_editor.ReferenceEntryEditor` embedded
+    without its modal chrome, sharing the same measurement editor,
+    validation, and submission path as the legacy Quick-add dialog).
     """
 
     _geometry_key = "AddReferenceDialog"
@@ -246,6 +253,7 @@ class AddReferenceDialog(GeometryMixin, QDialog):
         exclude_measurement_set_ids: Iterable[str] | None = None,
         attach_callback: Callable[[str, str], None] | None = None,
         cloud_attach_callback: Callable[[dict], None] | None = None,
+        manual_attach_callback: Callable[["ReferenceEntryEditor"], bool] | None = None,
         candidates: list[MeasurementSetCandidate] | None = None,
         my_observations: list[PersonalObservationCandidate] | None = None,
         community_results: list[dict] | None = None,
@@ -271,6 +279,7 @@ class AddReferenceDialog(GeometryMixin, QDialog):
         self._exclude_ids = {str(x) for x in (exclude_measurement_set_ids or [])}
         self._attach_callback = attach_callback
         self._cloud_attach_callback = cloud_attach_callback
+        self._manual_attach_callback = manual_attach_callback
         # Optional injected candidate list, mirroring
         # ReferenceLibraryAttachDialog's testability convention: when
         # provided, skips the repository query so tests/scenarios can run
@@ -318,9 +327,9 @@ class AddReferenceDialog(GeometryMixin, QDialog):
         self._my_observations_tab_index = self.tabs.addTab(
             self._my_observations_tab, QCoreApplication.translate("AddReferenceDialog", "My observations")
         )
-        self.tabs.addTab(
-            _StubTabPane(QCoreApplication.translate("AddReferenceDialog", "Coming in a later stage")),
-            QCoreApplication.translate("AddReferenceDialog", "Enter manually"),
+        self._build_manual_tab()
+        self._manual_tab_index = self.tabs.addTab(
+            self._manual_tab, QCoreApplication.translate("AddReferenceDialog", "Enter manually")
         )
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
@@ -381,6 +390,7 @@ class AddReferenceDialog(GeometryMixin, QDialog):
         source_width = max(
             self.tabs.tabBar().sizeHint().width(),
             self._library_tab.sizeHint().width(),
+            self.manual_editor.sizeHint().width(),
         ) + scroll_button_clearance
         preview_width = max(
             self.preview_pane.review_tabs.tabBar().sizeHint().width(),
@@ -532,6 +542,9 @@ class AddReferenceDialog(GeometryMixin, QDialog):
         self._populate_results_list()
         self._community_pane.set_taxon(self._genus, self._species)
         self._refresh_my_observations()
+        self.manual_editor.set_comparison_target(
+            genus=self._genus, species=self._species, sporely_taxon_id=self._taxon_id
+        )
         self._update_footer_state()
 
     def _on_tab_changed(self, _index: int) -> None:
@@ -540,6 +553,8 @@ class AddReferenceDialog(GeometryMixin, QDialog):
             self._populate_observation_preview(self._selected_observation)
         elif self.tabs.currentIndex() == self._community_tab_index:
             self._community_pane.sync_preview()
+        elif self.tabs.currentIndex() == self._manual_tab_index:
+            self.manual_editor.sync_preview()
         elif self.tabs.currentWidget() is self._library_tab:
             self._populate_preview(self._selected_candidate)
         else:
@@ -939,14 +954,42 @@ class AddReferenceDialog(GeometryMixin, QDialog):
         )
 
     # ------------------------------------------------------------------
+    # Enter manually tab
+    # ------------------------------------------------------------------
+
+    def _build_manual_tab(self) -> None:
+        self._manual_tab = QWidget(self)
+        layout = QVBoxLayout(self._manual_tab)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+        self.manual_editor = ReferenceEntryEditor(
+            self._manual_tab,
+            self._genus,
+            self._species,
+            observation_id=self._exclude_observation_id,
+            sporely_taxon_id=self._taxon_id,
+            observation_taxon_id=self._own_taxon_id,
+            preview_pane=self.preview_pane,
+        )
+        self.manual_editor.data_changed.connect(self._update_footer_state)
+        layout.addWidget(self.manual_editor)
+
+    # ------------------------------------------------------------------
     # Footer
     # ------------------------------------------------------------------
 
     def _update_footer_state(self) -> None:
+        if not hasattr(self, "add_to_plot_btn"):
+            # The manual editor's construction synchronously refreshes its
+            # preview (and emits data_changed) before the footer button
+            # exists yet; nothing to update this early.
+            return
         if self.tabs.currentIndex() == self._my_observations_tab_index:
             self.add_to_plot_btn.setEnabled(self._selected_observation is not None)
         elif self.tabs.currentIndex() == self._community_tab_index:
             self.add_to_plot_btn.setEnabled(self._community_pane.has_selection())
+        elif self.tabs.currentIndex() == self._manual_tab_index:
+            self.add_to_plot_btn.setEnabled(self.manual_editor.is_ready_to_submit())
         else:
             self.add_to_plot_btn.setEnabled(self._selected_candidate is not None)
 
@@ -967,6 +1010,18 @@ class AddReferenceDialog(GeometryMixin, QDialog):
                 return
             self._cloud_attach_callback(payload)
             self.accept()
+            return
+        if self.tabs.currentIndex() == self._manual_tab_index:
+            if self._manual_attach_callback is None:
+                return
+            if not self.manual_editor.validate_and_build_result():
+                return
+            # Unlike the other tabs, a manual submission can fail after
+            # validation (e.g. the observation drifted while the picker
+            # was open) and must leave the picker open rather than claim
+            # success — so only accept() when the callback reports success.
+            if self._manual_attach_callback(self.manual_editor):
+                self.accept()
             return
         if self._attach_callback is None or self._selected_candidate is None:
             return

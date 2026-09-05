@@ -17,7 +17,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QDialog
 
 from database.reference_library import MeasurementSetCandidate
 from ui.add_reference_dialog import (
@@ -614,6 +614,101 @@ def test_return_with_deliberately_edited_text_still_parses_free_taxon():
 
 
 # ---------------------------------------------------------------------
+# Enter-manually tab (stage 4c)
+# ---------------------------------------------------------------------
+
+
+def _set_manual_range(dialog: AddReferenceDialog, *, length=(8.0, 11.0), width=(6.0, 8.0)) -> None:
+    from PySide6.QtWidgets import QTableWidgetItem
+
+    editor = dialog.manual_editor
+    editor.minmax_table.setItem(0, 0, QTableWidgetItem(f"{length[0]:.2f}"))
+    editor.minmax_table.setItem(0, 4, QTableWidgetItem(f"{length[1]:.2f}"))
+    editor.minmax_table.setItem(1, 0, QTableWidgetItem(f"{width[0]:.2f}"))
+    editor.minmax_table.setItem(1, 4, QTableWidgetItem(f"{width[1]:.2f}"))
+
+
+def test_manual_tab_uses_pickers_observation_and_own_taxon_id():
+    dialog = _make_dialog(taxon_id=7)
+    assert dialog.manual_editor._observation_taxon_id == 7
+    assert dialog.manual_editor._sporely_taxon_id == 7
+
+
+def test_manual_tab_add_to_plot_disabled_until_valid_input():
+    dialog = _make_dialog()
+    dialog.tabs.setCurrentIndex(dialog._manual_tab_index)
+    assert dialog.add_to_plot_btn.isEnabled() is False
+    _set_manual_range(dialog)
+    assert dialog.add_to_plot_btn.isEnabled() is True
+
+
+def test_manual_tab_invalid_input_cannot_submit(monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+    received = []
+    dialog = _make_dialog(manual_attach_callback=lambda editor: received.append(editor) or True)
+    dialog.tabs.setCurrentIndex(dialog._manual_tab_index)
+    dialog._on_add_to_plot_clicked()
+    assert received == []
+    assert dialog.result() != QDialog.Accepted
+
+
+def test_manual_tab_add_to_plot_invokes_callback_and_accepts_on_success(monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+    received = []
+    dialog = _make_dialog(manual_attach_callback=lambda editor: received.append(editor) or True)
+    dialog.tabs.setCurrentIndex(dialog._manual_tab_index)
+    _set_manual_range(dialog)
+    dialog._on_add_to_plot_clicked()
+    assert received == [dialog.manual_editor]
+    assert dialog.result() == QDialog.Accepted
+
+
+def test_manual_tab_stays_open_when_callback_reports_failure(monkeypatch):
+    """A manual submission can fail after validation (e.g. the observation
+    drifted while the picker was open); the picker must stay open and must
+    not claim success -- unlike the other three tabs, which always accept()
+    once their callback is invoked.
+    """
+    from PySide6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+    dialog = _make_dialog(manual_attach_callback=lambda editor: False)
+    dialog.tabs.setCurrentIndex(dialog._manual_tab_index)
+    _set_manual_range(dialog)
+    dialog._on_add_to_plot_clicked()
+    assert dialog.result() != QDialog.Accepted
+
+
+def test_changing_taxon_target_resets_manual_editor_publication_state():
+    dialog = _make_dialog(taxon_id=7, ai_candidates=_ai_candidates())
+    _set_manual_range(dialog)
+    dialog.manual_editor._selected_work_id = "w-1"
+    dialog.taxon_target_combo.setCurrentIndex(1)
+    dialog.taxon_target_combo.activated.emit(1)
+    assert dialog.manual_editor._selected_work_id is None
+    assert dialog.manual_editor._sporely_taxon_id is None  # AI candidate has no taxon_id
+    assert dialog.manual_editor._genus == "Cortinarius"
+    assert dialog.manual_editor._species == "rubellus"
+    # Entered measurement values survive the target switch.
+    assert dialog.manual_editor._table_value(0, 0) == 8.0
+
+
+def test_switching_to_manual_tab_resyncs_shared_preview_pane():
+    dialog = _make_dialog()
+    _set_manual_range(dialog)
+    dialog.tabs.setCurrentIndex(0)  # Library tab
+    dialog.preview_pane.clear()
+    dialog.tabs.setCurrentIndex(dialog._manual_tab_index)
+    assert dialog.preview_pane.summary_table.item(0, 1).text() == "8.00"
+
+
+# ---------------------------------------------------------------------
 # Host integration -- MainWindow._on_add_reference_clicked
 # (stage-4b-fix2 Part 3 -- see review at ui/main_window.py:11540-11545)
 # ---------------------------------------------------------------------
@@ -673,3 +768,70 @@ def test_host_own_target_uses_captured_observation(monkeypatch, observation):
     )
     assert all(call.args == (42,) for call in reads.call_args_list)
     writes.assert_not_called()
+
+
+def _make_host_window_for_manual_callback(monkeypatch):
+    """Build a minimal ``MainWindow``-like namespace and capture the
+    ``manual_attach_callback`` ``_on_add_reference_clicked`` builds for the
+    picker, without constructing a real ``AddReferenceDialog``.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    import ui.main_window as host
+
+    _app()
+    monkeypatch.setattr(
+        host.ObservationDB,
+        "get_observation",
+        Mock(return_value={"genus": "Cortinarius", "species": "limonius", "sporely_taxon_id": 7}),
+    )
+    window = SimpleNamespace(
+        active_observation_id=42,
+        species_availability=SimpleNamespace(),
+        tr=lambda text: text,
+        _current_attached_measurement_set_ids=lambda: set(),
+        _collect_reference_ai_suggestions=_ai_candidates,
+        _submit_reference_editor_result=Mock(),
+    )
+    for name in ("_clean_ref_genus_text", "_clean_ref_species_text", "_active_sporely_taxon_id"):
+        setattr(window, name, getattr(host.MainWindow, name).__get__(window))
+
+    captured = []
+
+    class Dialog:
+        def __init__(self, parent, **kwargs):
+            captured.append(kwargs)
+
+        def exec(self):
+            return 0
+
+    monkeypatch.setattr(host, "AddReferenceDialog", Dialog)
+    host.MainWindow._on_add_reference_clicked(window)
+    return window, captured[0]
+
+
+def test_manual_callback_routes_through_shared_submission_helper(monkeypatch):
+    """Both the legacy Quick-add dialog and the picker's manual tab must
+    route through the same shared submission helper -- exercised here via
+    the callback ``_on_add_reference_clicked`` builds for
+    ``manual_attach_callback``.
+    """
+    window, kwargs = _make_host_window_for_manual_callback(monkeypatch)
+    editor = object()  # opaque stand-in; the callback never inspects it
+    result = kwargs["manual_attach_callback"](editor)
+    assert result is True
+    window._submit_reference_editor_result.assert_called_once_with(
+        editor, sync_panel=False
+    )
+
+
+def test_manual_callback_rejects_when_observation_drifted(monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+    window, kwargs = _make_host_window_for_manual_callback(monkeypatch)
+    window.active_observation_id = 999  # drifted since the picker opened
+    editor = object()
+    result = kwargs["manual_attach_callback"](editor)
+    assert result is False
+    window._submit_reference_editor_result.assert_not_called()

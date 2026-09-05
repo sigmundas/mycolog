@@ -246,6 +246,7 @@ from .database_settings_dialog import DatabaseSettingsDialog
 from .cloud_reference_dialog import CloudReferenceDialog
 from .add_reference_dialog import AddReferenceDialog
 from .comparison_panel import ComparisonListWidget, ComparisonRow
+from .reference_entry_editor import ReferenceEntryEditor, SporeDataTable
 from .reference_library_attach_dialog import ReferenceLibraryAttachDialog
 from .section_card import create_section_card
 from .segmented_selector import SegmentedSelector
@@ -5190,162 +5191,16 @@ class ReferenceValuesDialog(QDialog):
             self.species_input.blockSignals(False)
         return controller.refresh_species_suggestions()
 
-class SporeDataTable(QTableWidget):
-    """Editable table for spore data with auto-added rows and Q calculation."""
-
-    def __init__(self, parent=None):
-        super().__init__(0, 3, parent)
-        self.setObjectName("referenceSporeTable")
-        self.setFocusPolicy(Qt.StrongFocus)
-        self.setHorizontalHeaderLabels([self.tr("Length (\u03bcm)"), self.tr("Width (\u03bcm)"), "Q"])
-        header = self.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.verticalHeader().setVisible(False)
-        self.setSelectionBehavior(QAbstractItemView.SelectItems)
-        self.setEditTriggers(QAbstractItemView.AllEditTriggers)
-        self._updating_q = False
-        self.itemChanged.connect(self._on_item_changed)
-        self._ensure_rows(1)
-
-    def _ensure_rows(self, count):
-        while self.rowCount() < count:
-            row = self.rowCount()
-            self.insertRow(row)
-            q_item = QTableWidgetItem("")
-            q_item.setFlags(q_item.flags() & ~Qt.ItemIsEditable)
-            self.setItem(row, 2, q_item)
-
-    def _on_item_changed(self, item):
-        if self._updating_q:
-            return
-        if item.column() not in (0, 1):
-            return
-        self._update_q_for_row(item.row())
-
-    def _update_q_for_row(self, row):
-        if row < 0 or row >= self.rowCount():
-            return
-        length = self._cell_float(row, 0)
-        width = self._cell_float(row, 1)
-        q_value = None
-        if length is not None and width is not None and width > 0:
-            q_value = length / width
-        self._updating_q = True
-        try:
-            if self.item(row, 2) is None:
-                q_item = QTableWidgetItem("")
-                q_item.setFlags(q_item.flags() & ~Qt.ItemIsEditable)
-                self.setItem(row, 2, q_item)
-            self.item(row, 2).setText(f"{q_value:.2f}" if q_value is not None else "")
-        finally:
-            self._updating_q = False
-
-    def _cell_float(self, row, col):
-        item = self.item(row, col)
-        if not item:
-            return None
-        try:
-            return float(item.text().strip())
-        except ValueError:
-            return None
-
-    def keyPressEvent(self, event):
-        if event.matches(QKeySequence.Paste):
-            self._paste_from_clipboard()
-            return
-        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
-            current = self.currentIndex()
-            if current.isValid() and current.row() == self.rowCount() - 1:
-                self._ensure_rows(self.rowCount() + 1)
-                self.setCurrentCell(self.rowCount() - 1, current.column())
-                return
-        text = event.text()
-        if text and not text.isspace():
-            item = self.currentItem()
-            if item and (item.flags() & Qt.ItemIsEditable):
-                if self.state() != QAbstractItemView.EditingState:
-                    self.editItem(item)
-        super().keyPressEvent(event)
-
-    def _paste_from_clipboard(self):
-        text = QApplication.clipboard().text()
-        if not text:
-            return
-        rows = [line for line in text.splitlines() if line.strip()]
-        if not rows:
-            return
-        start_row = max(0, self.currentRow())
-        start_col = max(0, self.currentColumn())
-        needed_rows = start_row + len(rows)
-        self._ensure_rows(needed_rows)
-        for r_index, line in enumerate(rows):
-            cols = [c.strip() for c in re.split(r"[\t,;]", line) if c.strip()]
-            for c_index, value in enumerate(cols[:2]):
-                row = start_row + r_index
-                col = start_col + c_index
-                if col > 1:
-                    break
-                item = self.item(row, col)
-                if item is None:
-                    item = QTableWidgetItem()
-                    self.setItem(row, col, item)
-                item.setText(value)
-            self._update_q_for_row(start_row + r_index)
-
-    def get_points(self) -> list[dict]:
-        points = []
-        for row in range(self.rowCount()):
-            length = self._cell_float(row, 0)
-            width = self._cell_float(row, 1)
-            if length is None or width is None or width <= 0:
-                continue
-            points.append({"length_um": float(length), "width_um": float(width)})
-        return points
-
-
-class _PublicationSearchProxyModel(QSortFilterProxyModel):
-    """Proxy model backing the publication-picker completer.
-
-    Re-exposes each source row's private search corpus
-    (``Qt.UserRole + 1``, populated by
-    :meth:`ReferenceAddDialog._populate_publication_combo`) via
-    ``Qt.EditRole`` — the role :class:`QCompleter` matches against by
-    default. Every other role is forwarded unchanged so the completer's
-    popup still renders the clean display label instead of the noisy
-    corpus text.
-
-    This split lets the user type an author's given name, a container
-    title, or a citation-key fragment and still hit the row, without
-    the corpus ever polluting either the visible combo text or the
-    legacy ``reference_values.source`` string that
-    :meth:`ReferenceAddDialog._current_source_label` reads from the
-    display role.
-    """
-
-    def data(self, index, role=Qt.DisplayRole):  # type: ignore[override]
-        if role == Qt.EditRole:
-            source = self.mapToSource(index)
-            if source.isValid():
-                corpus = source.data(Qt.UserRole + 1)
-                if corpus:
-                    return corpus
-                # Fall back to the display label so the completer still
-                # matches on the visible text when a row has no corpus
-                # (e.g. the empty placeholder row).
-                return source.data(Qt.DisplayRole)
-        return super().data(index, role)
-
 
 class ReferenceAddDialog(GeometryMixin, QDialog):
-    """Dialog for adding reference min/max or spore data.
+    """Modal wrapper for :class:`~ui.reference_entry_editor.ReferenceEntryEditor`.
 
-    Beyond legacy ``reference_values`` writes the dialog can also drive
-    the normalized Reference Library: a publication picker replaces the
-    free-text Source field, and a Data section offers "use an existing
-    measurement set" or "enter new data" paths that MainWindow uses to
-    create/attach normalized rows for the active observation.
+    Adds the sci-name header, Save/Delete/Cancel buttons, and geometry
+    persistence around the shared editor widget. Used by the legacy
+    "Quick add…" and per-row "Edit" entry points on the Reference panel; the
+    Add-reference picker's Enter-manually tab embeds
+    :class:`~ui.reference_entry_editor.ReferenceEntryEditor` directly
+    instead, without this modal chrome.
     """
 
     _geometry_key = "ReferenceAddDialog"
@@ -5371,52 +5226,8 @@ class ReferenceAddDialog(GeometryMixin, QDialog):
         # user can drag it narrower if they need to.
         self.setMinimumSize(580, 480)
         self.resize(860, 720)
-        self._result = None
-        self._genus = genus
-        self._species = species
-        self._prefill_data = data or {}
-        self._hint_controller: HintStatusController | None = None
-        self._plot_color = None
         self._allow_delete = bool(allow_delete)
         self._delete_requested = False
-        self._require_explicit_publication_assignment = bool(
-            require_explicit_publication_assignment
-        )
-        self._default_hint_text = self.tr("Paste from Excel/csv or type values")
-        # Normalized-library context: MainWindow forwards these when the
-        # dialog opens from an observation's Reference panel. The dialog
-        # keeps working when either is absent (legacy-only write / no
-        # attach), so existing callers and tests remain unaffected.
-        self._observation_id: int | None = (
-            int(observation_id) if observation_id else None
-        )
-        self._sporely_taxon_id: int | None = (
-            int(sporely_taxon_id) if sporely_taxon_id else None
-        )
-        # Selected publication / dataset context — populated by the
-        # picker/data controls; MainWindow reads these after accept via
-        # ``result_data()`` and the accessor methods.
-        self._selected_work_id: str | None = None
-        self._pending_reference_work: ReferenceWork | None = None
-        self._pending_reference_work_label: str | None = None
-        self._selected_measurement_set_id: str | None = None
-        # Multi-treatment ambiguity: when >1 TaxonTreatment on the chosen
-        # work matches sporely_taxon_id we surface a UI error and skip
-        # the normalized path rather than silently picking one. This
-        # flag is consumed by MainWindow's Add handler.
-        self._normalized_write_ambiguous: bool = False
-        # Visible column labels are honest about what literature actually
-        # publishes — the unparenthesised inner range is the "typical" bulk of
-        # measurements, the parenthesised outer values are extreme observations,
-        # the centre is the mean/median if explicitly given. Internally these
-        # still write to *_min / *_p05 / *_p50 / *_p95 / *_max DB columns.
-        self._minmax_header_hints = {
-            0: self.tr("Extreme min: outermost observed value (parenthesised in literature)."),
-            1: self.tr("Typical min: lower end of the typical range, e.g. the unparenthesised left value."),
-            2: self.tr("Mean/central value when explicitly supplied by the source. Not calculated automatically."),
-            3: self.tr("Typical max: upper end of the typical range, e.g. the unparenthesised right value."),
-            4: self.tr("Extreme max: outermost observed value (parenthesised in literature)."),
-        }
 
         layout = QVBoxLayout(self)
         sci_label = QLabel(f"{genus} {species}".strip())
@@ -5427,286 +5238,18 @@ class ReferenceAddDialog(GeometryMixin, QDialog):
             vern_label.setStyleSheet("color: #7f8c8d;")
             layout.addWidget(vern_label)
 
-        self.tabs = QTabWidget()
-        layout.addWidget(self.tabs)
-
-        minmax_tab = QWidget()
-        minmax_layout = QVBoxLayout(minmax_tab)
-
-        # --- Paste-and-parse workflow ---------------------------------------
-        # Primary input: paste the literature measurement string and click
-        # "Parse". The parser populates the table below; manual editing still
-        # works for cases the parser misses or gets wrong.
-        paste_label = QLabel(self.tr("Paste measurement string from literature:"))
-        paste_label.setStyleSheet(f"color: #7f8c8d; font-size: {pt(9)}pt;")
-        minmax_layout.addWidget(paste_label)
-
-        self.measurement_paste_input = QLineEdit()
-        self.measurement_paste_input.setPlaceholderText(
-            self.tr("e.g. (9.5–)9.8–11.3(–11.7) × (7.3–)8.0–9.4(–9.4) µm, Q = 1.2–1.3, Qm = 1.25, n = 36")
+        self.editor = ReferenceEntryEditor(
+            self,
+            genus,
+            species,
+            data=data,
+            observation_id=observation_id,
+            sporely_taxon_id=sporely_taxon_id,
+            require_explicit_publication_assignment=require_explicit_publication_assignment,
         )
-        self.measurement_paste_input.setClearButtonEnabled(True)
-        self.measurement_paste_input.returnPressed.connect(self._on_parse_measurement_clicked)
-        minmax_layout.addWidget(self.measurement_paste_input)
-
-        paste_button_row = QHBoxLayout()
-        paste_button_row.setContentsMargins(0, 0, 0, 0)
-        self._parse_measurement_btn = QPushButton(self.tr("Parse"))
-        self._parse_measurement_btn.setToolTip(self.tr("Parse the pasted string into the table below."))
-        self._parse_measurement_btn.clicked.connect(self._on_parse_measurement_clicked)
-        self._swap_lw_btn = QPushButton(self.tr("Swap L↔W"))
-        self._swap_lw_btn.setToolTip(self.tr("Swap the Length and Width rows (in case the source lists width first)."))
-        self._swap_lw_btn.clicked.connect(self._on_swap_lw_clicked)
-        paste_button_row.addWidget(self._parse_measurement_btn)
-        paste_button_row.addWidget(self._swap_lw_btn)
-        paste_button_row.addStretch(1)
-        minmax_layout.addLayout(paste_button_row)
-
-        self._measurement_preview_label = QLabel("")
-        self._measurement_preview_label.setWordWrap(True)
-        self._measurement_preview_label.setTextFormat(Qt.RichText)
-        self._measurement_preview_label.setStyleSheet(
-            f"color: #7f8c8d; font-size: {pt(9)}pt; padding: 2px 0px;"
-        )
-        minmax_layout.addWidget(self._measurement_preview_label)
-
-        # Raw text echoed back on save so the literature source is preserved
-        # in metadata_json without a schema redesign.
-        self._raw_measurement_text: str = ""
-        prefill_meta = self._prefill_data.get("metadata_json") if self._prefill_data else None
-        if isinstance(prefill_meta, dict):
-            existing_raw = prefill_meta.get("raw_measurement")
-            if isinstance(existing_raw, str) and existing_raw.strip():
-                self._raw_measurement_text = existing_raw
-                self.measurement_paste_input.setText(existing_raw)
-
-        # --- Manual / advanced table ---------------------------------------
-        self.minmax_table = QTableWidget(3, 5)
-        self.minmax_table.setObjectName("referenceMinmaxTable")
-        self.minmax_table.setFocusPolicy(Qt.StrongFocus)
-        self.minmax_table.setEditTriggers(QAbstractItemView.AllEditTriggers)
-        # Two-line headers keep the table compact while remaining readable.
-        # The visible "Mean" label maps to the existing centre / p50 fields
-        # internally; DB column names are unchanged.
-        self.minmax_table.setHorizontalHeaderLabels(
-            [
-                self.tr("Extreme\nmin"),
-                self.tr("Typical\nmin"),
-                self.tr("Mean"),
-                self.tr("Typical\nmax"),
-                self.tr("Extreme\nmax"),
-            ]
-        )
-        self.minmax_table.setVerticalHeaderLabels([self.tr("Length"), self.tr("Width"), self.tr("Q")])
-        minmax_header = self.minmax_table.horizontalHeader()
-        minmax_header.setSectionResizeMode(QHeaderView.Stretch)
-        # Give the header room for the second line of text.
-        minmax_header.setMinimumHeight(40)
-        minmax_header.setDefaultAlignment(Qt.AlignCenter)
-        minmax_header.setMouseTracking(True)
-        minmax_header.sectionEntered.connect(self._on_minmax_header_entered)
-        self._minmax_header_viewport = minmax_header.viewport()
-        self._minmax_header_viewport.setMouseTracking(True)
-        self._minmax_header_viewport.installEventFilter(self)
-        self.minmax_table.verticalHeader().setDefaultSectionSize(30)
-        self._formatting_minmax = False
-        self.minmax_table.itemChanged.connect(self._on_minmax_item_changed)
-        minmax_layout.addWidget(self.minmax_table)
-        self.tabs.addTab(minmax_tab, self.tr("Min/max"))
-
-        spore_tab = QWidget()
-        spore_layout = QVBoxLayout(spore_tab)
-        self.spore_table = SporeDataTable()
-        spore_layout.addWidget(self.spore_table)
-        self.tabs.addTab(spore_tab, self.tr("Spore data"))
-
-        parmasto_tab = QWidget()
-        parmasto_layout = QFormLayout(parmasto_tab)
-        parmasto_layout.setContentsMargins(8, 8, 8, 8)
-        parmasto_layout.setSpacing(6)
-        parmasto_layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        self.parmasto_inputs: dict[str, QLineEdit] = {}
-        def _math_label(html: str, description: str) -> QLabel:
-            label = QLabel(f"{html}:")
-            label.setTextFormat(Qt.RichText)
-            label.setToolTip(description)
-            return label
-        parmasto_fields = [
-            ("parmasto_length_mean", "<span style=\"text-decoration: overline;\">L</span>", self.tr("Species mean length")),
-            ("parmasto_width_mean", "<span style=\"text-decoration: overline;\">W</span>", self.tr("Species mean width")),
-            ("parmasto_q_mean", "<span style=\"text-decoration: overline;\">Q</span>", self.tr("Species mean quotient")),
-            ("parmasto_v_sp_length", "V<sub>spL</sub>", self.tr("Inter-specimen CV for length means (%)")),
-            ("parmasto_v_sp_width", "V<sub>spW</sub>", self.tr("Inter-specimen CV for width means (%)")),
-            ("parmasto_v_sp_q", "V<sub>spQ</sub>", self.tr("Inter-specimen CV for quotient means (%)")),
-            ("parmasto_v_ind_length", "<span style=\"text-decoration: overline;\">V</span><sub>indL</sub>", self.tr("Average intra-specimen variation for length (%)")),
-            ("parmasto_v_ind_width", "<span style=\"text-decoration: overline;\">V</span><sub>indW</sub>", self.tr("Average intra-specimen variation for width (%)")),
-            ("parmasto_v_ind_q", "<span style=\"text-decoration: overline;\">V</span><sub>indE</sub>", self.tr("Average intra-specimen variation for quotient (Parmasto VindE) (%)")),
-        ]
-        for key, math_label, description in parmasto_fields:
-            line_edit = QLineEdit()
-            line_edit.setPlaceholderText(description)
-            line_edit.setToolTip(description)
-            parmasto_layout.addRow(_math_label(math_label, description), line_edit)
-            self.parmasto_inputs[key] = line_edit
-        self.tabs.addTab(parmasto_tab, self.tr("Parmasto Biometrics"))
-
-        # --- Publication picker (replaces free-text Source) ----------------
-        pub_group = QGroupBox(self.tr("Publication"))
-        pub_layout = QVBoxLayout(pub_group)
-        pub_layout.setContentsMargins(8, 8, 8, 8)
-        pub_layout.setSpacing(6)
-        pub_row = QHBoxLayout()
-        self.publication_combo = QComboBox()
-        self.publication_combo.setEditable(True)
-        self.publication_combo.setInsertPolicy(QComboBox.NoInsert)
-        self.publication_combo.setPlaceholderText(
-            self.tr("Search existing publications by title, authors, or citation key")
-        )
-        # The completer is installed lazily by
-        # :meth:`_ensure_publication_completer` after the combo model is
-        # first populated. It filters against a private search corpus
-        # role (``Qt.UserRole + 1``) so authors' given names, container
-        # titles and citation keys still match — without appearing in
-        # the visible label or leaking into the legacy source column.
-        self._publication_completer: QCompleter | None = None
-        self._publication_search_proxy: QSortFilterProxyModel | None = None
-        self.publication_combo.currentIndexChanged.connect(self._on_publication_selected)
-        # The initial combo is capped to ~500 recent works. When the user
-        # types a query we also query the repository directly so older
-        # works remain reachable in libraries larger than the cap.
-        self.publication_combo.editTextChanged.connect(
-            self._on_publication_edit_text_changed
-        )
-        self._publication_search_seen_ids: set[str] = set()
-        pub_row.addWidget(self.publication_combo, 1)
-        self.new_publication_btn = QPushButton(self.tr("New publication…"))
-        self.new_publication_btn.setToolTip(
-            self.tr("Create a new publication in the reference library.")
-        )
-        self.new_publication_btn.clicked.connect(self._on_new_publication_clicked)
-        pub_row.addWidget(self.new_publication_btn)
-        pub_layout.addLayout(pub_row)
-
-        treatment_form = QFormLayout()
-        self.name_as_published_input = QLineEdit(
-            " ".join(part for part in (genus, species) if part).strip()
-        )
-        self.name_as_published_input.setPlaceholderText(
-            self.tr("Name exactly as published")
-        )
-        treatment_form.addRow(
-            self.tr("Name as published:"), self.name_as_published_input
-        )
-        self.locator_input = QLineEdit()
-        self.locator_input.setPlaceholderText(
-            self.tr("Page, figure, table, plate, or section")
-        )
-        treatment_form.addRow(self.tr("Locator:"), self.locator_input)
-        pub_layout.addLayout(treatment_form)
-
-        # --- No-taxon info label ---------------------------------------
-        # When the active observation has no sporely_taxon_id the dialog
-        # still writes the legacy row but cannot create a normalized
-        # measurement set (no taxon key to bind the treatment to). The
-        # label makes that trade-off visible up-front. When we DO have a
-        # taxon id, or the dialog is opened without an observation
-        # context (existing edit-mode callers), the label stays hidden.
-        self._no_taxon_notice_label = QLabel(
-            self.tr(
-                "No taxon identifier is set. The normalized treatment will "
-                "use the name as published without a taxon link."
-            )
-        )
-        self._no_taxon_notice_label.setWordWrap(True)
-        self._no_taxon_notice_label.setStyleSheet(
-            "color: #b58900; font-style: italic;"
-        )
-        self._no_taxon_notice_label.setVisible(
-            bool(self._observation_id) and not self._sporely_taxon_id
-        )
-        pub_layout.addWidget(self._no_taxon_notice_label)
-        # Insert the publication picker directly under the species labels,
-        # BEFORE the tabs, so it reads as the top section of the dialog.
-        layout.insertWidget(layout.indexOf(self.tabs), pub_group)
-
-        # --- Data section: existing measurement set or new data --------
-        data_group = QGroupBox(self.tr("Data"))
-        data_layout = QVBoxLayout(data_group)
-        data_layout.setContentsMargins(8, 8, 8, 8)
-        data_layout.setSpacing(6)
-        self._data_choice_group = QButtonGroup(self)
-        self.use_existing_radio = QRadioButton(
-            self.tr("Use existing measurement set")
-        )
-        self.enter_new_radio = QRadioButton(self.tr("Enter new data"))
-        self.enter_new_radio.setChecked(True)
-        self._data_choice_group.addButton(self.use_existing_radio, 0)
-        self._data_choice_group.addButton(self.enter_new_radio, 1)
-        # Default to disabled — the picker enables "use existing" only when
-        # a publication is chosen and it has ≥1 supported measurement set.
-        self.use_existing_radio.setEnabled(False)
-        data_layout.addWidget(self.use_existing_radio)
-        # Keep the two mutually-exclusive choices together. Placing the
-        # "Enter new data" radio after the existing-set table detached it from
-        # its peer and could visually overlap the table's final row at ordinary
-        # dialog sizes.
-        data_layout.addWidget(self.enter_new_radio)
-
-        # Table of existing measurement sets scoped to the chosen (work,
-        # taxon). Kept hidden until the "Use existing" radio is on and
-        # candidates exist so the dialog stays compact in the common
-        # "brand-new data" case.
-        self._existing_search_input = QLineEdit()
-        self._existing_search_input.setPlaceholderText(
-            self.tr("Filter existing sets by locator, kind, or raw expression…")
-        )
-        self._existing_search_input.setClearButtonEnabled(True)
-        self._existing_search_input.textChanged.connect(
-            self._refresh_existing_sets_table
-        )
-        data_layout.addWidget(self._existing_search_input)
-        self._existing_sets_table = QTableWidget(0, 3)
-        self._existing_sets_table.setHorizontalHeaderLabels(
-            [self.tr("Locator"), self.tr("Kind"), self.tr("Raw expression")]
-        )
-        self._existing_sets_table.setSelectionBehavior(
-            QAbstractItemView.SelectRows
-        )
-        self._existing_sets_table.setSelectionMode(
-            QAbstractItemView.SingleSelection
-        )
-        self._existing_sets_table.setEditTriggers(
-            QAbstractItemView.NoEditTriggers
-        )
-        self._existing_sets_table.verticalHeader().setVisible(False)
-        ex_header = self._existing_sets_table.horizontalHeader()
-        ex_header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        ex_header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        ex_header.setSectionResizeMode(2, QHeaderView.Stretch)
-        self._existing_sets_table.setMinimumHeight(120)
-        self._existing_sets_table.itemSelectionChanged.connect(
-            self._on_existing_set_selection_changed
-        )
-        data_layout.addWidget(self._existing_sets_table)
-        # Cache of available existing measurement sets for the current
-        # (work, taxon) pair so the search box can filter in-memory.
-        self._existing_sets_cache: list[MeasurementSet] = []
-        # Prefilled legacy source string that had no ReferenceWork match:
-        # keep it so edit-mode callers do not silently lose the value.
-        self._legacy_source_prefill: str | None = None
-        layout.insertWidget(layout.indexOf(self.tabs), data_group)
-
-        # Data controls react to the radio choice.
-        self.use_existing_radio.toggled.connect(self._on_data_choice_toggled)
-        self.enter_new_radio.toggled.connect(self._on_data_choice_toggled)
+        layout.addWidget(self.editor, 1)
 
         button_row = QHBoxLayout()
-        self.hint_bar = HintBar(self)
-        button_row.addWidget(self.hint_bar, 1)
-        button_row.addWidget(make_github_help_button(self, "reference-data-dialog.md"), 0, Qt.AlignRight | Qt.AlignVCenter)
-        self._hint_controller = HintStatusController(self.hint_bar, self)
-        self._hint_controller.set_hint(self._default_hint_text)
-
         self.save_btn = QPushButton(self.tr("Save"))
         self.save_btn.clicked.connect(self._on_save)
         self.delete_btn = QPushButton(self.tr("Delete"))
@@ -5714,1061 +5257,19 @@ class ReferenceAddDialog(GeometryMixin, QDialog):
         self.delete_btn.setVisible(self._allow_delete)
         self.cancel_btn = QPushButton(self.tr("Cancel"))
         self.cancel_btn.clicked.connect(self.reject)
+        button_row.addStretch(1)
         if self._allow_delete:
             button_row.addWidget(self.delete_btn)
         button_row.addWidget(self.save_btn)
         button_row.addWidget(self.cancel_btn)
         layout.addLayout(button_row)
 
-        self._register_hint_widget(self.spore_table, self._default_hint_text)
-
-        self._populate_publication_combo()
-        self._apply_prefill()
-        # Apply initial visibility of data-section widgets based on the
-        # radio state (defaults to "Enter new data", so the existing-set
-        # table is hidden).
-        self._on_data_choice_toggled()
         self._restore_geometry()
         self.finished.connect(self._save_geometry)
 
-    def _register_hint_widget(self, widget: QWidget, hint_text: str | None, tone: str = "info") -> None:
-        if not widget:
-            return
-        hint = (hint_text or "").strip()
-        hint_tone = (tone or "info").strip().lower()
-        widget.setProperty("_hint_text", hint)
-        widget.setProperty("_hint_tone", hint_tone)
-        widget.setToolTip("")
-        if self._hint_controller is not None:
-            self._hint_controller.register_widget(widget, hint, tone=hint_tone)
-
-    def _set_hint(self, text: str | None, tone: str = "info") -> None:
-        if self._hint_controller is not None:
-            self._hint_controller.set_hint(text, tone=tone)
-
-    def _on_minmax_header_entered(self, section: int) -> None:
-        hint = self._minmax_header_hints.get(int(section))
-        self._set_hint(hint or self._default_hint_text)
-
-    def eventFilter(self, watched, event):
-        if watched is getattr(self, "_minmax_header_viewport", None):
-            if event.type() == QEvent.Leave:
-                self._set_hint(self._default_hint_text)
-            elif event.type() == QEvent.MouseMove:
-                header = self.minmax_table.horizontalHeader()
-                section = header.logicalIndexAt(event.pos())
-                hint = self._minmax_header_hints.get(int(section))
-                self._set_hint(hint or self._default_hint_text)
-        return super().eventFilter(watched, event)
-
-    def _table_value(self, row, col):
-        item = self.minmax_table.item(row, col)
-        if not item:
-            return None
-        try:
-            return float(item.text().strip())
-        except ValueError:
-            return None
-
-    def _on_minmax_item_changed(self, item: QTableWidgetItem):
-        if self._formatting_minmax:
-            return
-        if not item:
-            return
-        text = item.text().strip()
-        if not text:
-            return
-        try:
-            value = float(text)
-        except ValueError:
-            return
-        self._formatting_minmax = True
-        try:
-            item.setText(f"{value:.2f}")
-            # Keep manually-typed values centred so they line up with the
-            # centred two-line column headers, matching parser-filled cells.
-            item.setTextAlignment(Qt.AlignCenter)
-        finally:
-            self._formatting_minmax = False
-
-    # --- Paste-and-parse workflow ------------------------------------------
-
-    _MINMAX_ROW_BY_DIMENSION = {"length": 0, "width": 1, "q": 2}
-
-    def _apply_parsed_dimension(self, row: int, dim) -> None:
-        """Write a parsed DimensionRange into one row of the min/max table.
-
-        Empty fields clear the cell — the parser deliberately does not invent
-        values, so a missing extreme or centre is left blank for the user.
-        """
-        from references.measurement_parser import DimensionRange  # local import
-        assert isinstance(dim, DimensionRange)
-        column_values = (dim.min, dim.p05, dim.p50, dim.p95, dim.max)
-        self._formatting_minmax = True
-        try:
-            for col, value in enumerate(column_values):
-                if value is None:
-                    blank = QTableWidgetItem("")
-                    blank.setTextAlignment(Qt.AlignCenter)
-                    self.minmax_table.setItem(row, col, blank)
-                    continue
-                item = QTableWidgetItem(f"{float(value):.2f}")
-                # Numbers are centred to sit directly under the centred
-                # two-line column headers — otherwise sparse rows feel
-                # disconnected from the column they belong to.
-                item.setTextAlignment(Qt.AlignCenter)
-                self.minmax_table.setItem(row, col, item)
-        finally:
-            self._formatting_minmax = False
-
-    def _set_parsed_result(self, result) -> None:
-        """Push a MeasurementParseResult into the table and refresh preview."""
-        self._apply_parsed_dimension(0, result.length)
-        self._apply_parsed_dimension(1, result.width)
-        self._apply_parsed_dimension(2, result.q)
-        # Qm goes into the Parmasto biometrics "Q mean" field so it survives
-        # without confusing it with Q centre/median.
-        if result.q_mean is not None:
-            qm_widget = self.parmasto_inputs.get("parmasto_q_mean")
-            if qm_widget is not None and not qm_widget.text().strip():
-                qm_widget.setText(f"{float(result.q_mean):g}")
-        self._render_measurement_preview(result)
-        # Activate the Min/max tab so the user immediately sees the parsed
-        # values (the dialog can open on the Parmasto tab when only Parmasto
-        # values are prefilled).
-        try:
-            self.tabs.setCurrentIndex(0)
-        except Exception:
-            pass
-
-    # Parser warnings that describe normal expected gaps (no extremes, no
-    # explicit mean, no Q in source, the "first range is length" assumption)
-    # are noise in the dialog — the preview itself already shows what was
-    # parsed. Keep the parser fully informative for tests; just filter here.
-    _MEASUREMENT_PREVIEW_NOISE_PREFIXES = (
-        "Parsed first range as length.",
-        "Q not present in source.",
-        "Q: no extreme values found.",
-        "Length: no extreme values found.",
-        "Width: no extreme values found.",
-        "Length: no centre/mean value found.",
-        "Width: no centre/mean value found.",
-    )
-
-    def _filter_preview_warnings(self, warnings: list[str]) -> list[str]:
-        actionable: list[str] = []
-        for warning in warnings:
-            text = (warning or "").strip()
-            if not text:
-                continue
-            if text in self._MEASUREMENT_PREVIEW_NOISE_PREFIXES:
-                continue
-            actionable.append(text)
-        return actionable
-
-    @staticmethod
-    def _format_dimension_range(dim) -> str:
-        """Render one parsed range compactly: ``(9.5-)9.8-11.3(-11.7)``."""
-        parts: list[str] = []
-        if dim.min is not None:
-            parts.append(f"({dim.min:g}–)")
-        inner: list[str] = []
-        if dim.p05 is not None:
-            inner.append(f"{dim.p05:g}")
-        if dim.p50 is not None:
-            inner.append(f"{dim.p50:g}")
-        if dim.p95 is not None:
-            inner.append(f"{dim.p95:g}")
-        parts.append("–".join(inner) if inner else "—")
-        if dim.max is not None:
-            parts.append(f"(–{dim.max:g})")
-        return "".join(parts)
-
-    def _render_measurement_preview(self, result) -> None:
-        actionable_warnings = self._filter_preview_warnings(result.warnings)
-
-        if not result.ok:
-            warnings_html = "".join(
-                f"<div style='color:#b58900;'>• {w}</div>" for w in actionable_warnings
-            )
-            self._measurement_preview_label.setText(
-                "<i>" + self.tr("Nothing parsed.") + "</i>" + warnings_html
-            )
-            return
-
-        segments: list[str] = []
-        if not result.length.is_empty():
-            segments.append("L " + self._format_dimension_range(result.length))
-        if not result.width.is_empty():
-            segments.append("W " + self._format_dimension_range(result.width))
-        if not result.q.is_empty():
-            segments.append("Q " + self._format_dimension_range(result.q))
-        if result.q_mean is not None:
-            segments.append(f"Qm {result.q_mean:g}")
-        if result.n is not None:
-            segments.append(f"n={result.n}")
-
-        prefix = self.tr("Parsed:") + " "
-        body = prefix + " · ".join(segments) if segments else ""
-
-        warnings_html = "".join(
-            f"<div style='color:#b58900;'>• {w}</div>" for w in actionable_warnings
-        )
-        self._measurement_preview_label.setText(body + warnings_html)
-
-    def _on_parse_measurement_clicked(self) -> None:
-        raw = self.measurement_paste_input.text()
-        if not (raw or "").strip():
-            self._measurement_preview_label.setText(
-                "<i>" + self.tr("Paste a measurement string first.") + "</i>"
-            )
-            return
-        from references.measurement_parser import parse_measurement_string
-        result = parse_measurement_string(raw)
-        if not result.ok:
-            self._render_measurement_preview(result)
-            self._set_hint(self.tr("Parsing failed — manual entry preserved."), tone="warning")
-            return
-        self._raw_measurement_text = raw
-        self._set_parsed_result(result)
-        self._set_hint(self.tr("Parsed — review and edit before saving."), tone="info")
-
-    def _on_swap_lw_clicked(self) -> None:
-        # Operate directly on the table so a user who tweaked cells manually
-        # also gets a clean swap (no re-parse needed).
-        row_a, row_b = 0, 1
-        self._formatting_minmax = True
-        try:
-            for col in range(5):
-                a = self.minmax_table.item(row_a, col)
-                b = self.minmax_table.item(row_b, col)
-                text_a = a.text() if a else ""
-                text_b = b.text() if b else ""
-                self.minmax_table.setItem(row_a, col, QTableWidgetItem(text_b))
-                self.minmax_table.setItem(row_b, col, QTableWidgetItem(text_a))
-        finally:
-            self._formatting_minmax = False
-        self._set_hint(self.tr("Length and width swapped."), tone="info")
-
-    def _parmasto_value(self, key: str):
-        widget = self.parmasto_inputs.get(key)
-        if widget is None:
-            return None
-        text = widget.text().strip()
-        if not text:
-            return None
-        try:
-            return float(text)
-        except ValueError:
-            return None
-
-    def _current_source_label(self) -> str | None:
-        """Return the human-readable source label to persist on the legacy
-        row: the selected publication's short_label / title / (year), the
-        preserved legacy source prefill if no library match was found, or
-        None when neither is available.
-        """
-        work_id = self._selected_work_id
-        if work_id:
-            for row in range(self.publication_combo.count()):
-                if str(self.publication_combo.itemData(row) or "") == work_id:
-                    text = self.publication_combo.itemText(row).strip()
-                    if text:
-                        return text
-                    break
-        if self._legacy_source_prefill:
-            return self._legacy_source_prefill
-        # Editable combo may hold a free-text search string the user did
-        # not resolve to an existing work. Preserving it as the legacy
-        # source keeps parity with the previous single-line workflow.
-        typed = self.publication_combo.currentText().strip()
-        return typed or None
-
-    def _reference_record_data(self):
-        data = {
-            "genus": self._genus,
-            "species": self._species,
-            "source": self._current_source_label(),
-            "plot_color": self._plot_color,
-            "parmasto_length_mean": self._parmasto_value("parmasto_length_mean"),
-            "parmasto_width_mean": self._parmasto_value("parmasto_width_mean"),
-            "parmasto_q_mean": self._parmasto_value("parmasto_q_mean"),
-            "parmasto_v_sp_length": self._parmasto_value("parmasto_v_sp_length"),
-            "parmasto_v_sp_width": self._parmasto_value("parmasto_v_sp_width"),
-            "parmasto_v_sp_q": self._parmasto_value("parmasto_v_sp_q"),
-            "parmasto_v_ind_length": self._parmasto_value("parmasto_v_ind_length"),
-            "parmasto_v_ind_width": self._parmasto_value("parmasto_v_ind_width"),
-            "parmasto_v_ind_q": self._parmasto_value("parmasto_v_ind_q"),
-            "length_min": self._table_value(0, 0),
-            "length_p05": self._table_value(0, 1),
-            "length_p50": self._table_value(0, 2),
-            "length_p95": self._table_value(0, 3),
-            "length_max": self._table_value(0, 4),
-            "width_min": self._table_value(1, 0),
-            "width_p05": self._table_value(1, 1),
-            "width_p50": self._table_value(1, 2),
-            "width_p95": self._table_value(1, 3),
-            "width_max": self._table_value(1, 4),
-            "q_min": self._table_value(2, 0),
-            "q_p05": self._table_value(2, 1),
-            "q_p50": self._table_value(2, 2),
-            "q_p95": self._table_value(2, 3),
-            "q_max": self._table_value(2, 4),
-            # Legacy *_avg columns have no UI input in this dialog; carry
-            # them forward from prefill so edit-mode round-trips retain
-            # them and downstream consumers keep working.
-            "length_avg": self._prefill_data.get("length_avg") if self._prefill_data else None,
-            "width_avg": self._prefill_data.get("width_avg") if self._prefill_data else None,
-            "q_avg": self._prefill_data.get("q_avg") if self._prefill_data else None,
-        }
-        has_values = any(
-            data.get(key) is not None
-            for key in (
-                "length_min",
-                "length_p05",
-                "length_p50",
-                "length_p95",
-                "length_max",
-                "width_min",
-                "width_p05",
-                "width_p50",
-                "width_p95",
-                "width_max",
-                "q_min",
-                "q_p05",
-                "q_p50",
-                "q_p95",
-                "q_max",
-                "parmasto_length_mean",
-                "parmasto_width_mean",
-                "parmasto_q_mean",
-                "parmasto_v_sp_length",
-                "parmasto_v_sp_width",
-                "parmasto_v_sp_q",
-                "parmasto_v_ind_length",
-                "parmasto_v_ind_width",
-                "parmasto_v_ind_q",
-            )
-        )
-        if not has_values:
-            return None
-        data["source_kind"] = "reference"
-        # Preserve any text the user pasted into the literature input. The
-        # raw measurement string lives inside metadata_json (a JSON blob the
-        # schema already supports) so no extra column is required.
-        existing_meta = self._prefill_data.get("metadata_json") if self._prefill_data else None
-        meta_dict = dict(existing_meta) if isinstance(existing_meta, dict) else {}
-        raw_text = (self._raw_measurement_text or "").strip()
-        if raw_text:
-            meta_dict["raw_measurement"] = raw_text
-        elif "raw_measurement" in meta_dict:
-            meta_dict.pop("raw_measurement", None)
-        if meta_dict:
-            data["metadata_json"] = meta_dict
-        return data
-
-    def _points_data(self):
-        points = self.spore_table.get_points()
-        if not points:
-            return None
-        source_label = (self._current_source_label() or "").strip()
-        if not source_label:
-            source_label = self.tr("Reference points")
-        return {
-            "genus": self._genus,
-            "species": self._species,
-            "points": points,
-            "points_label": source_label,
-            "plot_color": self._plot_color,
-            "source_kind": "points",
-            "source_type": "custom",
-        }
-
     def _on_save(self):
-        # "Use existing measurement set" short-circuits both legacy
-        # entry paths: the caller (MainWindow) will resolve the
-        # selection into an attach + reuse the existing normalized row.
-        if self.use_existing_radio.isChecked():
-            if not self._selected_measurement_set_id:
-                QMessageBox.warning(
-                    self,
-                    self.tr("Missing Data"),
-                    self.tr("Select an existing measurement set or switch to \"Enter new data\"."),
-                )
-                return
-            self._result = {
-                "genus": self._genus,
-                "species": self._species,
-                "source": self._current_source_label(),
-                "plot_color": self._plot_color,
-                "source_kind": "existing_measurement_set",
-                "reference_measurement_set_id": self._selected_measurement_set_id,
-                "reference_work_id": self._selected_work_id,
-            }
+        if self.editor.validate_and_build_result():
             self.accept()
-            return
-        if self.tabs.currentIndex() == 1:
-            data = self._points_data()
-            if not data:
-                QMessageBox.warning(
-                    self,
-                    self.tr("Missing Data"),
-                    self.tr("Enter at least one length and width value.")
-                )
-                return
-        else:
-            data = self._reference_record_data()
-            if not data:
-                QMessageBox.warning(
-                    self,
-                    self.tr("Missing Data"),
-                    self.tr("Enter at least one reference or Parmasto value.")
-                )
-                return
-        # Stamp the normalized-library context onto the payload so the
-        # calling MainWindow can create the treatment + measurement set
-        # + attach after the legacy write completes. When the picker was
-        # never used, ``reference_work_id`` is None and MainWindow
-        # falls back to legacy-only behavior.
-        data["reference_work_id"] = self._selected_work_id
-        data["observation_id"] = self._observation_id
-        data["sporely_taxon_id"] = self._sporely_taxon_id
-        # When the observation has a taxon and the user entered new data
-        # that COULD become a normalized set (has length+width bounds or
-        # raw points), require them to either pick a publication or
-        # confirm they want a legacy-only save. This prevents silent
-        # data loss where the user meant to attach to a work but forgot.
-        if (
-            self._sporely_taxon_id
-            and self._observation_id
-            and not self._selected_work_id
-            and self._pending_reference_work is None
-            and self._new_data_is_normalizable()
-        ):
-            answer = QMessageBox.question(
-                self,
-                self.tr("No publication selected"),
-                self.tr(
-                    "No publication is selected. Save as a legacy-only "
-                    "reference (no library entry, no observation attachment)?"
-                ),
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if answer != QMessageBox.Yes:
-                return
-        self._result = data
-        self.accept()
-
-    def _new_data_is_normalizable(self) -> bool:
-        """Would the current form values produce a normalized MeasurementSet?
-
-        Used by :meth:`_on_save` to decide whether a missing publication
-        selection is worth warning about — no warning is shown when the
-        user entered only Parmasto values or nothing that would populate
-        a normalized set.
-        """
-        if self._build_raw_points_json():
-            return True
-        # Build the tentative range payload from the form and apply the
-        # shared plottability predicate. This keeps the "is this
-        # normalizable?" check in step with what
-        # :meth:`normalized_measurement_set_payload` will actually
-        # accept, so we neither warn on unplottable partial ranges nor
-        # skip warning on complete mean-only pairs.
-        tentative = {
-            "length_min": self._table_value(0, 0),
-            "length_core_min": self._table_value(0, 1),
-            "length_mean": self._table_value(0, 2),
-            "length_core_max": self._table_value(0, 3),
-            "length_max": self._table_value(0, 4),
-            "width_min": self._table_value(1, 0),
-            "width_core_min": self._table_value(1, 1),
-            "width_mean": self._table_value(1, 2),
-            "width_core_max": self._table_value(1, 3),
-            "width_max": self._table_value(1, 4),
-        }
-        return range_payload_is_plottable(tentative)
-
-    def selected_reference_work_id(self) -> str | None:
-        return self._selected_work_id
-
-    def pending_reference_work(self) -> ReferenceWork | None:
-        return self._pending_reference_work
-
-    def quick_add_treatment_payload(self) -> dict[str, str]:
-        """Return the explicitly entered treatment identity fields."""
-        return {
-            "name_as_published": self.name_as_published_input.text().strip(),
-            "locator_text": self.locator_input.text().strip(),
-        }
-
-    def selected_measurement_set_id(self) -> str | None:
-        return self._selected_measurement_set_id
-
-    def is_use_existing_set(self) -> bool:
-        return bool(self.use_existing_radio.isChecked())
-
-    def result_data(self):
-        return self._result
-
-    # ----- Publication picker helpers -------------------------------------
-
-    def _populate_publication_combo(self, select_id: str | None = None) -> None:
-        """Load existing reference works into the combo and set the completer.
-
-        The combo is populated in most-recently-updated order so recently
-        used works surface first. Each row stores TWO texts:
-
-        * the visible ``DisplayRole`` text — a clean legacy-style
-          ``short_label or title`` + ` (year)`. This is the text the
-          user sees in the drop-down and what
-          :meth:`_current_source_label` persists into the legacy source
-          column, so it must not include search-only decoration.
-        * a private search corpus at ``Qt.UserRole + 1`` — title,
-          short_label, container, every author's ``given family`` and
-          citation key, space-joined. The completer filters against
-          this corpus so typing an author's first name, a container
-          title, or a citation-key fragment still narrows the list
-          without polluting the persisted label.
-        """
-        try:
-            works = ReferenceWorkRepository.list_recent(limit=500)
-        except Exception:
-            works = []
-        blocker = QSignalBlocker(self.publication_combo)
-        try:
-            self.publication_combo.clear()
-            self.publication_combo.addItem("", None)
-            self._publication_search_seen_ids = set()
-            for work in works:
-                self._append_publication_row(work)
-        finally:
-            del blocker
-        self._ensure_publication_completer()
-        if select_id:
-            target_row = -1
-            for row in range(self.publication_combo.count()):
-                if str(self.publication_combo.itemData(row) or "") == select_id:
-                    target_row = row
-                    break
-            if target_row >= 0:
-                self.publication_combo.setCurrentIndex(target_row)
-                return
-        # No explicit selection: leave the placeholder row active and
-        # clear the current-selection state.
-        self.publication_combo.setCurrentIndex(0)
-        self._selected_work_id = None
-
-    def _append_publication_row(self, work: ReferenceWork) -> None:
-        """Append a single work to the combo, populating both the visible
-        display label and the private search corpus role. Deduplicates
-        against previously added ids so incremental search results merge
-        cleanly with the initial recent-works page.
-        """
-        work_id = str(getattr(work, "id", "") or "")
-        if not work_id or work_id in self._publication_search_seen_ids:
-            return
-        self._publication_search_seen_ids.add(work_id)
-        display_label = self._format_publication_display_label(work)
-        self.publication_combo.addItem(display_label, work.id)
-        row = self.publication_combo.count() - 1
-        search_text = self._format_publication_search_text(work)
-        index = self.publication_combo.model().index(row, 0)
-        self.publication_combo.model().setData(index, search_text, Qt.UserRole + 1)
-
-    def _on_publication_edit_text_changed(self, text: str) -> None:
-        """Live-search the repository so works outside the initial recent
-        page still surface when the user types. Newly discovered works
-        are appended to the combo so the completer's filter (which reads
-        this combo's model) can match them without any dedicated remote
-        popup.
-
-        Also invalidates the current selection whenever the visible
-        combo text no longer matches the selected row's display label,
-        so a user who types over a previously-chosen publication cannot
-        silently persist against the stale ID. The selection must be
-        re-established by an explicit completer activation or dropdown
-        pick.
-        """
-        # Stale-selection invalidation: if a work was previously bound
-        # but the visible text no longer matches its display label,
-        # drop the binding. currentIndex/currentData in an editable
-        # QComboBox otherwise persist through arbitrary text edits.
-        current = (text or "").strip()
-        if (
-            self._pending_reference_work is not None
-            and current != (self._pending_reference_work_label or "")
-        ):
-            self._pending_reference_work = None
-            self._pending_reference_work_label = None
-        if self._selected_work_id is not None:
-            for row in range(self.publication_combo.count()):
-                if str(self.publication_combo.itemData(row) or "") == self._selected_work_id:
-                    if self.publication_combo.itemText(row).strip() != current:
-                        self._selected_work_id = None
-                        blocker = QSignalBlocker(self.publication_combo)
-                        try:
-                            self.publication_combo.setCurrentIndex(0)
-                            # Restore the user's typed text after the
-                            # index reset so we do not clobber their
-                            # in-progress query.
-                            self.publication_combo.setEditText(current)
-                        finally:
-                            del blocker
-                        # Invalidate the existing-set cache too: the
-                        # radio and table are scoped to the previously
-                        # selected work, so a text-edit that clears
-                        # the selection must also clear those. Without
-                        # this, "Use existing measurement set" would
-                        # still hold a set from the stale publication.
-                        try:
-                            self._refresh_existing_sets_cache()
-                        except Exception:
-                            # Defensive: cache refresh failure must not
-                            # break the edit-text signal path.
-                            pass
-                    break
-        query = current
-        if len(query) < 2:
-            return
-        try:
-            matches = ReferenceWorkRepository.search(query=query, limit=50)
-        except Exception:
-            return
-        added = False
-        blocker = QSignalBlocker(self.publication_combo)
-        try:
-            for work in matches:
-                work_id = str(getattr(work, "id", "") or "")
-                if not work_id or work_id in self._publication_search_seen_ids:
-                    continue
-                self._append_publication_row(work)
-                added = True
-        finally:
-            del blocker
-        if added:
-            completer = getattr(self, "_publication_completer", None)
-            if completer is not None:
-                completer.complete()
-
-    def _ensure_publication_completer(self) -> None:
-        """Install a completer whose filter matches against the private
-        search corpus (``Qt.UserRole + 1``) while the popup and the
-        line-edit inserts still use the clean display label.
-
-        The completer is backed by a ``QSortFilterProxyModel`` that
-        re-exposes the search corpus as ``Qt.EditRole`` — the role
-        QCompleter matches against by default — and forwards every
-        other role unchanged so the popup still renders the clean
-        DisplayRole label. This is set up once and re-applied whenever
-        the combo model is re-populated (the proxy tracks its source).
-        """
-        existing = getattr(self, "_publication_completer", None)
-        if existing is not None:
-            return
-        proxy = _PublicationSearchProxyModel(self)
-        proxy.setSourceModel(self.publication_combo.model())
-        completer = QCompleter(proxy, self)
-        completer.setCompletionMode(QCompleter.PopupCompletion)
-        completer.setCaseSensitivity(Qt.CaseInsensitive)
-        completer.setFilterMode(Qt.MatchContains)
-        # Completions read the display column so the line-edit inserts
-        # the clean label (not the corpus) when a completion is picked.
-        completer.setCompletionColumn(0)
-        self.publication_combo.setCompleter(completer)
-        self._publication_completer = completer
-        self._publication_search_proxy = proxy
-
-    @staticmethod
-    def _format_publication_display_label(work: ReferenceWork) -> str:
-        """Return the clean, legacy-style label shown in the picker
-        combo and persisted into the legacy ``reference_values.source``
-        column via :meth:`_current_source_label`.
-
-        Uses ``short_label`` when present (matching the previous
-        free-text convention), falling back to ``title`` when the work
-        has no short label, and appends ``(year)`` when a year is
-        available. It never appends bracketed suffixes, container
-        titles, authors, or citation keys — those live in the private
-        search corpus so typing them still narrows the completer, but
-        they no longer pollute the visible or persisted label.
-        """
-        base = (work.short_label or work.title or "").strip()
-        year = getattr(work, "year", None)
-        if year and str(year).strip():
-            return f"{base} ({year})" if base else str(year)
-        return base or (work.id or "")
-
-    @staticmethod
-    def _format_publication_search_text(work: ReferenceWork) -> str:
-        """Return the space-joined search corpus for the completer.
-
-        Includes every advertised field a user might search by: title,
-        short_label, container title, each author's full ``given
-        family`` name, and citation key. This is stored privately on
-        the combo row (``Qt.UserRole + 1``) so it drives the completer
-        filter without ever appearing in the visible label or being
-        persisted into the legacy source column.
-        """
-        parts: list[str] = []
-        title = (getattr(work, "title", None) or "").strip()
-        if title:
-            parts.append(title)
-        short_label = (getattr(work, "short_label", None) or "").strip()
-        if short_label:
-            parts.append(short_label)
-        container = (getattr(work, "container_title", None) or "").strip()
-        if container:
-            parts.append(container)
-        authors_json = getattr(work, "authors_json", None)
-        if authors_json:
-            try:
-                import json as _json
-
-                authors = _json.loads(authors_json)
-            except Exception:
-                authors = None
-            if isinstance(authors, list):
-                for entry in authors:
-                    if not isinstance(entry, dict):
-                        continue
-                    given = str(entry.get("given") or "").strip()
-                    family = str(entry.get("family") or "").strip()
-                    full = " ".join(p for p in (given, family) if p)
-                    if full:
-                        parts.append(full)
-        citation_key = (getattr(work, "citation_key", None) or "").strip()
-        if citation_key:
-            parts.append(citation_key)
-        year = getattr(work, "year", None)
-        if year and str(year).strip():
-            parts.append(str(year).strip())
-        return " ".join(parts)
-
-    def _on_publication_selected(self, _index: int) -> None:
-        data = self.publication_combo.currentData()
-        self._selected_work_id = str(data) if data else None
-        if self._selected_work_id:
-            self._pending_reference_work = None
-            self._pending_reference_work_label = None
-        # Recompute existing-set candidates whenever the work changes so
-        # the "Use existing" radio + table reflect the new context.
-        self._refresh_existing_sets_cache()
-
-    def _on_new_publication_clicked(self) -> None:
-        try:
-            from .reference_library_manager_dialog import ReferenceWorkEditor
-        except Exception as exc:
-            QMessageBox.warning(
-                self,
-                self.tr("New publication"),
-                self.tr("Reference library editor is unavailable: {error}").format(error=str(exc)),
-            )
-            return
-        editor = ReferenceWorkEditor(self, persist_on_accept=False)
-        try:
-            if editor.exec() == QDialog.Accepted and editor.result_work is not None:
-                self._pending_reference_work = editor.result_work
-                self._selected_work_id = None
-                label = (
-                    editor.result_work.short_label
-                    or editor.result_work.title
-                    or self.tr("Untitled reference")
-                )
-                if editor.result_work.year:
-                    label = f"{label} ({editor.result_work.year})"
-                self._pending_reference_work_label = label
-                self.publication_combo.blockSignals(True)
-                self.publication_combo.setEditText(label)
-                self.publication_combo.blockSignals(False)
-                self._refresh_existing_sets_cache()
-        finally:
-            editor.deleteLater()
-
-    # ----- Existing-set table helpers -------------------------------------
-
-    def _refresh_existing_sets_cache(self) -> None:
-        """Recompute the list of existing measurement sets for the current
-        (work, taxon) pair and update the UI accordingly.
-
-        The Data section's "Use existing" radio is only enabled when we
-        can offer at least one supported (plottable) set for the active
-        observation's taxon on the chosen publication. When multiple
-        treatments match the same taxon on the same work we still list
-        their measurement sets so the user can pick a specific one — the
-        "create a new treatment" write path is what is blocked, not
-        selection of an existing set.
-        """
-        self._existing_sets_cache = []
-        candidates: list[MeasurementSet] = []
-        work_id = self._selected_work_id
-        taxon_id = self._sporely_taxon_id
-        if work_id and taxon_id:
-            try:
-                treatments = TaxonTreatmentRepository.list_for_work(work_id)
-            except Exception:
-                treatments = []
-            taxon_key = str(int(taxon_id))
-            matching_treatments = [
-                t for t in treatments
-                if str(getattr(t, "taxon_id", "") or "") == taxon_key
-            ]
-            for treatment in matching_treatments:
-                try:
-                    sets = MeasurementSetRepository.list_for_treatment(treatment.id)
-                except Exception:
-                    sets = []
-                for ms in sets:
-                    if ms.data_kind in SUPPORTED_ATTACHMENT_DATA_KINDS:
-                        candidates.append(ms)
-        self._existing_sets_cache = candidates
-        # Toggle the "Use existing" radio availability.
-        has_candidates = bool(candidates)
-        self.use_existing_radio.setEnabled(has_candidates)
-        if not has_candidates and self.use_existing_radio.isChecked():
-            # Move back to "Enter new data" so the user is not stuck
-            # with a disabled radio selected.
-            self.enter_new_radio.setChecked(True)
-        self._refresh_existing_sets_table()
-
-    def _refresh_existing_sets_table(self) -> None:
-        query_raw = self._existing_search_input.text() if hasattr(self, "_existing_search_input") else ""
-        query = (query_raw or "").strip().casefold()
-
-        # Pre-resolve treatment lookups so the filter can also match on
-        # locator_text (which lives on the treatment, not the set) without
-        # issuing a DB call per row per keystroke.
-        locator_by_set: dict[str, str] = {}
-        for ms in self._existing_sets_cache:
-            try:
-                treatment = TaxonTreatmentRepository.get(ms.taxon_treatment_id)
-            except Exception:
-                treatment = None
-            if treatment is not None and treatment.locator_text:
-                locator_by_set[ms.id] = str(treatment.locator_text)
-
-        def _match(ms: MeasurementSet) -> bool:
-            if not query:
-                return True
-            for value in (
-                ms.raw_text,
-                getattr(ms, "notes", None),
-                ms.data_kind,
-                locator_by_set.get(ms.id),
-            ):
-                if value is None:
-                    continue
-                if query in str(value).casefold():
-                    return True
-            return False
-
-        visible = [ms for ms in self._existing_sets_cache if _match(ms)]
-        self._existing_sets_table.setRowCount(0)
-        for ms in visible:
-            row = self._existing_sets_table.rowCount()
-            self._existing_sets_table.insertRow(row)
-            # Locator column is populated from the treatment's
-            # locator_text if we can look it up cheaply; fall back to
-            # an empty string. We avoid extra DB round trips by only
-            # querying the treatment table when a treatment id is
-            # attached to the measurement set.
-            locator = locator_by_set.get(ms.id, "")
-            locator_item = QTableWidgetItem(locator)
-            locator_item.setData(Qt.UserRole, ms.id)
-            locator_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
-            self._existing_sets_table.setItem(row, 0, locator_item)
-            kind_item = QTableWidgetItem(ms.data_kind or "")
-            kind_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
-            self._existing_sets_table.setItem(row, 1, kind_item)
-            raw_item = QTableWidgetItem(ms.raw_text or "")
-            raw_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
-            self._existing_sets_table.setItem(row, 2, raw_item)
-        # Preserve prior selection if possible.
-        target_id = self._selected_measurement_set_id
-        if target_id:
-            for row in range(self._existing_sets_table.rowCount()):
-                item = self._existing_sets_table.item(row, 0)
-                if item and str(item.data(Qt.UserRole) or "") == target_id:
-                    self._existing_sets_table.selectRow(row)
-                    break
-            else:
-                self._selected_measurement_set_id = None
-
-    def _on_existing_set_selection_changed(self) -> None:
-        selected_rows = self._existing_sets_table.selectionModel().selectedRows()
-        if not selected_rows:
-            self._selected_measurement_set_id = None
-            return
-        row = selected_rows[0].row()
-        item = self._existing_sets_table.item(row, 0)
-        self._selected_measurement_set_id = (
-            str(item.data(Qt.UserRole)) if item else None
-        )
-
-    def _on_data_choice_toggled(self, *_args) -> None:
-        use_existing = self.use_existing_radio.isChecked()
-        # Toggle table + search visibility.
-        self._existing_search_input.setVisible(use_existing)
-        self._existing_sets_table.setVisible(use_existing)
-        # Toggle new-data tabs; the tab widget stays visible so the
-        # user can see what they are giving up but individual tabs are
-        # disabled to prevent accidental edits while "Use existing" is
-        # chosen. Parmasto tab stays legacy-only either way and does not
-        # participate in the normalized path.
-        try:
-            for index in range(self.tabs.count()):
-                widget = self.tabs.widget(index)
-                widget.setEnabled(not use_existing)
-        except Exception:
-            pass
-        if use_existing:
-            self._refresh_existing_sets_table()
-
-    def _build_raw_points_json(self) -> str | None:
-        """Serialize the Spore-data tab into ``raw_points_json`` using the
-        normalized ``length`` / ``width`` keys the schema expects.
-
-        SporeDataTable.get_points() uses ``length_um`` / ``width_um`` for
-        Qt display; this method translates without changing the
-        widget-facing shape. It also drops non-positive rows so the
-        normalized MeasurementSet, its sample_size, and the eventual
-        plot translator all agree on which points survive. The legacy
-        observation-scoped points payload keeps every historically
-        accepted row via ``get_points`` unchanged.
-        """
-        points = self.spore_table.get_points()
-        if not points:
-            return None
-        translated = []
-        for point in points:
-            length = point.get("length_um")
-            width = point.get("width_um")
-            if length is None or width is None:
-                continue
-            length_f = float(length)
-            width_f = float(width)
-            # Reject non-positive AND non-finite (NaN / Infinity) values.
-            # The plot translator applies the same finite-positive
-            # requirement, so agreeing here keeps the persisted
-            # raw_points_json, sample_size, and plot output consistent.
-            if not (math.isfinite(length_f) and math.isfinite(width_f)):
-                continue
-            if length_f <= 0 or width_f <= 0:
-                continue
-            translated.append({"length": length_f, "width": width_f})
-        if not translated:
-            return None
-        return json.dumps(translated, ensure_ascii=False)
-
-    def normalized_measurement_set_payload(
-        self, *, legacy_reference_value_id: int | None = None
-    ) -> MeasurementSet | None:
-        """Return the normalized ``MeasurementSet`` payload for the
-        current form values, or ``None`` when the observation lacks a
-        taxon or the current tab is Parmasto-only.
-
-        The migration mapping mirrors ``tools/migrate_legacy_reference_values``:
-        Extreme → ``length_min`` / ``length_max``, Typical → ``core_min`` /
-        ``core_max``, Mean / Avg → ``*_mean``. Raw points win over range
-        cells when the Spore-data tab has ≥1 row.
-        """
-        # Parmasto tab index 2 - even if it has values, we do not create
-        # a normalized set from Parmasto-only submissions.
-        raw_points_json = self._build_raw_points_json()
-        has_range_values = any(
-            self._table_value(row, col) is not None
-            for row in range(3)
-            for col in range(5)
-        )
-        if not raw_points_json and not has_range_values:
-            return None
-        if raw_points_json:
-            data_kind = "raw_points"
-        else:
-            data_kind = "range"
-        sample_size: int | None = None
-        if raw_points_json:
-            try:
-                sample_size = len(json.loads(raw_points_json))
-            except Exception:
-                sample_size = None
-        # Prefer the last successfully parsed buffer, but fall back to the
-        # current paste-input text so a manually corrected or unparsed
-        # expression still round-trips into raw_text.
-        raw_text_input = self._raw_measurement_text or ""
-        if not raw_text_input and hasattr(self, "measurement_paste_input"):
-            raw_text_input = self.measurement_paste_input.text() or ""
-        raw_text_input = raw_text_input or None
-        # Carry legacy method metadata forward when we have it (from a
-        # prefilled edit-mode dialog). The dialog has no dedicated input
-        # for these today, so they are propagated verbatim rather than
-        # re-entered — matching the accepted compatibility contract.
-        prefill = self._prefill_data or {}
-        mount_medium = (str(prefill.get("mount_medium") or "").strip() or None)
-        stain = (str(prefill.get("stain") or "").strip() or None)
-        notes = None
-        legacy_meta = prefill.get("metadata_json") if isinstance(prefill, dict) else None
-        if isinstance(legacy_meta, dict):
-            note_candidate = legacy_meta.get("notes")
-            if isinstance(note_candidate, str) and note_candidate.strip():
-                notes = note_candidate.strip()
-        # MeasurementSet has no Q "core" columns, so a parsed
-        # ``Q = a–b`` (written into the Typical cells) and a parsed
-        # ``Qm`` (routed to the Parmasto Q-mean field) must fall back
-        # into q_min / q_max / q_mean or the data is silently lost.
-        # Explicit Extreme / Mean cells still win when filled.
-        q_min = self._table_value(2, 0)
-        if q_min is None:
-            q_min = self._table_value(2, 1)
-        q_max = self._table_value(2, 4)
-        if q_max is None:
-            q_max = self._table_value(2, 3)
-        q_mean = self._table_value(2, 2)
-        if q_mean is None:
-            q_mean = self._parmasto_value("parmasto_q_mean")
-        ms = MeasurementSet(
-            id="",
-            taxon_treatment_id="",  # filled in by MainWindow when creating
-            character="spore_size",
-            data_kind=data_kind,
-            raw_text=raw_text_input,
-            length_min=self._table_value(0, 0),
-            length_core_min=self._table_value(0, 1),
-            length_core_max=self._table_value(0, 3),
-            length_max=self._table_value(0, 4),
-            width_min=self._table_value(1, 0),
-            width_core_min=self._table_value(1, 1),
-            width_core_max=self._table_value(1, 3),
-            width_max=self._table_value(1, 4),
-            q_min=q_min,
-            q_max=q_max,
-            q_mean=q_mean,
-            length_mean=self._table_value(0, 2),
-            width_mean=self._table_value(1, 2),
-            sample_size=sample_size,
-            raw_points_json=raw_points_json,
-            legacy_reference_value_id=legacy_reference_value_id,
-            mount_medium=mount_medium,
-            stain=stain,
-            notes=notes,
-        )
-        # Guard against unplottable range submissions: the plot / attach
-        # translator would reject the snapshot, causing the attach helper
-        # to detach the newly-attached use but leave the orphan
-        # MeasurementSet row behind. Share the range-plottability
-        # predicate with ``references.reference_plotting`` so the two
-        # ends agree on what counts as a drawable payload. The
-        # ``raw_points`` path is unaffected.
-        if data_kind == "range" and not range_payload_is_plottable(ms):
-            return None
-        return ms
-
-    def delete_requested(self) -> bool:
-        return bool(self._delete_requested)
-
-    def _set_plot_color(self, color: str | None) -> None:
-        self._plot_color = str(color).strip().lower() if color else None
 
     def _on_delete(self) -> None:
         if not self._allow_delete:
@@ -6783,86 +5284,49 @@ class ReferenceAddDialog(GeometryMixin, QDialog):
         if answer != QMessageBox.Yes:
             return
         self._delete_requested = True
-        self._result = None
         self.accept()
 
-    def _apply_prefill(self):
-        data = self._prefill_data
-        if not data:
-            self._set_plot_color(None)
-            return
-        # Legacy source prefill: check whether it corresponds to an
-        # existing ReferenceWork label. When it matches, select that
-        # work in the picker; otherwise preserve the string so the
-        # legacy write path retains it.
-        source_prefill = (
-            data.get("source")
-            or data.get("points_label")
-            or data.get("source_label")
-            or ""
+    def delete_requested(self) -> bool:
+        return bool(self._delete_requested)
+
+    # ----- Accessors forwarded to the embedded editor ----------------------
+
+    def result_data(self):
+        return self.editor.result_data()
+
+    def selected_reference_work_id(self) -> str | None:
+        return self.editor.selected_reference_work_id()
+
+    def pending_reference_work(self):
+        return self.editor.pending_reference_work()
+
+    def quick_add_treatment_payload(self) -> dict[str, str]:
+        return self.editor.quick_add_treatment_payload()
+
+    def selected_measurement_set_id(self) -> str | None:
+        return self.editor.selected_measurement_set_id()
+
+    def is_use_existing_set(self) -> bool:
+        return self.editor.is_use_existing_set()
+
+    def normalized_measurement_set_payload(self, *, legacy_reference_value_id: int | None = None):
+        return self.editor.normalized_measurement_set_payload(
+            legacy_reference_value_id=legacy_reference_value_id
         )
-        if source_prefill:
-            matched_id: str | None = None
-            for row in range(self.publication_combo.count()):
-                label = self.publication_combo.itemText(row).strip()
-                if label and label.casefold() == source_prefill.strip().casefold():
-                    matched_id = str(self.publication_combo.itemData(row) or "") or None
-                    break
-            if matched_id and not self._require_explicit_publication_assignment:
-                self._populate_publication_combo(select_id=matched_id)
-            else:
-                self._legacy_source_prefill = source_prefill
-                # Show the prefilled label as free-text so the user knows
-                # the value survives even though it does not resolve to
-                # a library entry.
-                self.publication_combo.setEditText(source_prefill)
 
-        def _set_cell(row, col, value):
-            if value is None:
-                return
-            item = QTableWidgetItem(f"{value:.2f}")
-            item.setTextAlignment(Qt.AlignCenter)
-            self.minmax_table.setItem(row, col, item)
-
-        _set_cell(0, 0, data.get("length_min"))
-        _set_cell(0, 1, data.get("length_p05"))
-        _set_cell(0, 2, data.get("length_p50"))
-        _set_cell(0, 3, data.get("length_p95"))
-        _set_cell(0, 4, data.get("length_max"))
-        _set_cell(1, 0, data.get("width_min"))
-        _set_cell(1, 1, data.get("width_p05"))
-        _set_cell(1, 2, data.get("width_p50"))
-        _set_cell(1, 3, data.get("width_p95"))
-        _set_cell(1, 4, data.get("width_max"))
-        _set_cell(2, 0, data.get("q_min"))
-        _set_cell(2, 1, data.get("q_p05"))
-        _set_cell(2, 2, data.get("q_p50"))
-        _set_cell(2, 3, data.get("q_p95"))
-        _set_cell(2, 4, data.get("q_max"))
-
-        points = data.get("points") or []
-        if points:
-            self.spore_table._ensure_rows(len(points))
-            for row, point in enumerate(points):
-                length = point.get("length_um")
-                width = point.get("width_um")
-                if length is not None:
-                    self.spore_table.setItem(row, 0, QTableWidgetItem(f"{length:g}"))
-                if width is not None:
-                    self.spore_table.setItem(row, 1, QTableWidgetItem(f"{width:g}"))
-                self.spore_table._update_q_for_row(row)
-            self.tabs.setCurrentIndex(1)
-        parmasto_has_values = False
-        for key, widget in self.parmasto_inputs.items():
-            value = data.get(key)
-            if value is None:
-                widget.clear()
-                continue
-            widget.setText(f"{float(value):g}")
-            parmasto_has_values = True
-        if parmasto_has_values and not points:
-            self.tabs.setCurrentIndex(2)
-        self._set_plot_color(data.get("plot_color"))
+    def __getattr__(self, name):
+        # Compatibility fallback: existing tests and any other caller that
+        # reaches into a widget the editor now owns (minmax_table,
+        # spore_table, publication_combo, parmasto_inputs, ...) keeps
+        # working against this wrapper without duplicating a forwarding
+        # property per widget. Only consulted when normal attribute lookup
+        # (this class's own attributes/methods) fails.
+        editor = self.__dict__.get("editor")
+        if editor is not None and hasattr(editor, name):
+            return getattr(editor, name)
+        raise AttributeError(
+            f"{type(self).__name__!r} object has no attribute {name!r}"
+        )
 
 
 class _ReferenceTaxonLookupProxy:
@@ -11596,6 +10060,25 @@ class MainWindow(GeometryMixin, QMainWindow):
                 return
             self._add_reference_series_entry(data)
 
+        def _add_manual_callback(editor: "ReferenceEntryEditor") -> bool:
+            current_observation_id = getattr(self, "active_observation_id", None)
+            if (
+                current_observation_id is None
+                or int(current_observation_id) != captured_observation_id
+            ):
+                QMessageBox.warning(
+                    self,
+                    self.tr("Add reference"),
+                    self.tr(
+                        "The active observation changed while the picker "
+                        "was open. Reopen the observation and try again — "
+                        "no reference was attached."
+                    ),
+                )
+                return False
+            self._submit_reference_editor_result(editor, sync_panel=False)
+            return True
+
         dialog = AddReferenceDialog(
             self,
             taxon_label=taxon_label,
@@ -11606,6 +10089,7 @@ class MainWindow(GeometryMixin, QMainWindow):
             exclude_measurement_set_ids=excluded,
             attach_callback=_add_callback,
             cloud_attach_callback=_add_cloud_callback,
+            manual_attach_callback=_add_manual_callback,
             ai_candidates=self._collect_reference_ai_suggestions(),
         )
         dialog.exec()
@@ -13168,11 +11652,19 @@ class MainWindow(GeometryMixin, QMainWindow):
             return False
         observation_id = int(captured_obs_id) if captured_obs_id is not None else int(active_obs_id)
         # Also guard against the observation's taxon changing while the
-        # modal was open: the payload's sporely_taxon_id was captured
-        # at dialog-open time and must still match the live taxon on
-        # the observation, otherwise a scope-A selection could be
-        # committed under scope-B's identity.
-        captured_taxon_id = payload.get("sporely_taxon_id")
+        # modal was open. This must compare the OBSERVATION's own taxon,
+        # not the payload's ``sporely_taxon_id`` — since the Add-reference
+        # picker's "Compare against" selector, the payload's
+        # sporely_taxon_id is the CHOSEN COMPARISON TARGET's taxon (an AI
+        # suggestion or a typed name), which may legitimately differ from
+        # the observation's own. ``observation_taxon_id`` is the
+        # dedicated, unchanging field callers stamp with the observation's
+        # own taxon for exactly this check; callers that predate the
+        # picker's independent-target selector (the legacy Quick-add
+        # dialog) never set it, so it falls back to ``sporely_taxon_id`` —
+        # which for them is always the observation's own taxon already,
+        # preserving their existing behavior unchanged.
+        captured_taxon_id = payload.get("observation_taxon_id", payload.get("sporely_taxon_id"))
         live_taxon_id = self._active_sporely_taxon_id()
         if (
             captured_taxon_id is not None
@@ -13513,6 +12005,114 @@ class MainWindow(GeometryMixin, QMainWindow):
         species = (obs.get("species") or "").strip() or None
         return (genus, species)
 
+    def _submit_reference_editor_result(self, editor, *, sync_panel: bool = False) -> None:
+        """Persist a validated editor's ``result_data()``.
+
+        Normalized-first quick-add, then legacy write + normalized attach,
+        falling back to a direct ``reference_series`` entry when no
+        normalized attach occurred. Shared by the legacy Quick-add dialog
+        (:meth:`_on_reference_panel_add_clicked`) and the Add-reference
+        picker's Enter-manually tab (:meth:`_on_add_reference_clicked`) so
+        both submission entry points route through identical
+        persistence/dedup behavior. ``editor`` is duck-typed: either a
+        ``ReferenceAddDialog`` wrapper or the ``ReferenceEntryEditor`` it
+        wraps both satisfy the same accessor contract.
+
+        ``sync_panel`` additionally refreshes the legacy reference-panel
+        Source dropdown/state — only meaningful for the panel's own Quick-
+        add entry point, which owns those widgets.
+        """
+        data = editor.result_data()
+        if not isinstance(data, dict) or not data:
+            return
+        # The normalized quick-add path is deliberately not legacy-first.
+        # Validation and canonical attachment must complete before any UI
+        # state is accepted, otherwise a failed quick add would strand a
+        # legacy row that is neither part of the library hierarchy nor the
+        # requested attachment. Explicit legacy-only submissions continue
+        # through the compatibility path below.
+        quick_add_candidate = None
+        quick_add_dialog = callable(
+            getattr(editor, "quick_add_treatment_payload", None)
+        )
+        if quick_add_dialog:
+            try:
+                quick_add_candidate = editor.normalized_measurement_set_payload(
+                    legacy_reference_value_id=None
+                )
+            except Exception:
+                # Treat a builder error as an intended normalized attempt so
+                # it cannot fall through and persist a partial legacy row.
+                quick_add_candidate = object()
+        quick_add_intended = (
+            data.get("source_kind") == "reference"
+            and quick_add_dialog
+            and quick_add_candidate is not None
+            and bool(
+                data.get("reference_work_id")
+                or (
+                    callable(getattr(editor, "pending_reference_work", None))
+                    and editor.pending_reference_work() is not None
+                )
+            )
+        )
+        if quick_add_intended:
+            try:
+                self._persist_normalized_reference_from_dialog(
+                    editor, data, legacy_id=None
+                )
+            except Exception as exc:
+                QMessageBox.warning(
+                    self,
+                    self.tr("Reference library"),
+                    self.tr("Could not add the library reference: {error}").format(
+                        error=str(exc)
+                    ),
+                )
+            return
+        legacy_id: int | None = None
+        if data.get("source_kind") == "reference":
+            legacy_id = ReferenceDB.set_reference(data)
+            self._refresh_reference_species_availability()
+            self._populate_reference_panel_sources()
+            if sync_panel and data.get("source"):
+                idx = self.ref_source_input.findText(data.get("source"))
+                if idx >= 0:
+                    self.ref_source_input.setCurrentIndex(idx)
+                else:
+                    self.ref_source_input.setCurrentText(data.get("source"))
+        # Attempt to persist through the normalized library. For
+        # legacy points/no-source paths this is effectively a no-op.
+        normalized_attached = False
+        try:
+            normalized_attached = self._persist_normalized_reference_from_dialog(
+                editor, data, legacy_id=legacy_id
+            )
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                self.tr("Reference library"),
+                self.tr("Reference stored locally, but library sync failed: {error}").format(
+                    error=str(exc)
+                ),
+            )
+        # An existing-measurement-set selection has no legacy envelope to
+        # persist as a panel entry; the attach helper already appended
+        # the translated series row for the attached set.
+        if data.get("source_kind") == "existing_measurement_set":
+            return
+        if sync_panel:
+            self.reference_values = data
+            self._apply_reference_panel_values(data)
+        # Dual-plot dedup: when the normalized attach succeeded, the
+        # attach helper already added a translated series row for the
+        # measurement set. Suppress the legacy envelope's series row so
+        # the same scientific dataset does not render as two enabled
+        # entries. The legacy row itself remains in ``reference_values``
+        # for downgrade compatibility and edit-mode round-trips.
+        if not normalized_attached:
+            self._add_reference_series_entry(data)
+
     def _on_reference_panel_add_clicked(self):
         genus = self._clean_ref_genus_text(self.ref_genus_input.text())
         species = self._clean_ref_species_text(self.ref_species_input.text())
@@ -13531,96 +12131,8 @@ class MainWindow(GeometryMixin, QMainWindow):
         )
         if dialog.exec() != QDialog.Accepted:
             return
-        data = dialog.result_data()
-        if not isinstance(data, dict) or not data:
-            return
-        # The normalized quick-add path is deliberately not legacy-first.
-        # Validation and canonical attachment must complete before any UI
-        # state is accepted, otherwise a failed quick add would strand a
-        # legacy row that is neither part of the library hierarchy nor the
-        # requested attachment. Explicit legacy-only submissions continue
-        # through the compatibility path below.
-        quick_add_candidate = None
-        quick_add_dialog = callable(
-            getattr(dialog, "quick_add_treatment_payload", None)
-        )
-        if quick_add_dialog:
-            try:
-                quick_add_candidate = dialog.normalized_measurement_set_payload(
-                    legacy_reference_value_id=None
-                )
-            except Exception:
-                # Treat a builder error as an intended normalized attempt so
-                # it cannot fall through and persist a partial legacy row.
-                quick_add_candidate = object()
-        quick_add_intended = (
-            data.get("source_kind") == "reference"
-            and quick_add_dialog
-            and quick_add_candidate is not None
-            and bool(
-                data.get("reference_work_id")
-                or (
-                    callable(getattr(dialog, "pending_reference_work", None))
-                    and dialog.pending_reference_work() is not None
-                )
-            )
-        )
-        if quick_add_intended:
-            try:
-                if self._persist_normalized_reference_from_dialog(
-                    dialog, data, legacy_id=None
-                ):
-                    return
-            except Exception as exc:
-                QMessageBox.warning(
-                    self,
-                    self.tr("Reference library"),
-                    self.tr("Could not add the library reference: {error}").format(
-                        error=str(exc)
-                    ),
-                )
-            return
-        legacy_id: int | None = None
-        if data.get("source_kind") == "reference":
-            legacy_id = ReferenceDB.set_reference(data)
-            self._refresh_reference_species_availability()
-            self._populate_reference_panel_sources()
-            if data.get("source"):
-                idx = self.ref_source_input.findText(data.get("source"))
-                if idx >= 0:
-                    self.ref_source_input.setCurrentIndex(idx)
-                else:
-                    self.ref_source_input.setCurrentText(data.get("source"))
-        # Attempt to persist through the normalized library. For
-        # legacy points/no-source paths this is effectively a no-op.
-        normalized_attached = False
-        try:
-            normalized_attached = self._persist_normalized_reference_from_dialog(
-                dialog, data, legacy_id=legacy_id
-            )
-        except Exception as exc:
-            QMessageBox.warning(
-                self,
-                self.tr("Reference library"),
-                self.tr("Reference stored locally, but library sync failed: {error}").format(
-                    error=str(exc)
-                ),
-            )
-        # An existing-measurement-set selection has no legacy envelope to
-        # persist as a panel entry; the attach helper already appended
-        # the translated series row for the attached set.
-        if data.get("source_kind") == "existing_measurement_set":
-            return
-        self.reference_values = data
-        self._apply_reference_panel_values(data)
-        # Dual-plot dedup: when the normalized attach succeeded, the
-        # attach helper already added a translated series row for the
-        # measurement set. Suppress the legacy envelope's series row so
-        # the same scientific dataset does not render as two enabled
-        # entries. The legacy row itself remains in ``reference_values``
-        # for downgrade compatibility and edit-mode round-trips.
-        if not normalized_attached:
-            self._add_reference_series_entry(data)
+        self._submit_reference_editor_result(dialog, sync_panel=True)
+
 
     def _on_reference_panel_edit_clicked(self):
         genus = self._clean_ref_genus_text(self.ref_genus_input.text())

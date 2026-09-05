@@ -866,6 +866,48 @@ def _add_dialog_default_size(context: ReviewContext):
     return dialog
 
 
+def _add_dialog_manual(context: ReviewContext, *, taxon_id: str | None = "7"):
+    """Build the picker on its Enter-manually tab, with a real publication
+    seeded in the isolated library so the publication combo has a
+    realistic non-empty option list.
+    """
+    from ui.add_reference_dialog import AddReferenceDialog
+
+    fixture = _fixture(context)
+    dialog = AddReferenceDialog(
+        context.host,
+        taxon_label="Cortinarius limonius",
+        taxon_id=taxon_id,
+        candidates=_add_dialog_candidates(),
+        community_results=[],
+        attach_callback=lambda *_args: None,
+        cloud_attach_callback=lambda *_args: None,
+        manual_attach_callback=lambda *_args: True,
+    )
+    dialog.tabs.setCurrentIndex(dialog._manual_tab_index)
+    return dialog, fixture
+
+
+def _add_dialog_manual_range(context: ReviewContext):
+    dialog, fixture = _add_dialog_manual(context)
+    _select_work(dialog.manual_editor, fixture["work"].id)
+    _populate_range(dialog.manual_editor)
+    return dialog
+
+
+def _add_dialog_manual_points(context: ReviewContext):
+    dialog, _fixture_data = _add_dialog_manual(context)
+    _populate_raw_points(dialog.manual_editor)
+    return dialog
+
+
+def _add_dialog_manual_invalid(context: ReviewContext):
+    """Enter-manually tab with no input: honest empty state, Add to plot
+    stays disabled, matching the picker's other empty-state scenarios."""
+    dialog, _fixture_data = _add_dialog_manual(context)
+    return dialog
+
+
 def _open_taxon_popup(dialog):
     dialog.taxon_target_combo.showPopup()
     return dialog.taxon_target_combo.view().window()
@@ -1125,6 +1167,46 @@ def register_reference_scenarios(registry: ScenarioRegistry) -> None:
     )
     for scenario in scenarios:
         registry.register(scenario)
+
+    for suffix, builder, description in (
+        (
+            "manual-range",
+            _add_dialog_manual_range,
+            "Enter-manually tab, a realistic parsed literature range with a selected publication; the shared preview pane shows the entered data and Add to plot is enabled.",
+        ),
+        (
+            "manual-points",
+            _add_dialog_manual_points,
+            "Enter-manually tab, eight raw paired spore points; the shared preview pane shows n and the raw spore data.",
+        ),
+        (
+            "manual-invalid",
+            _add_dialog_manual_invalid,
+            "Enter-manually tab with no input yet: honest empty preview, Add to plot stays disabled.",
+        ),
+    ):
+        for theme in ("light", "dark"):
+            is_dark = theme == "dark"
+            registry.register(ReviewScenario(
+                id=f"reference.add-dialog-{suffix}" + ("-dark" if is_dark else ""),
+                group="reference-library",
+                title=f"Add-reference picker — {suffix.replace('-', ' ')}" + (" (dark)" if is_dark else ""),
+                description=description,
+                viewport=(1400, 760),
+                build=builder,
+                natural_size=True,
+                theme=theme,
+            ))
+    registry.register(ReviewScenario(
+        id="reference.add-dialog-manual-nb-no",
+        group="reference-library",
+        title="Add-reference picker — Enter manually in Norwegian Bokmål",
+        description="A parsed literature range on the Enter-manually tab, exercised with the real Norwegian translator: labels, publication picker, and Data section fit without clipping.",
+        viewport=(1400, 760),
+        build=_add_dialog_manual_range,
+        natural_size=True,
+        locale="nb_NO",
+    ))
 
     for theme in ("light", "dark"):
         for suffix, builder, viewport, natural, capture in (

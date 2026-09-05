@@ -9,8 +9,334 @@ points are removed.
 Status: Stages 4b (`c345ac8`) and 4b-fix (`14525ff`) are already committed.
 Fresh top-level acceptance review on 2026-09-05: **4b-fix2 confirmed** within
 its approved corrective scope. User confirmed all seven manual checks passed.
+Stage 4c (Enter-manually tab) is described below; a second, later fresh
+independent review confirmed it and it is now committed (see "Landed stages").
+Approved plan stage 4 (Wire Community / My observations / Enter manually
+tabs) is now fully landed across its 4a/4a-fix/4b/4b-fix2/4c sub-stages.
+Stage 5 (verdict computation) is next but is not yet concretely scoped — see
+the note at the end of "Landed stages".
 
-## Current stage / handoff — 2026-09-05
+## Current stage / handoff — 2026-09-05 (stage 4c implementation)
+
+### Independent acceptance review — 2026-09-05 (fresh session, after manual testing)
+
+**Confirmed and committed.** The user ran all seven manual checks in
+`.sparring/prompts/sporely-py/stage-4c.md` and reported all passing,
+including a deliberate different-species comparison (added a *Mycena
+metata* reference to an observation identified as *Mycena leptocephala*;
+the reference persisted as *Mycena metata* and the observation's own
+identification was untouched). A fresh top-level review verified this
+independently against the code rather than accepting the report as-is:
+
+- Confirmed `ReferenceAddDialog` (`ui/main_window.py:5195`) is now a thin
+  wrapper delegating to an embedded `ReferenceEntryEditor` via `__getattr__`
+  — genuine reuse, not a parallel implementation.
+- Confirmed `_submit_reference_editor_result` (`ui/main_window.py:12008`) is
+  the single submission path for both the legacy Quick-add dialog and the
+  new manual tab's `_add_manual_callback` (`ui/main_window.py:10063`).
+- Confirmed the observation-drift/failure gate: `_add_manual_callback`
+  returns `False` on a drifted observation, and
+  `AddReferenceDialog._on_add_to_plot_clicked` (`ui/add_reference_dialog.py:1014`)
+  only calls `accept()` when that callback reports success — matches
+  `test_manual_tab_stays_open_when_callback_reports_failure`. `Cancel` only
+  calls `reject()` (`ui/add_reference_dialog.py:341`), so cancellation never
+  writes.
+- Confirmed target-identity independence in
+  `ReferenceEntryEditor.set_comparison_target`
+  (`ui/reference_entry_editor.py:560`): resets publication/treatment
+  identity and any built result on every target change, while preserving
+  already-entered measurement values — and confirmed the deeper fix behind
+  it, the new `observation_taxon_id` field
+  (`ui/reference_entry_editor.py:1110`, read at
+  `ui/main_window.py:11667`), which lets the drift guard compare the
+  *observation's* taxon instead of being confused by the *comparison
+  target's* taxon — exactly the persistence-contract blocker this stage's
+  prompt required a fix for.
+- Reran the full required command set: `test_add_reference_dialog.py` +
+  `test_reference_entry_editor.py` (58 passed), the second regression batch
+  (64 passed), `test_render_review_screenshots.py` (12/12 — the three
+  previously-tracked stale inventory assertions are now fixed, as the
+  prompt required), `py_compile` clean, `git diff --check` clean, zero
+  unfinished translation entries in all three languages. Visually inspected
+  the manual-tab Norwegian and invalid-input screenshots: no clipping, tabs
+  and controls fully accessible, footer state correctly reflects validity.
+- **UX finding confirmed, correctly scoped as a follow-up, not a blocker.**
+  The confirm dialog at `_persist_normalized_reference_from_dialog`
+  (`ui/main_window.py:11741`) reads "The species entered in the panel
+  ({panel}) differs from the observation's taxon record ({observation})...
+  If this is an accidental edit, click No" — wording written for the
+  legacy panel's editable identification fields. It now also fires for the
+  Enter-manually tab whenever the chosen comparison target's genus/species
+  differ from the observation's own, which is the deliberately common case
+  for a cross-species literature comparison, not a probable mistake. This
+  guard is pre-existing and unrelated to this stage's edits (untouched by
+  the taxon-ID separation fix above); the implementer's own report already
+  named this exact deviation and deferred it (see "Known issues" and the
+  entry below). No code changes were made in this review session per the
+  user's request to scope this session to verification only.
+
+Commit: **see hash below** (created immediately after this entry).
+Archived prompt: `.sparring/prompts/sporely-py/completed/stage-4c.md`.
+
+### Stage 4c — Enter-manually tab wired; human-gated, uncommitted
+
+Resolves the persistence-contract blocker recorded below (see "Stage 4c
+boundary inspection") by threading a second, dedicated identity field
+through the existing submission host, rather than reusing
+`sporely_taxon_id` for two different purposes.
+
+**Extraction.** `ReferenceAddDialog`'s ~1500-line body (`ui/main_window.py`,
+previously ~L5341–6867) is split into a new module,
+`ui/reference_entry_editor.py`:
+- `ReferenceEntryEditor(QWidget)` owns the paste/parse min-max table, spore
+  table, Parmasto fields, publication picker, and the existing/new-data
+  Data section — every method verbatim except `_on_save` (renamed
+  `validate_and_build_result() -> bool`, no `accept()`) and the new methods
+  below. No parser/validation/normalized-payload logic was duplicated.
+- `SporeDataTable` and `_PublicationSearchProxyModel` moved into the same
+  module (only ever used by this editor); `main_window.py` imports both
+  back for backward compatibility.
+- `ReferenceAddDialog` (`ui/main_window.py`) is now a ~120-line modal
+  wrapper: sci-name header + Save/Delete/Cancel chrome around one embedded
+  `ReferenceEntryEditor`, forwarding every accessor
+  (`result_data`, `pending_reference_work`, `quick_add_treatment_payload`,
+  `selected_measurement_set_id`, `is_use_existing_set`,
+  `normalized_measurement_set_payload`) to it, plus a `__getattr__`
+  fallback to the embedded editor for any other attribute (so existing
+  tests reaching into `dialog.minmax_table` / `.spore_table` /
+  `.publication_combo` etc. keep working unchanged).
+
+**Target identity vs. observation identity (the blocker's fix).**
+`ReferenceEntryEditor` now carries two taxon-id fields instead of one:
+`sporely_taxon_id` (the *currently selected comparison target's* id —
+may legitimately differ from the observation) and `observation_taxon_id`
+(the observation's own, fixed for the editor's lifetime). Both land on the
+built payload. `MainWindow._persist_normalized_reference_from_dialog`
+(~L11578) reads `payload.get("observation_taxon_id", payload.get(
+"sporely_taxon_id"))` for its drift guard — comparing the *observation's*
+taxon, not the target's — while the treatment-creation branch still reads
+`sporely_taxon_id` (the target's id) unchanged. Callers that predate the
+picker's target selector (the legacy Quick-add dialog) never set the new
+field, so the fallback preserves their behavior exactly: no schema or
+persistence change, one new optional payload key.
+
+**Manual tab wiring** (`ui/add_reference_dialog.py`):
+- `_build_manual_tab` embeds `ReferenceEntryEditor` (no modal chrome),
+  sharing the dialog's one `ReferencePreviewPane` instance and its
+  Add-to-plot/Cancel footer, replacing the stage-3/4a/4b stub pane.
+- `_apply_taxon_target` (the existing "Compare against" handler) now also
+  calls `ReferenceEntryEditor.set_comparison_target(...)`, which resets
+  publication/treatment identity (selected work, pending new work, the
+  publication combo, `name_as_published_input`, and any already-built
+  result) for the new target while preserving already-entered measurement
+  values (min/max, spore points, Parmasto) — literature data independent
+  of which taxon it is compared against.
+- `_update_footer_state`/`_on_tab_changed` gained a manual-tab branch:
+  footer enablement reads `ReferenceEntryEditor.is_ready_to_submit()`
+  (mirrors `validate_and_build_result()`'s branching without popping
+  dialogs); revisiting the tab calls the editor's `sync_preview()`.
+- `_on_add_to_plot_clicked`'s manual branch is the one tab that does NOT
+  unconditionally `accept()`: it validates first, then only accepts if
+  `manual_attach_callback(editor)` returns `True` — the other three tabs'
+  callbacks have no failure signal, but a manual submission can still fail
+  the observation-drift check after the click, and per the prompt must
+  leave the picker open rather than claim success.
+
+**Shared submission routine** (`ui/main_window.py`): extracted
+`_submit_reference_editor_result(editor, *, sync_panel)` from the body of
+`_on_reference_panel_add_clicked` (quick-add-first ordering, legacy write,
+normalized attach, `reference_series` fallback, all unchanged) — the
+`editor` argument is duck-typed, so both the legacy `ReferenceAddDialog`
+wrapper and a bare `ReferenceEntryEditor` from the picker satisfy it.
+`_on_reference_panel_add_clicked` now just builds the dialog and calls the
+shared routine (`sync_panel=True`, to keep syncing the old panel's own
+Source dropdown). `_on_add_reference_clicked`'s new `_add_manual_callback`
+re-validates the captured observation (mirroring `_add_callback`'s
+existing guard for Library/My-observations), then calls the same routine
+(`sync_panel=False`) and returns its success as the accept/stay-open
+signal above.
+
+**Live preview.** `ReferenceEntryEditor._refresh_preview()` pushes the
+current tab's data into the shared `ReferencePreviewPane` on every
+relevant change (min/max edits, parse, spore-table edits, Parmasto edits,
+existing-set selection, the Data-section radio, the editor's own inner
+tab change, and `set_comparison_target`) and on `sync_preview()`. The
+range-preview bound/mean values fall back from the extreme columns to the
+typical columns (mirroring `normalized_measurement_set_payload`'s existing
+Q-column fallback) so a bare "9.8–11.3" range with no parenthesised
+extremes still shows in the preview instead of "—".
+
+**Translation-context preservation.** Every `self.tr(...)` call moved into
+`ReferenceEntryEditor` was changed to
+`QCoreApplication.translate("ReferenceAddDialog", ...)` so the ~80 moved
+strings keep resolving against the existing "ReferenceAddDialog"-context
+catalogue instead of a new "ReferenceEntryEditor" context lupdate would
+otherwise infer from the class rename (the same class of bug fix2 already
+made for `cloud_reference_dialog.py`/`add_reference_dialog.py`).
+`SporeDataTable`'s own `self.tr(...)` calls were left untouched (its class
+name is unchanged, so its existing "SporeDataTable" context is unaffected
+by the file move). `ui/reference_entry_editor.py` was added to
+`tools/update_translations.sh`'s source list. `./tools/update_translations.sh`
+found 8 new source strings (the preview feature is new; everything else
+matched the preserved context) — 4 were resolved by the same-text
+heuristic against identical strings elsewhere in the catalogue, and 4
+("Existing measurement set", "Manual entry", "Not applicable: entered
+manually.", "Manually entered") needed fresh translations, added by hand
+for nb_NO/sv_SE/de_DE (German informal "du" — none of the four needed a
+"du" form). Final extraction: 2325 finished translations per language,
+zero unfinished.
+
+**Regression tests** (in addition to the required commands below):
+`tests/test_reference_entry_editor.py` (new, 11 tests) — valid
+range/points/existing-set submission and payload shape (both taxon-id
+fields present), empty/malformed-input fail-closed, the "no publication
+selected" confirm gate's Yes/No paths, `set_comparison_target` invalidating
+publication/work state while preserving measurement values (and failing
+soft on a non-numeric target id), and preview-pane sync/clear. Extended
+`tests/test_add_reference_dialog.py` (+13 tests): manual-tab footer
+enable/disable, accept-only-on-callback-success vs. stay-open-on-failure,
+target-change resetting the manual editor, tab-revisit preview resync, and
+two host-level tests (`_add_manual_callback` routes through
+`_submit_reference_editor_result` with `sync_panel=False`; rejects and
+never calls it when the observation drifted). The three pre-existing stale
+renderer-inventory assertions in `tests/test_render_review_screenshots.py`
+(an entirely unrelated `portable-import` scenario group, and the ten
+already-registered `reference.*` scenarios stage 4b-fix2 added) are now
+fixed as part of the required inventory update for this stage's new
+scenarios — all three assertions pass; the full renderer test module and
+this stage's new manual/picker tests both pass with no remaining test
+debt.
+
+**Renderer scenarios** (`tools/review_ui/scenarios/references.py`): seven
+new registered scenarios — `reference.add-dialog-manual-{range,points,
+invalid}` in light and dark, plus `reference.add-dialog-manual-nb-no` — a
+selected publication with a realistic parsed range (both extreme and
+typical bounds, explicit Qm), eight raw paired spore points, and the
+empty/invalid state, in both themes; the Norwegian case additionally
+exercises the real translator end-to-end.
+
+**Validation run:**
+```
+./.venv/bin/pytest tests/test_add_reference_dialog.py tests/test_community_results_pane_requests.py tests/test_comparison_panel_model.py tests/test_comparison_list_widget_rebuild.py tests/test_reference_series_palette.py tests/test_reference_add_dialog_focus.py tests/test_reference_add_dialog_normalized.py tests/test_reference_panel_coordinator_existing_set.py tests/test_reference_panel_mainwindow_e2e.py tests/test_reference_attach_persistence_e2e.py tests/test_render_review_screenshots.py tests/test_reference_entry_editor.py -q
+```
+→ **134 passed** (includes 47 in `test_add_reference_dialog.py`, up from
+32 before this stage; 11 new in `test_reference_entry_editor.py`; 12 in
+the renderer module, all three previously-stale inventory assertions now
+passing). `py_compile` of `ui/main_window.py`, `ui/add_reference_dialog.py`,
+`ui/reference_entry_editor.py`, `tools/review_ui/scenarios/references.py`
+passed. `./tools/update_translations.sh` passed (2325/2325 finished, all
+three languages). `git diff --check` passed. Reference-library renderer
+group: **47 screenshots**, manifest at
+`/private/tmp/sporely-stage-4c-review/manifest.json` (the seven new
+manual-tab scenarios were additionally re-rendered twice more during
+iteration, at `/private/tmp/sporely-stage-4c-review2/` and `.../review3/`,
+to verify the preview-fallback and translation-context fixes below).
+
+Inspected screenshots (all seven new scenarios, both themes where
+applicable):
+- `reference.add-dialog-manual-range(-dark)`: publication selected, parsed
+  range table populated, shared preview's Length/Width/Q rows match the
+  entered min/typical/max/mean exactly (Q fallback confirmed: 1.70/1.89/
+  2.10), Add to plot enabled, all four source tabs and five preview
+  sub-tabs visible with no scroll arrows at the natural 1400×760 size.
+- `reference.add-dialog-manual-points(-dark)`: eight raw paired points
+  populate both the Spore-data table and the shared preview (computed
+  min/mean/max per dimension, "n = 8 spore measurements"), Add to plot
+  enabled.
+- `reference.add-dialog-manual-invalid(-dark)`: empty min/max table, empty
+  preview ("No dataset selected" / all "—"), Add to plot correctly
+  disabled, in both themes.
+- `reference.add-dialog-manual-nb-no`: real Norwegian catalogue resolves
+  every label on this tab — tab name "Skriv inn manuelt", "Publikasjon",
+  "Navn som publisert", "Lokator", "Bruk eksisterende målesett"/"Legg inn
+  nye data", "Min/maks"/"Sporedata"/"Parmasto Biometrics", "Tolk"/"Bytt
+  L↔B", the five min-max column headers, "Tolket — se gjennom og rediger
+  før lagring.", footer "Avbryt"/"Legg til i diagram" — confirming the
+  translation-context preservation fix actually resolves at runtime, not
+  just compiles.
+
+**Known issue found, not fixed (out of this stage's scope):** the
+Norwegian scenario is the first to show a populated `ReferencePreviewPane`
+summary table in Norwegian (no prior nb-no scenario exercised it — the old
+Quick-add dialog never used `ReferencePreviewPane`). Its "Median / Mean"
+column header ("Median / Gjennomsnitt" in Norwegian) is long enough to
+clip on both edges without an ellipsis at this viewport. This is the same
+class of defect as the already-tracked "Known issues" meta-line
+truncation from stage 1 (elide + tooltip needed on `ReferencePreviewPane`
+itself, matching `ComparisonRowWidget`'s existing elision pattern) — it is
+shared infrastructure across all four picker tabs, not something this
+stage's editor relocation introduced or is in scope to redesign. Added to
+the Known issues list below for a future polish stage.
+
+**Deviations from the prompt:** none identified; the confirm-dialog for
+"the panel genus/species differs from the observation's taxon record"
+(`_persist_normalized_reference_from_dialog`, ~L13241) was deliberately
+left unchanged even though it will now fire routinely whenever the
+selected comparison target's genus/species differ from the observation's
+own (previously an anomaly, now an expected case for an AI/typed target).
+Changing that gate's condition was judged out of scope: it is existing
+host logic shared with the legacy caller, and the prompt asked only to
+separate identity fields for the drift guard, not to redesign this
+confirmation. Noted for a future bounded stage if the resulting
+confirmation frequency proves to be a real UX problem.
+
+**Verification tier: human-gated, uncommitted.** All agent-verifiable
+checks above pass. Do not commit until the user confirms the seven manual
+checks in `.sparring/prompts/sporely-py/stage-4c.md` (open Analysis → Add
+reference → Enter manually; valid range; raw points + legacy-only form;
+empty/malformed input; target/tab switching and cancellation; publication-
+backed entry surviving reopen; resize/keyboard/light+dark+language
+smoke-test of Library/Community/My observations/old Quick add). Do not
+archive the stage-4c prompt until after that acceptance and the subsequent
+commit.
+
+### Stage 4c boundary inspection — blocked before implementation
+
+Selected prompt: `/Users/sigmundas/Documents/Code/sporely/.sparring/prompts/sporely-py/stage-4c.md`.
+No production files were changed. The pre-existing AGENTS.md edit is preserved.
+
+Existing reuse contract inspected:
+- `ReferenceAddDialog._on_save` (`ui/main_window.py:6087`) validates existing-set
+  selection or `_reference_record_data` / `_points_data`, captures publication
+  and observation/taxon context, and requests explicit legacy-only confirmation
+  where applicable. `result_data`, `quick_add_treatment_payload`,
+  `pending_reference_work`, `selected_measurement_set_id` and
+  `normalized_measurement_set_payload` provide the host result boundary.
+- `MainWindow._on_reference_panel_add_clicked` (`ui/main_window.py:13516`)
+  preserves normalized-first quick-add, legacy persistence, existing-set
+  attachment and suppression of a duplicate legacy plot series.
+
+Concrete blocker: `_persist_normalized_reference_from_dialog` compares the
+submitted `sporely_taxon_id` to the receiving observation's live taxon ID
+(`ui/main_window.py:13175–13194`). An intentionally different comparison
+target with its own ID is rejected as observation drift. A name-only AI/typed
+target avoids that ID comparison but reaches the observation-name comparison
+and synonym/historical-name confirmation (`ui/main_window.py:13241–13266`).
+Thus the existing host contract conflates comparison identity with observation
+identity; merely relocating the editor cannot provide the requested independent
+target behavior while preserving that contract. Borrowing the observation ID
+or silently bypassing its guard would violate the prompt's identity requirement.
+
+Proposed bounded follow-up: explicitly authorize separating captured receiving-
+observation identity (used for drift validation before every write) from the
+selected comparison target identity (used for treatment creation). Preserve
+the old caller's drift/synonym semantics; specify name-only target handling
+using the existing nullable treatment taxon ID, without a schema change. Add
+focused rejection/acceptance tests for differing target IDs, name-only targets,
+observation drift and unchanged identification before resuming editor relocation.
+
+Verification: selector chose sporely-py/stage-4c.md; `git status --short`
+showed only the unrelated AGENTS.md edit before this handoff; base commit
+`3d81ace` was confirmed with `git show --stat`. Targeted source inspection
+established the blocker. No implementation tests, translations or renderer
+captures were run because no implementation was made. `git diff --check`
+passed for this documentation update.
+
+Status: blocked at the prompt's explicit persistence-contract stop condition;
+uncommitted, no stage commit, prompt remains pending and unarchived. All editor,
+callback extraction, regression and screenshot work is deferred. Human-gated
+acceptance checks 1–7 in the selected prompt remain pending after implementation;
+there is no new interactive behavior to test in this pass.
 
 **4b-fix2 landed: `3d81ace`.** Independent review confirmed the corrective
 scope and the user confirmed all seven manual checks passed. The completed
@@ -442,6 +768,32 @@ long publication title elision, æøå), light + dark.
   (elide + tooltip, matching the row-title elision pattern in
   `ui/comparison_panel.py::_ComparisonRowWidget.resizeEvent`) in a later stage;
   not in scope for stage 3.
+- Summary-table header truncation (found in stage 4c): `ReferencePreviewPane`'s
+  Summary tab "Median / Mean" column header clips on both edges without an
+  ellipsis once translated to a longer string ("Median / Gjennomsnitt" in
+  Norwegian) — first exposed by the stage-4c Enter-manually Norwegian
+  scenario, since no earlier nb-no scenario showed a populated
+  `ReferencePreviewPane`. Same class of defect as the meta-line truncation
+  above; shared picker-wide infrastructure, not introduced by stage 4c's
+  editor relocation and not in scope for it. Needs the same follow-up
+  (elide + tooltip) in a later polish stage.
+- Misleading confirm-dialog wording for a deliberate cross-species
+  comparison (found in stage 4c manual testing; confirmed in code by the
+  fresh independent review): the confirm dialog in
+  `_persist_normalized_reference_from_dialog` (`ui/main_window.py:11741`)
+  asks "...If this is an accidental edit, click No" whenever the submitted
+  genus/species differ from the observation's own taxon record. That
+  wording was written for the legacy panel's editable identification
+  fields, where a mismatch usually did mean an accidental edit or a
+  synonym/historical name. Reached from the Enter-manually tab, the
+  mismatch is routinely the deliberate, expected case — comparing the
+  observation against a different possible species — so the wording reads
+  as if something might be wrong when it is not. The underlying data
+  behavior is correct: the reference persists under the typed target's own
+  name, and the observation's own identification is never touched. Needs a
+  bounded follow-up stage to distinguish "editing the observation's own
+  identification" from "choosing an independent comparison target" in this
+  guard's condition/wording before it fires.
 
 ## Stage 3 pre-check: rebuild feedback-loop / scroll-preservation audit
 Verified 2026-09-04 against `ui/comparison_panel.py` before starting the picker
@@ -566,3 +918,65 @@ screenshots, and the user confirmed all seven manual checks passed on
 pre-existing renderer-inventory assertions; that debt is carried explicitly
 into 4c's scenario-test maintenance. Committed and prompt archived; 4c is the
 next bounded stage, not implemented here.
+
+### Stage 4c — `<commit-hash-below>` — Enter-manually tab wired
+
+Replaced the "Enter manually" placeholder with a real, shared entry flow.
+Extracted the legacy `ReferenceAddDialog`'s ~1500-line body into a new
+`ui/reference_entry_editor.py::ReferenceEntryEditor`; `ReferenceAddDialog`
+is now a thin modal wrapper delegating to an embedded instance via
+`__getattr__`, so no parser/validation/normalized-payload logic is
+duplicated. The picker's manual tab embeds the same editor without modal
+chrome, sharing the dialog's `ReferencePreviewPane` and Add-to-plot/Cancel
+footer. Both entry points now submit through one extracted routine,
+`MainWindow._submit_reference_editor_result`.
+
+Resolved the persistence-contract blocker the prompt required a fix for
+before implementation could proceed: `ReferenceEntryEditor` now carries a
+dedicated `observation_taxon_id` (the observation's own, fixed) alongside
+`sporely_taxon_id` (the currently selected comparison target's, which may
+legitimately differ). `_persist_normalized_reference_from_dialog`'s drift
+guard reads the former; the treatment-creation branch still reads the
+latter. Callers predating the picker's target selector never set the new
+field, so their existing behavior is unchanged. `set_comparison_target`
+resets publication/treatment identity and any built result on every target
+change while preserving already-entered measurement values.
+
+Verified by a fresh independent review (own session, after the user's
+manual testing): reuse architecture, submission-path sharing, the
+drift/failure gate (`_add_manual_callback` → `accept()` only on success;
+`Cancel` never writes), and the taxon-identity separation were each
+checked against the cited symbols/line ranges, not accepted from the
+report alone. Required test/translation/screenshot commands rerun and
+passed (58 + 64 + 12 tests; `py_compile`; `git diff --check`; zero
+unfinished translations in all three languages); manual-tab screenshots
+inspected directly. User confirmed all seven manual checks, including a
+deliberate different-species comparison (added a *Mycena metata* reference
+to an observation identified as *Mycena leptocephala*; the reference
+persisted independently under its own name and the observation's
+identification was untouched).
+
+Deferred (see "Known issues"): the Summary-table "Median / Mean" header
+clips in Norwegian (shared `ReferencePreviewPane` infrastructure, not
+introduced here); and the observation-taxon-mismatch confirm dialog's
+wording/guard assumes an accidental edit or synonym, which is misleading
+when the mismatch is a deliberate cross-species comparison from the new
+tab — data behavior is correct, only the dialog's condition/wording needs
+a bounded follow-up.
+
+### Stage 5 — not yet scoped for an implementer prompt
+
+Approved plan stage 5 is "verdict computation (pure, unit-tested) + badges
++ preview banner." This plan documents the existing `reference_series`
+schema and a source-kind → badge mapping (see "reference_series entry
+schema" above), but no concrete verdict algorithm, badge set, or preview-
+banner design exists anywhere in this document or its mockups. Writing a
+bounded, independently-verifiable stage-5 implementer prompt now would mean
+inventing that design unilaterally in the review session, which this
+skill's review protocol does not authorize. Per this repository's agent
+routing rules, this is exactly the kind of architecture-shaping ambiguity
+`sporely-planner` exists for, not a case for a directly-authored bounded
+stage prompt. **Recommendation: run `sporely-planner` (or an equivalent
+planning pass) to decide the verdict computation's inputs/outputs, badge
+taxonomy, and preview-banner placement before the next stage-5 prompt is
+written.**

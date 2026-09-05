@@ -33,6 +33,43 @@ REFERENCE_IDS = {
     "reference.attach-taxon-filter",
     "reference.nb-no",
     "reference.dark",
+    "reference.community-preview",
+    "reference.community-preview-dark",
+    "reference.comparison-list",
+    "reference.comparison-list-dark",
+    "reference.comparison-list-overflow",
+    "reference.comparison-list-longnames",
+    "reference.add-dialog-library",
+    "reference.add-dialog-library-dark",
+    "reference.add-dialog-library-empty",
+    "reference.add-dialog-library-empty-dark",
+    "reference.add-dialog-myobs",
+    "reference.add-dialog-myobs-dark",
+    "reference.add-dialog-community",
+    "reference.add-dialog-community-dark",
+    "reference.add-dialog-community-points",
+    "reference.add-dialog-community-empty",
+    "reference.comparison-list-suppressed",
+    "reference.comparison-list-colors",
+    "reference.add-dialog-default-size",
+    "reference.add-dialog-taxon-selector",
+    "reference.fix2-suppressed-light",
+    "reference.fix2-suppressed-dark",
+    "reference.fix2-colors-light",
+    "reference.fix2-colors-dark",
+    "reference.fix2-natural-light",
+    "reference.fix2-natural-dark",
+    "reference.fix2-popup-light",
+    "reference.fix2-popup-dark",
+    "reference.fix2-hint-nb-no",
+    "reference.fix2-selector-nb-no",
+    "reference.add-dialog-manual-range",
+    "reference.add-dialog-manual-range-dark",
+    "reference.add-dialog-manual-points",
+    "reference.add-dialog-manual-points-dark",
+    "reference.add-dialog-manual-invalid",
+    "reference.add-dialog-manual-invalid-dark",
+    "reference.add-dialog-manual-nb-no",
 }
 CONFLICT_IDS = {
     "conflict.local-changes",
@@ -51,6 +88,8 @@ OTHER_UI_IDS = {
     "measure.metadata-tags",
     "observations.image-metadata-tags",
     "raw-processing.methods",
+    "portable-import.all-selected",
+    "portable-import.subset",
 }
 ALL_IDS = REFERENCE_IDS | CONFLICT_IDS | OTHER_UI_IDS
 
@@ -74,7 +113,8 @@ def test_registry_has_unique_semantic_ids_and_expected_groups() -> None:
     ids = [scenario.id for scenario in registry.all()]
     assert len(ids) == len(set(ids))
     assert set(registry.groups()) == {
-        "conflict", "measure", "observations", "raw-processing", "reference-library"
+        "conflict", "measure", "observations", "portable-import",
+        "raw-processing", "reference-library",
     }
     assert {scenario.id for scenario in registry.all()} == ALL_IDS
 
