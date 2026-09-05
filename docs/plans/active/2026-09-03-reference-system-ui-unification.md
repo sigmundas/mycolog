@@ -12,10 +12,22 @@ its approved corrective scope. User confirmed all seven manual checks passed.
 
 ## Current stage / handoff — 2026-09-05
 
+**4b-fix2 landed: `3d81ace`.** Independent review confirmed the corrective
+scope and the user confirmed all seven manual checks passed. The completed
+prompt is archived at
+`../.sparring/prompts/sporely-py/completed/stage-4b-fix2.md` from the repo root.
+Next pending prompt: `../.sparring/prompts/sporely-py/stage-4c.md`.
+Approved plan stage 4 supports continuing to Enter manually by reusing the
+existing editor/host submission behavior. The new prompt preserves persistence
+and existing callback paths, stops on a necessary contract change, and is
+human-gated. No 4c implementation occurred in this acceptance session.
+Only the unrelated pre-existing AGENTS.md change is left outside the commits.
+
+
 ### 4b-fix2 correction — independently reviewed and manually accepted
 
-Selected prompt (archive after verified commit):
-`/Users/sigmundas/Documents/Code/sporely/.sparring/prompts/sporely-py/stage-4b-fix2.md`.
+Completed prompt:
+`/Users/sigmundas/Documents/Code/sporely/.sparring/prompts/sporely-py/completed/stage-4b-fix2.md`.
 Implementation reviewed against base `14525ff91f6b7ada1f899c03852f54eb065b1fe1`.
 All seven manual checks passed per the user in this acceptance session.
 The user authorized committing this verified correction and archiving its prompt.
@@ -542,3 +554,15 @@ all five manual tests confirmed passing by the user.
 - `set_rows`' pin-first sort is now redundant with the caller's
   `rows.insert(0, current_row)`, since no reference row can carry
   `is_observation=True`. Two mechanisms for one job.
+
+### Stage 4b-fix2 — `3d81ace` — target-state correction and acceptance evidence
+
+Corrected obsolete Community responses, Return parsing of selected taxon labels,
+and inconsistent own-target initialization; completed scoped translations and
+natural-size/open-popup renderer coverage. Independent review confirmed the
+required 62 tests, the two new capture tests, syntax, translations and 12 scoped
+screenshots, and the user confirmed all seven manual checks passed on
+2026-09-05. The expanded test run was 71 passed/3 failed solely on the documented
+pre-existing renderer-inventory assertions; that debt is carried explicitly
+into 4c's scenario-test maintenance. Committed and prompt archived; 4c is the
+next bounded stage, not implemented here.
