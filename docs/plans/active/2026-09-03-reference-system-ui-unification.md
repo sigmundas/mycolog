@@ -1273,5 +1273,5 @@ Validation:
   Screenshot is layout evidence only; the no-tooltip assertion is covered by
   the unit test above, not the image.
 
-Self-verifiable stage — committed as its own commit (hash recorded after
-commit below). Requesting fresh independent acceptance before Stage 6.
+Self-verifiable stage — committed as `33b62e0`. Requesting fresh independent
+acceptance before Stage 6.
