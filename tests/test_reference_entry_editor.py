@@ -228,6 +228,28 @@ def test_summary_cell_derived_from_typical_range_marks_distinctly():
     assert width_min_item.toolTip() == ""
 
 
+def test_reported_species_mean_is_not_marked_derived():
+    """Stage 5 follow-up: a directly entered "Species mean" (Parmasto)
+    value is a reported figure, not a derivation from the typical range --
+    ``_mean``'s fallback to ``_parmasto_value`` must never set the derived
+    flag, even though the min/max-table mean cell (col 2) is empty and no
+    central-table value was entered there."""
+    from ui.reference_preview_pane import ReferencePreviewPane
+
+    _app()
+    pane = ReferencePreviewPane(None)
+    editor = _make_editor(preview_pane=pane)
+    # Extreme bounds only; no typical range, no min/max-table mean (col 2).
+    editor.minmax_table.setItem(0, 0, QTableWidgetItem("8.00"))
+    editor.minmax_table.setItem(0, 4, QTableWidgetItem("11.00"))
+    editor.parmasto_inputs["parmasto_length_mean"].setText("9.50")
+    editor._refresh_preview()
+
+    length_mean_item = pane.summary_table.item(0, 2)
+    assert length_mean_item.text() == "9.50"
+    assert length_mean_item.toolTip() == ""
+
+
 def test_sync_preview_repopulates_after_tab_revisit():
     from ui.reference_preview_pane import ReferencePreviewPane
 

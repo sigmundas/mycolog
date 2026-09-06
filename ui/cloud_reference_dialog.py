@@ -423,7 +423,10 @@ def community_detail_preview_fields(detail: dict[str, Any], tr: Callable[[str], 
         provenance_lines.append(tr("Location and private observation content are intentionally excluded from this review flow."))
     provenance_text = "\n".join(provenance_lines)
 
-    method_recorded = bool(qc_lines)
+    method_recorded = any(
+        method_mapping[key] != "—"
+        for key in ("mount", "stain", "sample_type", "contrast", "objective")
+    )
     not_reported = tr("not reported")
     provenance_summary = tr(
         "Reported by: {contributor} ({date}) · sample size: {size} · method recorded: {method}"

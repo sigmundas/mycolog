@@ -751,11 +751,14 @@ class ReferenceEntryEditor(QWidget):
             return typical, typical is not None
 
         def _mean(row: int, parmasto_key: str | None) -> tuple[float | None, bool]:
+            # The Parmasto species-mean fields are a directly entered value,
+            # not a derivation from the typical range, so falling back to
+            # them must never set the derived flag.
             value = self._table_value(row, 2)
             if value is not None or parmasto_key is None:
                 return value, False
             derived_value = self._parmasto_value(parmasto_key)
-            return derived_value, derived_value is not None
+            return derived_value, False
 
         rows: list[tuple[str, str, str, str]] = []
         derived_cells: list[tuple[bool, bool, bool]] = []

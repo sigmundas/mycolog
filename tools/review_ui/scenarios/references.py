@@ -948,6 +948,29 @@ def _add_dialog_manual_range(context: ReviewContext):
     return dialog
 
 
+def _add_dialog_manual_species_mean(context: ReviewContext):
+    """Stage 5 follow-up: exercises ``ReferenceEntryEditor._refresh_preview``
+    on the real embedded editor with only extreme bounds entered plus a
+    directly reported Parmasto species mean (no min/max-table mean, no
+    typical range) -- the mean must render with no derived marker, while a
+    genuine typical-range fallback (Q row) still shows one, so both states
+    are visible side by side from real widget state, not a hand-set
+    fixture."""
+    dialog, fixture = _add_dialog_manual(context)
+    _select_work(dialog.manual_editor, fixture["work"].id)
+    editor = dialog.manual_editor
+    editor.minmax_table.setItem(0, 0, QTableWidgetItem("8.00"))
+    editor.minmax_table.setItem(0, 4, QTableWidgetItem("11.00"))
+    editor.parmasto_inputs["parmasto_length_mean"].setText("9.50")
+    editor.minmax_table.setItem(1, 0, QTableWidgetItem("6.00"))
+    editor.minmax_table.setItem(1, 4, QTableWidgetItem("8.00"))
+    editor.minmax_table.setItem(1, 2, QTableWidgetItem("7.10"))
+    editor.minmax_table.setItem(2, 1, QTableWidgetItem("1.20"))
+    editor.minmax_table.setItem(2, 3, QTableWidgetItem("1.40"))
+    editor._refresh_preview()
+    return dialog
+
+
 def _add_dialog_manual_points(context: ReviewContext):
     dialog, _fixture_data = _add_dialog_manual(context)
     _populate_raw_points(dialog.manual_editor)
@@ -1284,6 +1307,15 @@ def register_reference_scenarios(registry: ScenarioRegistry) -> None:
                 natural_size=True,
                 theme=theme,
             ))
+    registry.register(ReviewScenario(
+        id="reference.add-dialog-manual-species-mean",
+        group="reference-library",
+        title="Add-reference picker — Enter manually, reported species mean",
+        description="A directly reported Parmasto species mean renders with no derived marker while a genuine typical-range fallback (Q row) still shows one, using the real editor's _refresh_preview.",
+        viewport=(1400, 760),
+        build=_add_dialog_manual_species_mean,
+        natural_size=True,
+    ))
     registry.register(ReviewScenario(
         id="reference.add-dialog-manual-nb-no",
         group="reference-library",

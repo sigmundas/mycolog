@@ -1198,3 +1198,80 @@ Validation:
 
 No schema/persistence change; no match/verdict/threshold logic introduced.
 Self-verifiable stage — committed as its own commit.
+
+### Stage 5 independent review — 2026-09-06
+
+Partly confirmed against `80dc1b858cd8c42856ebc686466b41350d7a328a`.
+The verdict scaffold removal, published-name preference, existing snapshot
+metadata plumbing, and preview presentation changes are present in the diff.
+Acceptance is withheld pending two provenance-description fixes:
+
+- `ui/cloud_reference_dialog.py:426` uses `bool(qc_lines)` for method presence.
+  Direct calls reproduced geometry-only QC saying “method recorded: yes”,
+  and an actual `mount_medium="KOH"` without QC saying “not reported”.
+- `ui/reference_entry_editor.py:757` marks an entered species mean as derived;
+  `_parmasto_value` at 1008 only parses the entered float. The shared tooltip
+  incorrectly says this was derived from a typical range.
+
+Focused reviewer verification: `QT_QPA_PLATFORM=offscreen ./.venv/bin/pytest
+tests/test_reference_entry_editor.py tests/test_community_results_pane_requests.py
+-q` — 20 passed. These existing tests do not cover the two defects. Static
+screenshot claims were not independently revalidated in this review; no full
+acceptance is implied. No implementation was changed by the reviewer.
+Next scope is `.sparring/prompts/sporely-py/stage-5-fix.md`, pinned to the
+reviewed commit; Stage 6 remains deferred. Standard implementation with focused
+tests is sufficient; no authoritative security boundary is touched.
+
+### Stage 5 follow-up — implemented, self-verified
+
+Fixed both reviewed defects; no schema/persistence/matching/statistical
+change and no Stage 6 control removal.
+
+- `ui/cloud_reference_dialog.py::community_detail_preview_fields` (~L426):
+  `method_recorded` no longer reads `bool(qc_lines)` (which counted
+  `has_point_geometry`). It now checks whether any of the actual displayed
+  method fields (`method_mapping["mount"|"stain"|"sample_type"|"contrast"|
+  "objective"]`) is populated (`!= "—"`). Geometry-only QC now reads "not
+  reported"; a reported `mount_medium` with no QC flags now reads "yes". The
+  QC signals line/display itself (`qc_lines`, `note`) is untouched.
+- `ui/reference_entry_editor.py::_refresh_preview::_mean` (~L753–758): the
+  fallback to `_parmasto_value` (a directly entered "Species mean" field, not
+  a typical-range derivation) now always returns `derived=False`. The numeric
+  fallback value itself is unchanged; only the false derived marker/tooltip
+  is removed. The extreme→typical `_bound` fallback (genuinely derived) is
+  untouched.
+
+Reuse: existing `method_mapping`/`_join_list` computation and `_parmasto_value`
+parsing — no new helpers.
+
+Validation:
+- `QT_QPA_PLATFORM=offscreen ./.venv/bin/pytest
+  tests/test_reference_entry_editor.py
+  tests/test_community_results_pane_requests.py
+  tests/test_comparison_panel_model.py
+  tests/test_community_detail_preview_fields.py -q` → 36 passed. New file
+  `tests/test_community_detail_preview_fields.py` adds four cases direct on
+  `community_detail_preview_fields` (geometry-only QC, reported method with
+  no QC flags, neither, both) reproducing and closing the reviewed defect;
+  `tests/test_reference_entry_editor.py::test_reported_species_mean_is_not_marked_derived`
+  drives the real `ReferenceEntryEditor` (extreme bounds + a Parmasto species
+  mean, no min/max-table mean, no typical range) and asserts the mean cell
+  has no tooltip; the existing
+  `test_summary_cell_derived_from_typical_range_marks_distinctly` (typical-bound
+  fallback) is retained unchanged.
+- `./.venv/bin/python -m py_compile ui/reference_entry_editor.py
+  ui/cloud_reference_dialog.py ui/reference_preview_pane.py` → clean.
+- `git diff --check` → clean.
+- No new/changed `tr(...)` strings — translations unaffected.
+- Renderer: added `reference.add-dialog-manual-species-mean` scenario
+  (`tools/review_ui/scenarios/references.py`), driving the real embedded
+  `ReferenceEntryEditor` (extreme bounds + Parmasto species mean for Length;
+  fully reported Width; typical-range-only Q) through `_refresh_preview`.
+  Inspected the screenshot: Length mean "9.50" renders with no `†`/tooltip;
+  Q min/max render with `†` from the genuine typical-range fallback — both
+  states visible side by side from real widget state, not a hand-set fixture.
+  Screenshot is layout evidence only; the no-tooltip assertion is covered by
+  the unit test above, not the image.
+
+Self-verifiable stage — committed as its own commit (hash recorded after
+commit below). Requesting fresh independent acceptance before Stage 6.
