@@ -1655,5 +1655,5 @@ carry unrelated pre-existing uncommitted changes (routing-doc and a different
 plan's edits) that predate Stage 6's `expected_starting_head` and are not part
 of this stage; left uncommitted, untouched.
 
-Commit: see next stage's `expected_starting_head`. Prompt archived to
+Commit: `86ff879af804543c29dc40a91b54075e39ec707d`. Prompt archived to
 `.sparring/prompts/sporely-py/completed/stage-6.md`. Stage 6 is closed.
