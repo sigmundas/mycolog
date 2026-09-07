@@ -1657,3 +1657,12 @@ of this stage; left uncommitted, untouched.
 
 Commit: `86ff879af804543c29dc40a91b54075e39ec707d`. Prompt archived to
 `.sparring/prompts/sporely-py/completed/stage-6.md`. Stage 6 is closed.
+
+Manual-evidence clarification — 2026-09-07: the user reports checks 1–6
+PASS, including exclusion of the current synced observation from Community
+and correct Library typical-range Length/Width summaries. The test with
+another suitable same-taxon observation is **UNAVAILABLE**, because only one
+suitable Amanita muscaria observation exists. That case is not a verified
+pass. A subsequent review invocation found Stage 6 already committed as
+`86ff879` with its prompt archived and HEAD at `4597fb6`; it did not perform
+a new independent acceptance review or create a duplicate Stage 6 commit.
