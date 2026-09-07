@@ -7818,6 +7818,30 @@ class MainWindow(GeometryMixin, QMainWindow):
         self.gallery_axis_equal_checkbox.stateChanged.connect(self.on_gallery_plot_setting_changed)
         plot_layout.addRow("", self.gallery_axis_equal_checkbox)
 
+        # Reference-plot overlay shape/Min-Max controls, relocated here from
+        # the legacy Reference values form (stage 6): same widget names,
+        # signals, settings keys (reference_shape/reference_minmax) and
+        # range/mean-mode enablement as before, just built alongside the
+        # rest of Plot settings instead of a removed duplicate section.
+        # Two separate form rows (rather than one crowded row) so the
+        # longer "Reference shape:" label -- needed to disambiguate from
+        # the "Plot:" histogram-style selector above, which also has an
+        # "Ellipse" option -- and the Min/Max checkbox don't overlap at
+        # the narrow widths this panel's host column commonly renders at.
+        self.ref_shape_selector = SegmentedSelector(self, compact=True)
+        self.ref_shape_ellipse_radio = self.ref_shape_selector.add_option(self.tr("Ellipse"), "ellipse", checked=True)
+        self.ref_shape_square_radio = self.ref_shape_selector.add_option(self.tr("Square"), "square")
+        self.ref_shape_group = self.ref_shape_selector.button_group
+        reference_shape = str(self.gallery_plot_settings.get("reference_shape", "ellipse") or "ellipse").strip().lower()
+        self.ref_shape_selector.set_selected_value("square" if reference_shape == "square" else "ellipse")
+        self.ref_shape_selector.selectionChanged.connect(lambda _value: self.on_reference_overlay_setting_changed())
+        plot_layout.addRow(self.tr("Reference shape:"), self.ref_shape_selector)
+        self.ref_show_minmax_checkbox = QCheckBox(self.tr("Min/Max"))
+        self.ref_show_minmax_checkbox.setChecked(bool(self.gallery_plot_settings.get("reference_minmax", True)))
+        self.ref_show_minmax_checkbox.toggled.connect(self.on_reference_overlay_setting_changed)
+        plot_layout.addRow("", self.ref_show_minmax_checkbox)
+        self._sync_reference_overlay_controls_state()
+
         self._sync_gallery_kde_controls()
         plot_section = CollapsibleSection(self.tr("Plot settings"), plot_panel, expanded=False)
         reference_section = CollapsibleSection(self.tr("Reference values"), self._build_reference_panel(), expanded=True)
@@ -8457,6 +8481,20 @@ class MainWindow(GeometryMixin, QMainWindow):
             scheduler(obs_id)
 
     def _build_reference_panel(self):
+        """Build the Reference values section: the comparison list, Add
+        reference, and a compact library-management button.
+
+        Stage 6 removed the legacy genus/species/source form, its AI
+        suggestions combo, Cloud/Plot/Quick add/Edit buttons, the
+        ``ref_series_table`` dataset table, and the Attach-library button
+        from construction entirely (not merely from visibility); Shape and
+        Min-Max moved into Plot settings (see the plot-panel builder above).
+        Backend/state (``reference_values``, ``reference_series``,
+        ``_remove_reference_series_key``, ``_update_reference_use_from_library``,
+        ``_review_reference_successor``, normalized-attach helpers) is
+        unchanged -- only this UI entry point moved to the comparison list's
+        per-row actions.
+        """
         panel = QWidget()
         panel.setMinimumWidth(0)
         panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -8464,162 +8502,30 @@ class MainWindow(GeometryMixin, QMainWindow):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(10)
 
-        def _add_section_divider():
-            divider = QFrame(panel)
-            divider.setFrameShape(QFrame.HLine)
-            divider.setFrameShadow(QFrame.Plain)
-            divider.setStyleSheet("color: rgba(127, 140, 141, 0.35);")
-            layout.addWidget(divider)
-
-        form = QFormLayout()
-        form.setContentsMargins(0, 0, 0, 0)
-        form.setSpacing(8)
-        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-
-        self.ref_vernacular_label = QLabel(self._reference_vernacular_label())
-        self.ref_vernacular_input = QLineEdit()
-        self.ref_genus_input = QLineEdit()
-        self.ref_species_input = QLineEdit()
-        self.ref_vernacular_input.setPlaceholderText(self._reference_vernacular_placeholder())
-        self.ref_genus_input.setPlaceholderText(self.tr("e.g., Flammulina"))
-        self.ref_species_input.setPlaceholderText(self.tr("e.g., velutipes"))
-
-        self.ref_ai_suggestions_combo = QComboBox()
-        self.ref_ai_suggestions_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.ref_ai_suggestions_combo.setPlaceholderText(self.tr("No AI suggestions"))
-        self._ref_ai_suggestions_delegate = AISuggestionItemDelegate(self.ref_ai_suggestions_combo)
-        self.ref_ai_suggestions_combo.setItemDelegate(self._ref_ai_suggestions_delegate)
-        popup_view = self.ref_ai_suggestions_combo.view()
-        if popup_view is not None:
-            popup_view.setItemDelegate(self._ref_ai_suggestions_delegate)
-        self._style_dropdown_popup_readability(
-            self.ref_ai_suggestions_combo.view(),
-            self.ref_ai_suggestions_combo,
+        self.comparison_list = ComparisonListWidget()
+        self.comparison_list.setMinimumHeight(160)
+        self.comparison_list.visibility_toggled.connect(self._set_reference_series_enabled)
+        self.comparison_list.color_change_requested.connect(self._open_reference_series_color_menu)
+        self.comparison_list.remove_requested.connect(self._remove_reference_series_key)
+        self.comparison_list.edit_requested.connect(self._edit_reference_series_row)
+        self.comparison_list.library_update_requested.connect(
+            self._on_comparison_library_update_requested
         )
-        self.ref_ai_suggestions_combo.activated.connect(self._on_ref_ai_suggestion_activated)
+        self.comparison_list.library_successor_requested.connect(
+            self._on_comparison_library_successor_requested
+        )
+        layout.addWidget(self.comparison_list, 1)
 
-        self.ref_source_input = QComboBox()
-        self.ref_source_input.setEditable(True)
-        self.ref_source_input.setInsertPolicy(QComboBox.NoInsert)
-        self.ref_source_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self._style_dropdown_popup_readability(self.ref_source_input.view(), self.ref_source_input)
-        self.ref_cloud_btn = QPushButton(self.tr("Cloud..."))
-        self.ref_cloud_btn.clicked.connect(self._on_reference_panel_cloud_clicked)
-        self.ref_cloud_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.ref_cloud_btn.setFixedHeight(self.ref_source_input.sizeHint().height())
-
-        source_row = QWidget()
-        source_layout = QHBoxLayout(source_row)
-        source_layout.setContentsMargins(0, 0, 0, 0)
-        source_layout.setSpacing(8)
-        source_layout.addWidget(self.ref_source_input, 1)
-        source_layout.addWidget(self.ref_cloud_btn, 0)
-
-        form.addRow(self.tr("AI suggestions:"), self.ref_ai_suggestions_combo)
-        form.addRow(self.ref_vernacular_label, self.ref_vernacular_input)
-        form.addRow(self.tr("Genus:"), self.ref_genus_input)
-        form.addRow(self.tr("Species:"), self.ref_species_input)
-        form.addRow(self.tr("Source:"), source_row)
-        layout.addLayout(form)
-        _add_section_divider()
-
-
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
-        self.ref_plot_btn = QPushButton(self.tr("Plot"))
-        self.ref_plot_btn.clicked.connect(self._on_reference_panel_plot_clicked)
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
+        self.ref_add_reference_btn = QPushButton(self.tr("Add reference…"))
+        self.ref_add_reference_btn.clicked.connect(self._on_add_reference_clicked)
         self._register_gallery_hint_widget(
-            self.ref_plot_btn,
-            self.tr("Plot this data"),
+            self.ref_add_reference_btn,
+            self.tr("Search the reference library, community data, or your own observations for a reference to plot"),
             allow_when_disabled=True,
         )
-        self.ref_add_btn = QPushButton(self.tr("Quick add…"))
-        self.ref_add_btn.clicked.connect(self._on_reference_panel_add_clicked)
-        self._register_gallery_hint_widget(
-            self.ref_add_btn,
-            self.tr("Create and attach reference data for the active observation"),
-            allow_when_disabled=True,
-        )
-        self.ref_edit_btn = QPushButton(self.tr("Edit"))
-        self.ref_edit_btn.clicked.connect(self._on_reference_panel_edit_clicked)
-        self._register_gallery_hint_widget(
-            self.ref_edit_btn,
-            self.tr("Edit reference data"),
-            allow_when_disabled=True,
-        )
-        analysis_button_height = self.ref_plot_btn.sizeHint().height()
-        for btn in (self.ref_plot_btn, self.ref_add_btn, self.ref_edit_btn):
-            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            btn.setFixedHeight(analysis_button_height)
-        btn_row.addWidget(self.ref_plot_btn, 1)
-        btn_row.addWidget(self.ref_add_btn, 1)
-        btn_row.addWidget(self.ref_edit_btn, 1)
-        layout.addLayout(btn_row)
-        _add_section_divider()
-
-        shape_row_widget = QWidget()
-        shape_row = QHBoxLayout(shape_row_widget)
-        shape_row.setContentsMargins(0, 0, 0, 0)
-        shape_row.setSpacing(10)
-        shape_label = QLabel(self.tr("Shape:"))
-        shape_label.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
-        shape_row.addWidget(shape_label)
-        self.ref_shape_selector = SegmentedSelector(self, compact=True)
-        self.ref_shape_ellipse_radio = self.ref_shape_selector.add_option(self.tr("Ellipse"), "ellipse", checked=True)
-        self.ref_shape_square_radio = self.ref_shape_selector.add_option(self.tr("Square"), "square")
-        self.ref_shape_group = self.ref_shape_selector.button_group
-        reference_shape = str(self.gallery_plot_settings.get("reference_shape", "ellipse") or "ellipse").strip().lower()
-        self.ref_shape_selector.set_selected_value("square" if reference_shape == "square" else "ellipse")
-        self.ref_shape_selector.selectionChanged.connect(lambda _value: self.on_reference_overlay_setting_changed())
-        shape_row.addWidget(self.ref_shape_selector, 0, Qt.AlignLeft)
-        self.ref_show_minmax_checkbox = QCheckBox(self.tr("Min/Max"))
-        self.ref_show_minmax_checkbox.setChecked(bool(self.gallery_plot_settings.get("reference_minmax", True)))
-        self.ref_show_minmax_checkbox.toggled.connect(self.on_reference_overlay_setting_changed)
-        self.ref_show_minmax_checkbox.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
-        shape_row.addWidget(self.ref_show_minmax_checkbox)
-        layout.addWidget(shape_row_widget)
-        _add_section_divider()
-
-        self.ref_series_table = QTableWidget(0, 5)
-        self.ref_series_table.setObjectName("referenceSeriesTable")
-        self.ref_series_table.setFocusPolicy(Qt.NoFocus)
-        self.ref_series_table.setWordWrap(False)
-        self.ref_series_table.setTextElideMode(Qt.ElideRight)
-        self.ref_series_table.setHorizontalHeaderLabels(
-            [
-                self.tr("Plot"),
-                "",
-                self.tr("Data set"),
-                self.tr("Color"),
-                self.tr("Library"),
-            ]
-        )
-        self.ref_series_table.verticalHeader().setVisible(False)
-        self.ref_series_table.verticalHeader().setDefaultSectionSize(34)
-        self.ref_series_table.verticalHeader().setMinimumSectionSize(28)
-        self.ref_series_table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.ref_series_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.ref_series_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.ref_series_table.horizontalHeader().setStretchLastSection(False)
-        self.ref_series_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.ref_series_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.ref_series_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.ref_series_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.ref_series_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        self.ref_series_table.setShowGrid(False)
-        self.ref_series_table.setMinimumHeight(240)
-        self.ref_series_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.ref_series_table.cellClicked.connect(self._on_reference_series_row_clicked)
-        layout.addWidget(self.ref_series_table)
-
-        self.ref_attach_library_btn = QPushButton(self.tr("Attach library reference…"))
-        self.ref_attach_library_btn.clicked.connect(self._on_attach_library_reference_clicked)
-        self._register_gallery_hint_widget(
-            self.ref_attach_library_btn,
-            self.tr("Attach a normalized reference measurement set to the active observation"),
-            allow_when_disabled=True,
-        )
-        layout.addWidget(self.ref_attach_library_btn)
+        action_row.addWidget(self.ref_add_reference_btn, 1)
 
         self.ref_manage_library_btn = QPushButton(self.tr("Manage reference library…"))
         self.ref_manage_library_btn.clicked.connect(self._on_manage_reference_library_clicked)
@@ -8628,35 +8534,10 @@ class MainWindow(GeometryMixin, QMainWindow):
             self.tr("Browse and edit reference works, treatments, and measurement sets"),
             allow_when_disabled=True,
         )
-        layout.addWidget(self.ref_manage_library_btn)
+        action_row.addWidget(self.ref_manage_library_btn, 0)
+        layout.addLayout(action_row)
 
-        # Richer per-row comparison list, kept in sync with ref_series_table
-        # above via _refresh_reference_series_table(); see ui/comparison_panel.py.
-        self.comparison_list = ComparisonListWidget()
-        self.comparison_list.setMinimumHeight(160)
-        self.comparison_list.visibility_toggled.connect(self._set_reference_series_enabled)
-        self.comparison_list.color_change_requested.connect(self._open_reference_series_color_menu)
-        layout.addWidget(self.comparison_list)
-
-        # New unified picker launch point (stage 3). Additive only: the
-        # legacy Source dropdown / Quick add / Cloud / Attach library
-        # buttons above stay untouched until stage 6.
-        self.ref_add_reference_btn = QPushButton(self.tr("Add reference…"))
-        self.ref_add_reference_btn.clicked.connect(self._on_add_reference_clicked)
-        self._register_gallery_hint_widget(
-            self.ref_add_reference_btn,
-            self.tr("Search the reference library, community data, or your own observations for a reference to plot"),
-            allow_when_disabled=True,
-        )
-        layout.addWidget(self.ref_add_reference_btn)
-
-        self._init_reference_panel_completers()
-        self._populate_reference_panel_sources()
-        self._apply_reference_panel_values(self.reference_values)
         self._refresh_reference_series_table()
-        self._update_reference_add_state()
-        self._sync_reference_overlay_controls_state()
-        self._refresh_reference_ai_suggestions()
         return panel
 
     def _style_dropdown_popup_readability(self, popup, font_source=None):
@@ -9270,137 +9151,42 @@ class MainWindow(GeometryMixin, QMainWindow):
         self._save_gallery_settings()
 
     def _refresh_reference_series_table(self):
-        if not hasattr(self, "ref_series_table"):
+        """Refresh the comparison list from ``reference_series``.
+
+        Stage 6 removed the legacy ``ref_series_table`` this method used to
+        populate alongside the comparison list; the comparison list is now
+        the sole output. Per-row actions the table used to expose in its
+        "Library" column (Update from library / Review successor, gated on
+        ``data["library_update_available"]`` / ``data["library_successor_available"]``)
+        now live in each row's overflow menu (see
+        ``ComparisonRow.from_resolved_entry`` and
+        ``ui/comparison_panel.py``'s ``_open_overflow_menu``).
+        """
+        if not hasattr(self, "comparison_list"):
             return
-        self.ref_series_table.setRowCount(0)
-        self._ref_series_row_entries = []
-        row_height = max(
-            34,
-            int(self.ref_series_table.fontMetrics().height()) + 14,
-            int(self.ref_series_table.verticalHeader().defaultSectionSize()),
+        references_suppressed = not self._reference_overlays_allowed_for_category()
+        resolved_entries = self._resolved_reference_series_entries(self._is_dark_theme())
+        rows = ComparisonListWidget.rows_from_resolved_entries(
+            resolved_entries,
+            dimmed=references_suppressed,
         )
-        for entry in self._resolved_reference_series_entries(self._is_dark_theme()):
-            data = entry.get("data", {})
-            key = entry.get("key")
-            label = entry.get("label") or self._format_reference_series_label(data)
-            row = self.ref_series_table.rowCount()
-            self.ref_series_table.insertRow(row)
-
-            toggle_holder = QWidget()
-            toggle_holder.setMinimumHeight(row_height)
-            toggle_holder.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
-            toggle_layout = QHBoxLayout(toggle_holder)
-            toggle_layout.setContentsMargins(0, 0, 0, 0)
-            toggle_layout.setAlignment(Qt.AlignCenter)
-            toggle_checkbox = QCheckBox(toggle_holder)
-            toggle_checkbox.setChecked(bool(entry.get("enabled", True)))
-            toggle_checkbox.setCursor(Qt.PointingHandCursor)
-            toggle_checkbox.toggled.connect(lambda checked, k=key: self._set_reference_series_enabled(k, checked))
-            toggle_layout.addWidget(toggle_checkbox)
-            self._register_gallery_hint_widget(toggle_checkbox, self.tr("Show or hide this reference plot"))
-            self.ref_series_table.setCellWidget(row, 0, toggle_holder)
-
-            remove_btn = QToolButton()
-            remove_btn.setIcon(self.style().standardIcon(QStyle.SP_TitleBarCloseButton))
-            remove_btn.setIconSize(QSize(12, 12))
-            remove_btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
-            remove_btn.setAutoRaise(True)
-            remove_btn.setFixedSize(24, 24)
-            remove_btn.clicked.connect(lambda _checked=False, k=key: self._remove_reference_series_key(k))
-            is_normalized = bool(
-                isinstance(entry.get("data"), dict)
-                and entry["data"].get("observation_reference_use_id")
-            )
-            remove_tooltip = (
-                self.tr("Detach from observation")
-                if is_normalized
-                else self.tr("Remove this plot")
-            )
-            self._register_gallery_hint_widget(remove_btn, remove_tooltip)
-            self.ref_series_table.setCellWidget(row, 1, remove_btn)
-
-            label_item = QTableWidgetItem(label)
-            label_item.setFlags(Qt.ItemIsEnabled)
-            if isinstance(data, dict) and data.get("observation_reference_use_id"):
-                tooltip = self._format_normalized_reference_row_tooltip(data)
-                if tooltip:
-                    label_item.setToolTip(tooltip)
-            self.ref_series_table.setItem(row, 2, label_item)
-
-            color_btn = QToolButton()
-            color_btn.setFixedSize(28, 22)
-            color_btn.setAutoRaise(False)
-            self._style_reference_color_button(
-                color_btn,
-                str(entry.get("color") or "#adb5bd"),
-                auto=entry.get("preferred_color") is None,
-            )
-            color_btn.clicked.connect(
-                lambda _checked=False, k=key, btn=color_btn: self._open_reference_series_color_menu(k, btn)
-            )
-            self._register_gallery_hint_widget(color_btn, self.tr("Change the plot color"))
-            self.ref_series_table.setCellWidget(row, 3, color_btn)
-
-            library_actions: list[QToolButton] = []
-            if bool(data.get("library_update_available")):
-                update_btn = QToolButton()
-                update_btn.setText(self.tr("Update"))
-                update_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
-                update_btn.setAutoRaise(True)
-                use_id = str(data.get("observation_reference_use_id") or "")
-                observation_id = int(getattr(self, "active_observation_id", 0) or 0)
-                update_btn.clicked.connect(
-                    lambda _checked=False, uid=use_id, oid=observation_id:
-                    self._update_reference_use_from_library(uid, oid)
-                )
-                self._register_gallery_hint_widget(
-                    update_btn,
-                    self.tr("Update from library"),
-                )
-                library_actions.append(update_btn)
-            if bool(data.get("library_successor_available")):
-                successor_btn = QToolButton()
-                successor_btn.setText(self.tr("Review successor…"))
-                successor_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
-                successor_btn.setAutoRaise(True)
-                use_id = str(data.get("observation_reference_use_id") or "")
-                observation_id = int(getattr(self, "active_observation_id", 0) or 0)
-                successor_btn.clicked.connect(
-                    lambda _checked=False, uid=use_id, oid=observation_id:
-                    self._review_reference_successor(uid, oid)
-                )
-                self._register_gallery_hint_widget(
-                    successor_btn,
-                    self.tr("Review and adopt the latest explicit successor"),
-                )
-                library_actions.append(successor_btn)
-            if len(library_actions) == 1:
-                self.ref_series_table.setCellWidget(row, 4, library_actions[0])
-            elif library_actions:
-                action_holder = QWidget()
-                action_layout = QHBoxLayout(action_holder)
-                action_layout.setContentsMargins(0, 0, 0, 0)
-                action_layout.setSpacing(4)
-                for action_button in library_actions:
-                    action_layout.addWidget(action_button)
-                self.ref_series_table.setCellWidget(row, 4, action_holder)
-
-            self.ref_series_table.setRowHeight(row, row_height)
-            self._ref_series_row_entries.append(entry)
-        self.ref_series_table.resizeColumnToContents(0)
-        self.ref_series_table.resizeColumnToContents(1)
-        self.ref_series_table.resizeColumnToContents(3)
-        self.ref_series_table.resizeColumnToContents(4)
-        if hasattr(self, "comparison_list"):
-            references_suppressed = not self._reference_overlays_allowed_for_category()
-            rows = ComparisonListWidget.rows_from_resolved_entries(
-                self._resolved_reference_series_entries(self._is_dark_theme()),
-                dimmed=references_suppressed,
-            )
-            current_row = self._current_observation_comparison_row()
-            if current_row is not None:
-                rows.insert(0, current_row)
-            self.comparison_list.set_rows(rows, references_suppressed=references_suppressed)
+        # Richer per-row tooltip (raw expression, role, revision,
+        # malformed/library-snapshot-state) for normalized attachments --
+        # needs ``self.tr``'s "MainWindow" translation context, so it is
+        # assigned here rather than inside ComparisonRow.from_resolved_entry.
+        tooltip_by_key = {
+            entry.get("key"): self._format_normalized_reference_row_tooltip(entry.get("data", {}))
+            for entry in resolved_entries
+            if isinstance(entry.get("data"), dict) and entry["data"].get("observation_reference_use_id")
+        }
+        for row in rows:
+            tooltip = tooltip_by_key.get(row.dataset_id)
+            if tooltip:
+                row.label_tooltip = tooltip
+        current_row = self._current_observation_comparison_row()
+        if current_row is not None:
+            rows.insert(0, current_row)
+        self.comparison_list.set_rows(rows, references_suppressed=references_suppressed)
 
     def _is_scatter_plot_measurement(self, measurement: dict) -> bool:
         """Whether a measurement is one the gallery scatter plot draws a point for."""
@@ -9445,53 +9231,6 @@ class MainWindow(GeometryMixin, QMainWindow):
             date=date_value,
             n=n,
         )
-
-    def _on_reference_series_row_clicked(self, row: int, col: int):
-        if col in (0, 1, 3, 4):
-            return
-        entries = getattr(self, "_ref_series_row_entries", []) or []
-        if row < 0 or row >= len(entries):
-            return
-        entry = entries[row]
-        data = entry.get("data", entry) if isinstance(entry, dict) else entry
-        if not isinstance(data, dict):
-            return
-        # Normalized library-attachment rows must not populate/load into the
-        # legacy reference_values editor path. Selecting them is a no-op.
-        if data.get("observation_reference_use_id"):
-            return
-        genus = (data.get("genus") or "").strip()
-        species = (data.get("species") or "").strip()
-        if not genus or not species:
-            return
-        source = (
-            (data.get("source") or "")
-            or (data.get("points_label") or "")
-            or (data.get("source_label") or "")
-        ).strip()
-        if hasattr(self, "ref_vernacular_input"):
-            self.ref_vernacular_input.blockSignals(True)
-            self.ref_vernacular_input.setText("")
-            self.ref_vernacular_input.blockSignals(False)
-        self.ref_genus_input.blockSignals(True)
-        self.ref_species_input.blockSignals(True)
-        self.ref_genus_input.setText(genus)
-        self.ref_species_input.setText(species)
-        self.ref_species_input.blockSignals(False)
-        self.ref_genus_input.blockSignals(False)
-        self._populate_reference_panel_sources(auto_select_single=False)
-        if source:
-            idx = self.ref_source_input.findText(source)
-            if idx >= 0:
-                self.ref_source_input.setCurrentIndex(idx)
-            else:
-                self.ref_source_input.setCurrentText(source)
-        else:
-            self.ref_source_input.setCurrentIndex(0)
-        self._maybe_set_ref_vernacular_from_taxon()
-        self.reference_values = dict(data)
-        self._apply_reference_panel_values(self.reference_values)
-        self._update_reference_add_state()
 
     def _set_reference_series(self, series: list[dict]):
         self.reference_series = []
@@ -9567,6 +9306,112 @@ class MainWindow(GeometryMixin, QMainWindow):
         self.update_graph_plots_only()
         self._save_gallery_settings()
 
+    def _find_reference_series_entry(self, key) -> dict | None:
+        """Look up one ``reference_series`` entry by its row key."""
+        for entry in self.reference_series or []:
+            if isinstance(entry, dict) and entry.get("key") == key:
+                return entry
+        return None
+
+    def _reference_series_row_is_editable(self, data: dict) -> bool:
+        """Whether a row is a "supported legacy row" the comparison list's
+        Edit action can open -- a ReferenceDB-backed entry (``source_kind
+        == "reference"``) with no normalized library attachment. Normalized
+        attachments are edited through reference-library management
+        instead (``_on_manage_reference_library_clicked``); this mirrors
+        ``ComparisonRow.from_resolved_entry``'s ``can_edit`` computation.
+        """
+        if not isinstance(data, dict):
+            return False
+        if data.get("observation_reference_use_id"):
+            return False
+        kind = data.get("source_kind") or ("points" if data.get("points") else "reference")
+        return kind == "reference"
+
+    def _edit_reference_series_row(self, key) -> None:
+        """Row-driven adapter for the comparison list's "Edit measurement
+        set…" action, replacing the legacy genus/species/source form's Edit
+        button (``_on_reference_panel_edit_clicked``, kept for its own
+        direct test coverage but no longer reachable from the UI). Reads
+        the row's own data instead of a loaded form, and only opens for
+        rows ``_reference_series_row_is_editable`` allows.
+        """
+        entry = self._find_reference_series_entry(key)
+        if entry is None:
+            return
+        data = entry.get("data") if isinstance(entry.get("data"), dict) else {}
+        if not self._reference_series_row_is_editable(data):
+            return
+        genus = self._clean_ref_genus_text(data.get("genus") or "")
+        species = self._clean_ref_species_text(data.get("species") or "")
+        if not genus or not species:
+            return
+        vernacular = str(data.get("vernacular") or "").strip()
+        observation_id = getattr(self, "active_observation_id", None)
+        sporely_taxon_id = self._active_sporely_taxon_id()
+        dialog = ReferenceAddDialog(
+            self,
+            genus,
+            species,
+            vernacular=vernacular,
+            data=data,
+            title=self.tr("Edit selected reference data"),
+            allow_delete=True,
+            observation_id=int(observation_id) if observation_id else None,
+            sporely_taxon_id=sporely_taxon_id,
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return
+        if dialog.delete_requested():
+            ReferenceDB.delete_reference(
+                genus,
+                species,
+                data.get("source"),
+                data.get("mount_medium"),
+                data.get("stain"),
+            )
+            self._refresh_reference_species_availability()
+            self._remove_reference_series_key(key)
+            return
+        updated = dialog.result_data()
+        if not isinstance(updated, dict) or not updated:
+            return
+        if updated.get("source_kind") == "reference":
+            ReferenceDB.set_reference(updated)
+            self._refresh_reference_species_availability()
+        if updated.get("source_kind") == "existing_measurement_set":
+            try:
+                self._persist_normalized_reference_from_dialog(
+                    dialog, updated, legacy_id=None
+                )
+            except Exception as exc:
+                QMessageBox.warning(
+                    self,
+                    self.tr("Reference library"),
+                    self.tr("Reference stored locally, but library sync failed: {error}").format(
+                        error=str(exc)
+                    ),
+                )
+            return
+        self._sync_reference_values_from_series_data(key, updated)
+        self._add_reference_series_entry(updated)
+
+    def _on_comparison_library_update_requested(self, use_id) -> None:
+        """Comparison-list adapter for the legacy table's per-row "Update"
+        action (``ComparisonRow.library_update_available``)."""
+        if not use_id:
+            return
+        observation_id = int(getattr(self, "active_observation_id", 0) or 0)
+        self._update_reference_use_from_library(str(use_id), observation_id)
+
+    def _on_comparison_library_successor_requested(self, use_id) -> None:
+        """Comparison-list adapter for the legacy table's per-row "Review
+        successor…" action (``ComparisonRow.library_successor_available``)."""
+        if not use_id:
+            return
+        observation_id = int(getattr(self, "active_observation_id", 0) or 0)
+        self._review_reference_successor(str(use_id), observation_id)
+
     def _current_attached_measurement_set_ids(self) -> set[str]:
         """Return measurement-set UUIDs already attached to the active observation."""
         attached: set[str] = set()
@@ -9594,8 +9439,7 @@ class MainWindow(GeometryMixin, QMainWindow):
             remaining.append(entry)
         if removed_any:
             self.reference_series = remaining
-            if hasattr(self, "ref_series_table"):
-                self._refresh_reference_series_table()
+            self._refresh_reference_series_table()
 
     def _apply_normalized_reference_override(
         self, entry: dict, overrides_map: dict | None = None
@@ -9968,8 +9812,7 @@ class MainWindow(GeometryMixin, QMainWindow):
             if normalized:
                 kept.append(normalized)
         self.reference_series = kept
-        if hasattr(self, "ref_series_table"):
-            self._refresh_reference_series_table()
+        self._refresh_reference_series_table()
         if malformed and hasattr(self, "measure_status_label"):
             self.measure_status_label.setText(
                 self.tr("Skipped {count} malformed reference attachment(s).").format(count=malformed)
@@ -10090,6 +9933,7 @@ class MainWindow(GeometryMixin, QMainWindow):
             genus=genus,
             species=species,
             exclude_observation_id=captured_observation_id,
+            exclude_observation_cloud_id=obs_for_own_target.get("cloud_id"),
             exclude_measurement_set_ids=excluded,
             attach_callback=_add_callback,
             cloud_attach_callback=_add_cloud_callback,
@@ -10914,6 +10758,8 @@ class MainWindow(GeometryMixin, QMainWindow):
             self._ref_taxon_fill_from_vernacular = False
 
     def _maybe_set_ref_vernacular_from_taxon(self):
+        if not hasattr(self, "ref_vernacular_input"):
+            return
         lookup = self._ensure_reference_taxon_lookup()
         if not lookup or not lookup.vernacular_db:
             self._set_ref_vernacular_placeholder_from_suggestions([])

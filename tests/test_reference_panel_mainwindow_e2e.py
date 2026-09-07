@@ -367,3 +367,56 @@ def test_mainwindow_add_parmasto_only_writes_legacy_but_no_normalized_set(
     # No MeasurementSet, no ObservationReferenceUse.
     listed = ObservationReferenceUseRepository.list_for_observation(obs_id)
     assert listed == [], listed
+
+
+def test_load_reference_values_does_not_touch_removed_legacy_widgets(
+    monkeypatch, qapp, libs
+):
+    """Stage 6 removed the legacy genus/species/source/vernacular widgets
+    from ``_build_reference_panel``, so ``ref_genus_input`` and friends no
+    longer exist on a real ``MainWindow``. ``load_reference_values`` runs on
+    every observation switch (``open_observation``) and must not assume
+    those widgets are present, including for an observation whose own
+    ``genus``/``species`` are set (the common case, which reaches the
+    vernacular-autofill branch that previously crashed unconditionally on
+    ``self.ref_vernacular_input``).
+    """
+    db_path, _ = libs
+    obs_id = _make_observation(db_path, sporely_taxon_id=7)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE observations SET genus = ?, species = ? WHERE id = ?",
+            ("Agaricus", "bisporus", obs_id),
+        )
+        conn.commit()
+
+    monkeypatch.setattr(main_window, "SpeciesDataAvailability", _EmptySpeciesAvailability)
+    monkeypatch.setattr(
+        main_window.SettingsDB, "get_setting", lambda key, default=None: default
+    )
+    monkeypatch.setattr(main_window.MainWindow, "init_ui", lambda self: None)
+    monkeypatch.setattr(main_window.MainWindow, "_populate_scale_combo", lambda self: None)
+    monkeypatch.setattr(main_window.MainWindow, "load_default_objective", lambda self: None)
+    monkeypatch.setattr(main_window.MainWindow, "_restore_geometry", lambda self: None)
+    window = main_window.MainWindow()
+    window.species_availability = _EmptySpeciesAvailability()
+    assert not hasattr(window, "ref_genus_input")
+    assert not hasattr(window, "ref_species_input")
+    assert not hasattr(window, "ref_vernacular_input")
+    assert not hasattr(window, "ref_source_input")
+
+    class _TruthyLookup:
+        vernacular_db = object()
+
+        def best_common_name_for_taxon(self, genus, species):
+            return None
+
+        def suggest_common_names(self, **kwargs):
+            return []
+
+    window._ensure_reference_taxon_lookup = lambda: _TruthyLookup()
+
+    window.active_observation_id = obs_id
+    window.load_reference_values()
+
+    assert window.reference_values == {} or isinstance(window.reference_values, dict)

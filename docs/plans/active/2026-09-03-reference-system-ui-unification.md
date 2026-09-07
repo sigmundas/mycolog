@@ -758,9 +758,12 @@ long publication title elision, æøå), light + dark.
    Split in execution: **4a** My observations + row-anatomy fix (`a36ec63`),
    **4a-fix** three live-app defects (`e8a67f1`), **4b** Community tab,
    **4c** Enter manually tab.
-5. Verdict computation (pure, unit-tested) + badges + preview banner.
-6. Remove dead entry points (Source dropdown, Plot, Edit, Attach library reference), taxon
-   chips, color auto-assignment, polish. Renderer check on full Analysis tab.
+5. Reference context/provenance and reported-versus-derived presentation
+   (re-scoped; no verdict computation). Follow-up defects fixed in `33b62e0`.
+6. Remove the duplicate legacy Analysis reference form/table and entry points;
+   preserve applicable row actions in the comparison list, compact library
+   management, and move Shape/Min–Max into Plot settings. Human-gated.
+   New taxon-chip design, palette redesign and unrelated polish are deferred.
 7. Report persistence findings (above) + deferred items.
 
 ## Known issues (tracked, not yet fixed)
@@ -1275,3 +1278,382 @@ Validation:
 
 Self-verifiable stage — committed as `33b62e0`. Requesting fresh independent
 acceptance before Stage 6.
+
+### Stage 5 follow-up independent acceptance — 2026-09-06
+
+Confirmed the bounded fixes in `33b62e0`, reviewed at
+`f1a461afd05fd9bf76cdbf6ccb465fb3162adcc3`. Community method presence now
+uses the displayed mount/stain/preparation/contrast/objective values rather
+than QC geometry. The entered species-mean fallback retains its value without
+the false derived marker; typical-bound fallback markers remain intact.
+
+Reviewer reran `QT_QPA_PLATFORM=offscreen ./.venv/bin/pytest tests/test_reference_entry_editor.py tests/test_community_results_pane_requests.py tests/test_comparison_panel_model.py tests/test_community_detail_preview_fields.py -q`:
+36 passed. Inspected the manifest-listed image at
+`/private/tmp/sporely-shot/reference.add-dialog-manual-species-mean.png`:
+Length mean 9.50 has no dagger; Q bounds 1.20/1.40 have daggers, with the
+relevant values and headers legible. Tooltip correctness is established by
+the regression test, not the screenshot. No new translation strings or
+schema/persistence/security-boundary changes in this follow-up.
+
+The two defects from the previous review are closed. This acceptance covers
+the bounded follow-up, not an expanded re-review of every Stage 5 surface.
+No additional reviewer subagent or security reviewer is needed. Stage 6
+implementation remains a separate prompt/task; no implementation changes
+were made in this review.
+
+### Stage 6 ready for implementation — 2026-09-06
+
+User requested deletion of the old reference section shown in screenshots.
+Prompt: `.sparring/prompts/sporely-py/stage-6.md`, pinned to
+`f1a461afd05fd9bf76cdbf6ccb465fb3162adcc3`. Scope removes the duplicate
+form/table while retaining the unified picker/comparison list, moving overlay
+controls to Plot settings, and preserving row removal/editing/library actions.
+The old table currently owns update/successor actions and gates comparison
+refresh; these dependencies must be migrated before deleting it. Existing
+attachment, settings and taxon-identity semantics remain authoritative.
+
+Human-gated: implementer runs focused tests and full Analysis renderer
+evidence, then leaves changes uncommitted for the prompt's numbered manual
+checks. No Stage 6 implementation was performed while writing this prompt.
+
+## Current stage / handoff — 2026-09-06 (stage 6 implementation)
+
+**Human-gated, uncommitted.** All agent-verifiable checks pass; the seven
+manual checks in `.sparring/prompts/sporely-py/stage-6.md` are pending the
+user, so nothing is committed and the prompt stays unarchived.
+
+This pass began with a background `sporely-implementer` agent already having
+made substantial progress (construction removal, comparison-list action
+wiring, renderer scenarios, translations); the user asked that it not run in
+the background, so it was stopped mid-flight and this top-level session
+inspected the partial diff, kept everything valid, and finished the
+remaining work in place (per AGENTS.md's "investigate before discarding"
+rule) rather than restarting.
+
+**Files touched:**
+- `ui/main_window.py` — `_build_reference_panel` (~L8486) rebuilt: removed
+  the legacy genus/species/vernacular/source form, AI-suggestions combo,
+  Quick add/Edit/Cloud/Attach-library buttons, and the `ref_series_table`
+  QTableWidget from construction entirely (not just visibility); now builds
+  only `ComparisonListWidget` + an action row (`Add reference…` +
+  `Manage reference library…`). The plot-panel builder (~L7818) gained a
+  relocated `ref_shape_selector`/`ref_show_minmax_checkbox` (same widget
+  names, signals, `reference_shape`/`reference_minmax` settings keys, and
+  `_sync_reference_overlay_controls_state` range/mean enablement as before),
+  as two separate `QFormLayout` rows rather than one crowded `QHBoxLayout`
+  row (see fix below). `_refresh_reference_series_table` (~L9159) now
+  populates only the comparison list, carrying the old table's per-row
+  tooltip (`_format_normalized_reference_row_tooltip`) onto
+  `ComparisonRow.label_tooltip`. New adapters
+  `_find_reference_series_entry`, `_reference_series_row_is_editable`,
+  `_edit_reference_series_row`, `_on_comparison_library_update_requested`,
+  `_on_comparison_library_successor_requested` replace the deleted table's
+  per-row Edit/Update-from-library/Review-successor actions with row-key-
+  driven equivalents reusing `ReferenceAddDialog`, `_update_reference_use_
+  from_library`, and `_review_reference_successor` unchanged.
+  `_on_reference_series_row_clicked` (the removed table's cell-click
+  handler) was deleted — its only caller was the table's own `cellClicked`
+  signal, gone with the widget. Fixed one bug found in review: an
+  unconditional `self._maybe_set_ref_vernacular_from_taxon()` call inside
+  `load_reference_values` (called on every observation switch) reached
+  `self.ref_vernacular_input.text()` with no `hasattr` guard, unlike its
+  sibling widget accesses — this crashed the app on opening any real
+  observation with a genus/species set (not caught by the renderer, whose
+  scenarios all use `active_observation_id = None`, short-circuiting before
+  that call). Fixed with a one-line `hasattr` guard at the top of
+  `_maybe_set_ref_vernacular_from_taxon` (~L10759).
+- `ui/comparison_panel.py` — `ComparisonRow` gained `can_edit`,
+  `library_update_available`, `library_successor_available`,
+  `observation_reference_use_id`, `label_tooltip` fields computed in
+  `from_resolved_entry`; `_ComparisonRowWidget._open_overflow_menu` wires
+  Edit/Update-from-library/Review-successor/Remove using these fields
+  instead of the stage-2/3 disabled TODO placeholders, and `remove_requested`
+  is finally connected end-to-end (`ComparisonListWidget` forwards all three
+  new signals).
+- `tools/review_ui/scenarios/references.py` — six new registered scenarios
+  (`reference.analysis-panel-{empty,populated,suppressed,longnames,dark,
+  nb-no}`) that build the real Analysis-tab panel via an actual (init-
+  stubbed) `MainWindow` and `create_gallery_panel()`, per
+  `.claude/rules/ui-screenshots.md`'s "real production widgets" rule, rather
+  than an isolated widget. Fixed one bug found in review: the scenario's
+  window-construction helper originally patched `db_schema.get_database_
+  path`/`get_reference_database_path` to a second, separate fixture
+  directory via `context.enter_fixture` — which pushes onto one process-
+  lifetime `ExitStack` never unwound between scenarios (`tools/review_ui/
+  context.py::ReviewContext.enter_fixture`) — silently redirecting every
+  reference-library scenario registered afterward (the whole
+  `add-dialog-manual-*` group) to an empty database for the rest of the
+  renderer run. Reproduced with the full default renderer
+  (`python -m tools.render_review_screenshots <dir>`, no `--scenario`
+  filter): `reference.add-dialog-manual-range` failed with "publication
+  ...  is missing from the picker". Fixed by having the new scenarios reuse
+  the already-patched shared `_fixture(context)` database instead of
+  standing up a second one — the panel doesn't need its own isolated data,
+  only a real, already-initialized database to construct `MainWindow`
+  against.
+- `tests/test_main_window_reference_panel_taxon_lookup.py` — adapted
+  `test_reference_series_table_shows_row_controls_and_respects_row_height`
+  → `test_comparison_list_shows_row_and_marks_it_editable`, and the two
+  update/successor table tests → `test_comparison_list_offers_*`, to assert
+  against `ComparisonRow` fields and emit the new `ComparisonListWidget`
+  signals directly, instead of a `QTableWidget` this stage deleted. Behavior
+  assertions (row content, update/successor dispatch to the same host
+  methods) are preserved, not dropped.
+- `tests/test_reference_panel_mainwindow_e2e.py` — new
+  `test_load_reference_values_does_not_touch_removed_legacy_widgets`: builds
+  a real `MainWindow` with none of the legacy `ref_*` widgets attached
+  (asserts `not hasattr(...)` for each), an observation with a real
+  genus/species in a real SQLite fixture, and calls `load_reference_values()`
+  directly. Verified this test fails with the exact `AttributeError` above
+  when the `_maybe_set_ref_vernacular_from_taxon` guard is reverted (checked
+  by hand, not left in the suite), then passes with the fix — this is the
+  "observation-switch guards" coverage the prompt's Verification section
+  asked for.
+- `tests/test_render_review_screenshots.py` — `REFERENCE_IDS` was missing
+  five stage-5 `reference.provenance-preview*` scenarios (a pre-existing gap
+  from stage 5, unrelated to this stage but caught by the same inventory
+  test) plus this stage's six `analysis-panel-*` and
+  `add-dialog-manual-species-mean`; added all eleven so
+  `test_registry_has_unique_semantic_ids_and_expected_groups`,
+  `test_group_and_explicit_scenario_selection`, and the full default-
+  renderer integration test pass again.
+- `i18n/Sporely_{nb_NO,sv_SE,de_DE}.{ts,qm}` — refreshed; 0 unfinished
+  entries in all three languages. No new translation strings were
+  introduced by this session's own edits (the shape-row split reused the
+  same two existing `tr()` strings); the bulk of the diff is from the
+  earlier background pass's relocation of `_build_reference_panel`.
+
+**Existing code paths reused, by symbol name:** `_remove_reference_series_key`,
+`_update_reference_use_from_library`, `_review_reference_successor`,
+`_attach_normalized_reference_to_active_observation`,
+`_resolved_reference_series_entries`, `_format_normalized_reference_row_
+tooltip`, `_reference_overlays_allowed_for_category`,
+`_current_observation_comparison_row`, `ReferenceAddDialog`,
+`_persist_normalized_reference_from_dialog`, `_clean_ref_genus_text`/
+`_clean_ref_species_text`, `_active_sporely_taxon_id`,
+`_sync_reference_overlay_controls_state`, `on_reference_overlay_setting_
+changed`. No parallel implementation of any of these was created.
+
+**Layout fix (found and fixed in this session's review, not present in the
+required command output):** the relocated Shape/Min-Max row rendered as one
+`QHBoxLayout` (`"Reference shape:"` label + segmented selector + `Min/Max`
+checkbox) overlapped illegibly at the ~300px panel width the renderer's
+`reference.analysis-panel-*` scenarios use (a width the old, wider legacy
+form's shorter `"Shape:"` label had never been tested against). Confirmed
+visually in the rendered PNGs before the fix (label/button/checkbox text
+interleaved) and after (two separate `QFormLayout` rows, both clean in
+light/dark/Norwegian at the same width). The longer label is intentional,
+not reducible to `"Shape:"`: this panel's `"Plot:"` row above it already has
+its own `Ellipse`/`Kernel density`/`Mean` selector, so an unqualified
+`"Shape:"` would be ambiguous next to it.
+
+**Validation run:**
+```
+QT_QPA_PLATFORM=offscreen ./.venv/bin/pytest tests/test_comparison_panel_model.py tests/test_comparison_list_widget_rebuild.py tests/test_reference_panel_mainwindow_e2e.py tests/test_reference_panel_taxon_drift_and_retry.py tests/test_reference_attach_persistence_e2e.py tests/test_reference_successor_adoption.py tests/test_reference_series_palette.py tests/test_add_reference_dialog.py tests/test_reference_entry_editor.py tests/test_main_window_reference_panel_taxon_lookup.py tests/test_render_review_screenshots.py -q
+```
+→ **133 passed** (required nine files: 110 passed; plus the taxon-lookup
+file's 10 adapted tests and the full renderer test module's 12, including
+the previously-crashing full-default-renderer integration test, now fixed).
+An additional, broader regression sweep (not required, run for extra
+confidence given the size of this stage) —
+`test_reference_panel_coordinator_existing_set.py`,
+`test_calibration_reference_recovery_ui.py`,
+`test_legacy_reference_interactive_migration.py`,
+`test_reference_add_dialog_focus.py`, `test_reference_add_dialog_
+normalized.py`, `test_reference_quick_add_service.py`,
+`test_reference_work_editor_human_form.py`,
+`test_reference_values_taxon_lookup_integration.py` — **90 passed**.
+`py_compile` of `ui/main_window.py`, `ui/comparison_panel.py`, `tools/
+review_ui/scenarios/references.py`: clean. `python -m tools.
+render_review_screenshots --list`: clean. `git diff --check`: clean.
+`./tools/update_translations.sh` was already clean (0 unfinished per
+language) from the earlier background pass; not re-run since this session's
+own edits added no new `tr()` strings.
+
+**Screenshot evidence** (rendered via `tools.render_review_screenshots
+--scenario ...`, manifests under this session's scratch/tmp directories —
+not claimed as a committed artifact):
+- `reference.analysis-panel-empty`: no legacy form/table/Attach-library
+  button anywhere in the panel; only `Add reference…` and `Manage reference
+  library…` below an empty comparison list; Plot settings shows the
+  relocated `Reference shape: Ellipse | Square` and `Min/Max` on their own
+  rows, no clipping.
+- `reference.analysis-panel-populated`: three comparison rows (Library/
+  Manual/My observations badges) with distinct colour chips and an
+  overflow `…` menu per row, at the same 440px constrained width the stage
+  prompt asked for.
+- `reference.analysis-panel-suppressed`: switching the category away from
+  Spores dims all three reference rows and shows the "Reference data
+  applies to spore measurements" hint, with no legacy-table guard
+  involved (the removed `hasattr(self, "ref_series_table")` checks are
+  gone from `_refresh_reference_series_table`).
+- `reference.analysis-panel-longnames`: a long publication title and a long
+  æøå community label elide correctly at this width.
+- `reference.analysis-panel-dark`: same populated state in the real dark
+  palette — comparison-list rows, action buttons, and the relocated
+  Shape/Min-Max row all readable.
+- `reference.analysis-panel-nb-no`: real Norwegian translator resolves
+  "Referanseform:" (Reference shape), "Kvadrat" (Square), "Min/Max",
+  "Legg til referanse…" (Add reference…), "Referanseverdier" (Reference
+  values) with no clipping.
+- `reference.add-dialog-manual-range`: rendered clean after the shared-
+  fixture fix, confirming the picker's publication list is intact once the
+  analysis-panel scenarios no longer redirect `db_schema` for the rest of
+  the run.
+
+**Deviations from the prompt:** none identified beyond the two defects
+found and fixed during this session's own review (the crowded Shape/Min-Max
+row, and the `_maybe_set_ref_vernacular_from_taxon` crash) — both are
+corrections needed to actually satisfy the prompt's existing requirements
+("controls remain usable", "audit old taxon/source widget accesses during
+... observation changes"), not scope additions. New taxon-chip design,
+palette redesign, statistical matching, and Stage 7 reporting remain
+deferred, matching the prompt's explicit boundary.
+
+**Verification tier: human-gated, uncommitted.** Every agent-verifiable
+check above passes. Do not commit until the user runs the six numbered
+manual checks in `.sparring/prompts/sporely-py/stage-6.md`:
+1. Open an observation → Analysis: confirm the old form/table/Attach-
+   library button are gone and the comparison list + Add reference are
+   reachable at a resized window without blank gaps.
+2. Open Add reference; exercise Library, Community, My observations, Enter
+   manually; add one reference from each; confirm a single row and plot
+   appear; try a different comparison taxon and confirm the observation's
+   own identity is unchanged.
+3. Toggle/recolor/remove rows and edit an applicable legacy row; confirm
+   only the chosen reference changes; the current-observation row stays
+   first and is not removable/recolorable; a library use with an available
+   update/successor keeps that action reachable.
+4. Open library management beside Add reference; confirm it still opens.
+   Change Ellipse/Square and Min-Max in Plot settings; verify overlays
+   update and range/mean enablement is correct.
+5. Switch to a non-spore category and back: references suppress/restore
+   without losing chosen visibility/colors. Switch observations, return,
+   and restart the app: confirm attachments/settings restore with no
+   errors from removed controls.
+6. Switch observations while a picker is open and attempt to add: confirm
+   it does not attach to the wrong observation. Check a many-row list for
+   toggle flicker, focus loss, or unwanted scroll jumps.
+
+Acceptance requires a fresh, independent `sporely-sparring` review in a new
+session after these checks pass — this session does not accept its own
+work.
+
+### Stage 6 manual-test-2 fix pass — 2026-09-06
+
+Manual test 2 failed on two specific cases; the other five checks passed. This
+pass continued the same uncommitted Stage 6 diff above (did not reset or
+reimplement) and fixed only those two defects.
+
+**A — Community offered the current observation as its own comparison
+reference.** `ui/cloud_reference_dialog.py::CommunityResultsPane.__init__`
+gained `exclude_observation_cloud_id` (the active observation's own
+`observations.cloud_id`, distinct from the local-sqlite `exclude_observation_id`
+the My-observations tab already uses) and a new `_exclude_self_reference`
+helper applied in both `refresh()`'s injected-results branch and
+`_on_search_finished`. It drops only rows with `_kind == "observation"` whose
+`observation_id` (the cloud `public.observations.id` returned by
+`search_community_spore_datasets` — verified against
+`sporely-web/supabase/migrations/20260803120000_lock_down_observation_sync_tables.sql:608-636`)
+matches the excluded id — identity, never taxon/name/date/contributor text.
+Published-reference rows (`_kind == "reference"`) have no observation
+identity and are never filtered. `ui/add_reference_dialog.py`'s
+`AddReferenceDialog.__init__` gained the matching `exclude_observation_cloud_id`
+parameter, forwarded to `CommunityResultsPane`; `ui/main_window.py`'s
+`_on_add_reference_clicked` passes `obs_for_own_target.get("cloud_id")`
+(the same observation snapshot already used for genus/species/taxon there).
+Tests added in `tests/test_add_reference_dialog.py`:
+`test_community_excludes_exact_current_observation_by_cloud_id`,
+`test_community_keeps_other_observation_of_same_taxon`,
+`test_community_unrelated_taxon_rows_unaffected_by_exclusion`,
+`test_community_no_exclusion_id_keeps_all_rows`.
+
+**B — Library preview lost Length/Width while Q stayed populated.** Root
+cause found in `ui/add_reference_dialog.py::AddReferenceDialog._populate_preview`:
+a source reported only as a typical/unparenthesised range (the common case,
+e.g. "7–12 × 4–6, q=1.5–1.8") is stored with `length_min`/`length_max`/
+`width_min`/`width_max` left `None` and the typical bound in
+`length_core_min`/`length_core_max`/`width_core_min`/`width_core_max`
+instead (`database/reference_library.py`'s `MeasurementSet` dataclass has no
+such `q_core_min`/`q_core_max` fields — Q's own extreme-or-typical fallback
+already happens at write time in
+`ui/reference_entry_editor.py::normalized_measurement_set_payload`, lines
+~1586–1594). `_populate_preview` read only the extreme `*_min`/`*_max`
+fields with no core fallback, so Length/Width showed dashes while Q (whose
+fallback already happened at write time) showed values — exactly the
+reported Funga Nordica/mycena.no symptom. The list row was never wrong: it
+renders `candidate.raw_text` verbatim, not structured fields, so it was never
+this bug's evidence and no list-string parsing was used to fix it. Fixed by
+adding the same extreme-then-core fallback `_translate_range_or_summary` and
+`range_payload_is_plottable` already use elsewhere in
+`references/reference_plotting.py`, and marking core-derived cells with the
+existing `derived=` "†"/tooltip convention `ReferencePreviewPane.set_summary`
+already supports (used by `ReferenceEntryEditor`'s own live preview) instead
+of silently substituting values. Tests added:
+`test_preview_summary_falls_back_to_core_bounds_when_extremes_missing`,
+`test_preview_summary_extreme_bounds_win_over_core_when_both_present`.
+
+**Validation:** `QT_QPA_PLATFORM=offscreen ./.venv/bin/pytest
+tests/test_comparison_panel_model.py tests/test_comparison_list_widget_rebuild.py
+tests/test_reference_panel_mainwindow_e2e.py
+tests/test_reference_panel_taxon_drift_and_retry.py
+tests/test_reference_attach_persistence_e2e.py
+tests/test_reference_successor_adoption.py tests/test_reference_series_palette.py
+tests/test_add_reference_dialog.py tests/test_reference_entry_editor.py
+tests/test_main_window_reference_panel_taxon_lookup.py
+tests/test_render_review_screenshots.py -q` → **139 passed** (53 of those in
+`test_add_reference_dialog.py`, up from 45 before this pass' 8 new tests).
+`py_compile` of `ui/main_window.py`, `ui/comparison_panel.py`,
+`ui/add_reference_dialog.py`, `ui/cloud_reference_dialog.py`: clean.
+Re-rendered `reference.add-dialog-library{,-dark}`,
+`reference.add-dialog-community{,-dark,-points,-empty}`,
+`reference.add-dialog-manual-range`, `reference.add-dialog-manual-species-mean`,
+`reference.analysis-panel-populated`, `reference.provenance-preview`: all
+clean, no regressions. (`reference.add-dialog-library`'s Summary still shows
+all-dash Length/Width/Q — confirmed pre-existing: that scenario's
+`MeasurementSetCandidate` ids are never inserted as real rows into the
+renderer's fixture reference-library DB, so `MeasurementSetRepository.get`
+returns a set with no numeric fields at all, core or extreme; unrelated to
+this fix and not part of either reported defect.)
+
+**Verification tier: still human-gated, uncommitted.** No new commit; the
+implementation remains the same uncommitted working-tree diff as before this
+pass, now including the two fixes above. `.sparring/prompts/sporely-py/stage-6.md`
+stays pending, not archived.
+
+**What still needs re-checking:** only manual test 2 (Add reference →
+Community with an already-synced Amanita muscaria observation: confirm it no
+longer appears as its own candidate, another Amanita muscaria observation
+still does, and a Library selection with only a typical/no-extreme range
+shows real Length/Width numbers in Summary, not dashes). Manual tests 1, 3,
+4, 5, 6 already passed against the same Add-reference dialog and comparison
+list this pass did not change, and are not expected to be affected — rerun
+only if something in this pass' diff plausibly touches them.
+
+Acceptance still requires a fresh, independent `sporely-sparring` review in a
+new session after manual test 2 is reconfirmed.
+
+### Stage 6 — independently accepted — 2026-09-07
+
+Fresh-session `sporely-sparring` review, independent of the implementation
+session above. Verified against code, not accepted on the report alone:
+`_exclude_self_reference` (`ui/cloud_reference_dialog.py:1336-1355`) and its
+wiring through `AddReferenceDialog`/`main_window.py:9936` (defect A), and the
+`*_core_min`/`*_core_max` fallback with `derived=` marking in
+`AddReferenceDialog._populate_preview` (`ui/add_reference_dialog.py:703-754`,
+defect B) match the report exactly. Independently reran the full required
+test list (139 passed), `py_compile` on the four touched UI modules, and
+`git diff --check` — all clean. Spot-checked the broader Stage 6 removal
+claim: no `ref_source_input`/`ref_genus_input`/`ref_series_table`
+construction sites remain in `main_window.py`; the legacy form is gone from
+construction, and the `_maybe_set_ref_vernacular_from_taxon` hasattr guard is
+present at its reported line. The user reports all 6 manual tests in
+`.sparring/prompts/sporely-py/stage-6.md` pass.
+
+`AGENTS.md` and `docs/plans/active/2026-07-12-parmasto-matching-foundation.md`
+carry unrelated pre-existing uncommitted changes (routing-doc and a different
+plan's edits) that predate Stage 6's `expected_starting_head` and are not part
+of this stage; left uncommitted, untouched.
+
+Commit: see next stage's `expected_starting_head`. Prompt archived to
+`.sparring/prompts/sporely-py/completed/stage-6.md`. Stage 6 is closed.

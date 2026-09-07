@@ -1245,11 +1245,27 @@ class CommunityResultsPane(QWidget):
         species: str = "",
         preview_pane: ReferencePreviewPane,
         results: list[dict[str, Any]] | None = None,
+        exclude_observation_cloud_id: str | None = None,
     ) -> None:
         super().__init__(parent)
         self._genus = str(genus or "").strip()
         self._species = str(species or "").strip()
         self._preview_pane = preview_pane
+        # The active observation's own cloud identity (``observations.cloud_id``
+        # locally), so a dataset built from the exact observation already
+        # being plotted never reappears as a comparison candidate against
+        # itself. Community rows carry a *cloud* ``observation_id`` (see
+        # ``search_community_spore_datasets``), never the local sqlite id
+        # ``exclude_observation_id`` uses for the My-observations tab, so
+        # this is intentionally a separate identity. Only ``_kind ==
+        # "observation"`` rows have an observation identity at all --
+        # published-reference rows are never self-references and are never
+        # filtered here.
+        self._exclude_observation_cloud_id = (
+            str(exclude_observation_cloud_id).strip() or None
+            if exclude_observation_cloud_id is not None
+            else None
+        )
         # Optional injected result list, mirroring AddReferenceDialog's other
         # tabs' testability convention: when provided, each row is treated
         # as already carrying full detail fields, so selection needs no
@@ -1317,6 +1333,27 @@ class CommunityResultsPane(QWidget):
         self._species = str(species or "").strip()
         self.refresh()
 
+    def _exclude_self_reference(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Drop the community dataset built from the active observation itself.
+
+        Identity, not display text: only a ``_kind == "observation"`` row
+        whose ``observation_id`` matches the active observation's own cloud
+        id is dropped. Other observations of the same taxon (a different
+        cloud ``observation_id``) and published-reference rows (no
+        observation identity to compare) are never affected.
+        """
+        if not self._exclude_observation_cloud_id:
+            return rows
+        return [
+            row
+            for row in rows
+            if not (
+                str(row.get("_kind") or "") == "observation"
+                and str(row.get("observation_id") or "").strip()
+                == self._exclude_observation_cloud_id
+            )
+        ]
+
     def refresh(self) -> None:
         """(Re)load results for the fixed taxon. Clears any current selection."""
         # Invalidate any outstanding search/detail request for the previous
@@ -1339,7 +1376,9 @@ class CommunityResultsPane(QWidget):
         self.selection_changed.emit()
 
         if self._injected_results is not None:
-            self._results = [dict(row or {}) for row in self._injected_results]
+            self._results = self._exclude_self_reference(
+                [dict(row or {}) for row in self._injected_results]
+            )
             self._populate_results_list()
             self._update_status_after_results()
             return
@@ -1387,7 +1426,9 @@ class CommunityResultsPane(QWidget):
         if generation != self._search_generation:
             return
         self._search_worker = None
-        self._results = [dict(row or {}) for row in (results or [])]
+        self._results = self._exclude_self_reference(
+            [dict(row or {}) for row in (results or [])]
+        )
         self._populate_results_list()
         self._update_status_after_results()
 

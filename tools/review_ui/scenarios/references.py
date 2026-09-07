@@ -851,6 +851,168 @@ def _comparison_list_colors(context: ReviewContext):
     return widget
 
 
+def _analysis_panel_window(context: ReviewContext):
+    """A real (but init-stubbed) ``MainWindow`` instance, isolated from any
+    developer database, for rendering the actual Analysis-tab gallery panel
+    (stage 6 removed the legacy duplicate reference form/table from this
+    panel; a real ``create_gallery_panel()`` call is the only way to show
+    that removal plus the Shape/Min-Max controls' new home in Plot settings,
+    rather than an isolated ``ComparisonListWidget``/``AddReferenceDialog``).
+    """
+    import ui.main_window as main_window
+
+    # Reuse the shared reference-library fixture database (see ``_fixture``)
+    # instead of patching ``db_schema`` a second time: ``context.enter_fixture``
+    # pushes onto one process-lifetime ExitStack that is never unwound between
+    # scenarios, so a second, different db_schema patch here would silently
+    # redirect every reference-library scenario registered after this one
+    # (including the add-dialog-manual-* group) to an empty database.
+    _fixture(context)
+
+    with patch.object(main_window.MainWindow, "init_ui", lambda self: None), \
+         patch.object(main_window.MainWindow, "_populate_scale_combo", lambda self: None), \
+         patch.object(main_window.MainWindow, "load_default_objective", lambda self: None), \
+         patch.object(main_window.MainWindow, "_restore_geometry", lambda self: None):
+        window = main_window.MainWindow()
+    # Keep the window alive for the scenario's lifetime -- the returned
+    # panel's child widgets hold bound-method signal connections back to it,
+    # but an explicit reference avoids relying on that alone.
+    context.state.setdefault("reference.analysis_windows", []).append(window)
+    return window
+
+
+def _analysis_series_mixed() -> list[dict]:
+    """A legacy ReferenceDB row, a community raw-points set, and a
+    previously-recorded personal observation -- the three source kinds the
+    legacy table's rows could show, exercised together."""
+    return [
+        {
+            "data": {
+                "genus": "Agaricus",
+                "species": "bisporus",
+                "source": "Funga Nordica",
+                "source_kind": "reference",
+                "length_min": 8.5,
+                "length_max": 10.8,
+                "width_min": 4.5,
+                "width_max": 5.8,
+                "mount_medium": "KOH",
+                "stain": "Congo red",
+            },
+            "enabled": True,
+        },
+        {
+            "data": {
+                "source_kind": "points",
+                "points": [(9.0 + index * 0.1, 5.0) for index in range(12)],
+                "points_label": "sporely_community_user_42",
+                "source_type": "community",
+                "genus": "Agaricus",
+                "species": "bisporus",
+            },
+            "enabled": True,
+        },
+        {
+            "data": {
+                "source_kind": "observation",
+                "points": [(9.2, 5.1)] * 17,
+                "genus": "Agaricus",
+                "species": "bisporus",
+                "date": "2026-08-02",
+                "author": "Sigmund Ås",
+                "observation_id": 99,
+            },
+            "enabled": True,
+        },
+    ]
+
+
+def _analysis_series_longnames() -> list[dict]:
+    return [
+        {
+            "key": "use-long",
+            "data": {
+                "source_kind": "reference",
+                "observation_reference_use_id": "use-long",
+                "short_label": (
+                    "A comprehensive revision of northern European "
+                    "Cortinarius species with extensive morphological and "
+                    "molecular notes"
+                ),
+                "name_as_published": "Cortinarius diasemospermus",
+                "locator_text": "p. 142",
+                "reference_data_kind": "range",
+                "raw_text": "8.5-10.8 × 4.5-5.8",
+            },
+            "enabled": True,
+        },
+        {
+            "data": {
+                "source_kind": "points",
+                "points": [(9.0, 5.0)] * 12,
+                "points_label": "Kantarell og trakttrompetsopp fra Ørsta og Ålesund — Blåbærgrøtsopp",
+                "source_type": "community",
+                "genus": "Cantharellus",
+                "species": "cibarius",
+            },
+            "enabled": True,
+        },
+    ]
+
+
+def _expand_plot_settings(panel) -> None:
+    """Expand the "Plot settings" CollapsibleSection (collapsed by default)
+    so its relocated Shape/Min-Max controls (stage 6) are visible in the
+    screenshot; "Reference values" already starts expanded."""
+    from PySide6.QtWidgets import QToolButton
+
+    for toggle in panel.findChildren(QToolButton, "collapsibleToggle"):
+        if not toggle.isChecked():
+            toggle.click()
+
+
+def _analysis_panel_empty(context: ReviewContext):
+    window = _analysis_panel_window(context)
+    window.active_observation_id = None
+    window.reference_series = []
+    panel = window.create_gallery_panel()
+    _expand_plot_settings(panel)
+    return panel
+
+
+def _analysis_panel_populated(context: ReviewContext):
+    window = _analysis_panel_window(context)
+    window.active_observation_id = None
+    window.reference_series = _analysis_series_mixed()
+    panel = window.create_gallery_panel()
+    _expand_plot_settings(panel)
+    return panel
+
+
+def _analysis_panel_longnames(context: ReviewContext):
+    window = _analysis_panel_window(context)
+    window.active_observation_id = None
+    window.reference_series = _analysis_series_longnames()
+    panel = window.create_gallery_panel()
+    _expand_plot_settings(panel)
+    return panel
+
+
+def _analysis_panel_suppressed(context: ReviewContext):
+    """Category switched away from Spores: the comparison list must dim its
+    reference rows and show the explanatory hint without the legacy table
+    guards this stage removed (see MainWindow._refresh_reference_series_table)."""
+    window = _analysis_panel_window(context)
+    window.active_observation_id = None
+    window.reference_series = _analysis_series_mixed()
+    panel = window.create_gallery_panel()
+    window.gallery_filter_combo.addItem("Cystidia", "cystidia")
+    window.gallery_filter_combo.setCurrentIndex(window.gallery_filter_combo.count() - 1)
+    window._refresh_reference_series_table()
+    _expand_plot_settings(panel)
+    return panel
+
+
 def _add_dialog_taxon_selector_candidates() -> list[dict]:
     return [
         {
@@ -1273,6 +1435,56 @@ def register_reference_scenarios(registry: ScenarioRegistry) -> None:
             description="An AI candidate is active in the taxon target selector, showing its match percentage; the Library tab and dialog title have re-filtered to it.",
             viewport=(1400, 760),
             build=_add_dialog_taxon_selector,
+        ),
+        ReviewScenario(
+            id="reference.analysis-panel-empty",
+            group="reference-library",
+            title="Analysis tab reference panel — empty, no references",
+            description="The real Analysis-tab gallery panel with no observation loaded: the legacy form/table/Attach-library button are gone, only Add reference and Manage reference library remain, and Plot settings carries Shape/Min-Max.",
+            viewport=(440, 780),
+            build=_analysis_panel_empty,
+        ),
+        ReviewScenario(
+            id="reference.analysis-panel-populated",
+            group="reference-library",
+            title="Analysis tab reference panel — populated, mixed sources",
+            description="A legacy ReferenceDB row, a community raw-points set, and a previously-recorded personal observation together in the real comparison list, with Add reference and Manage reference library reachable below it.",
+            viewport=(440, 780),
+            build=_analysis_panel_populated,
+        ),
+        ReviewScenario(
+            id="reference.analysis-panel-suppressed",
+            group="reference-library",
+            title="Analysis tab reference panel — non-spore category",
+            description="Category switched away from Spores: reference rows dim and the suppressed-category hint appears, without any legacy table guard.",
+            viewport=(440, 780),
+            build=_analysis_panel_suppressed,
+        ),
+        ReviewScenario(
+            id="reference.analysis-panel-longnames",
+            group="reference-library",
+            title="Analysis tab reference panel — long taxon/source names",
+            description="A long publication title and a long æøå community label exercise row elision at a constrained width.",
+            viewport=(440, 780),
+            build=_analysis_panel_longnames,
+        ),
+        ReviewScenario(
+            id="reference.analysis-panel-dark",
+            group="reference-library",
+            title="Analysis tab reference panel — dark theme",
+            description="The populated mixed-source panel in the application's real dark palette.",
+            viewport=(440, 780),
+            build=_analysis_panel_populated,
+            theme="dark",
+        ),
+        ReviewScenario(
+            id="reference.analysis-panel-nb-no",
+            group="reference-library",
+            title="Analysis tab reference panel — Norwegian Bokmål",
+            description="The real Norwegian translator exercises Add reference, Manage reference library, and the relocated Plot settings labels (Reference shape, Min/Max).",
+            viewport=(440, 780),
+            build=_analysis_panel_populated,
+            locale="nb_NO",
         ),
     )
     for scenario in scenarios:

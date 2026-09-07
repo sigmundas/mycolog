@@ -294,6 +294,76 @@ def test_library_row_renders_two_lines_title_and_detail():
     assert "8 paired holotype measurements" in widget.detail_label.text()
 
 
+def test_preview_summary_falls_back_to_core_bounds_when_extremes_missing(monkeypatch):
+    """Stage-6 manual test 2, defect B: a source reported only as a typical
+    (unparenthesised) range -- e.g. "7-12 x 4-6, q=1.5-1.8" -- is stored with
+    ``length_min``/``width_min``/``max`` left ``None`` and the typical bound
+    in ``length_core_min``/``core_max``/``width_core_min``/``core_max``
+    (mirrors how ``ReferenceEntryEditor.normalized_measurement_set_payload``
+    writes Q's own extreme-or-typical fallback, and how
+    ``references.reference_plotting`` already resolves a drawable rectangle).
+    The Summary pane must show the core bound instead of "--", exactly like
+    the list's raw-text line already does."""
+    from database.reference_library import MeasurementSet
+    from ui import add_reference_dialog as picker
+
+    measurement_set = MeasurementSet(
+        id="ms-1",
+        taxon_treatment_id="t-1",
+        character="spore_size",
+        data_kind="range",
+        raw_text="7-12 x 4-6, q=1.5-1.8",
+        length_core_min=7.0,
+        length_core_max=12.0,
+        width_core_min=4.0,
+        width_core_max=6.0,
+        q_min=1.5,
+        q_max=1.8,
+    )
+    monkeypatch.setattr(
+        picker.MeasurementSetRepository, "get", lambda _id: measurement_set
+    )
+    dialog = _make_dialog()
+    dialog.results_list.setCurrentRow(_result_row_for(dialog, "ms-1"))
+
+    table = dialog.preview_pane.summary_table
+    length_row = [table.item(0, col).text() for col in range(4)]
+    width_row = [table.item(1, col).text() for col in range(4)]
+    q_row = [table.item(2, col).text() for col in range(4)]
+    # Length/Width bounds are derived from the core/typical fallback (marked
+    # with the existing "†" derived-cell convention); Q's bounds were
+    # written directly (no core fallback field exists for Q) and carry no
+    # derived marker.
+    assert length_row == ["Length", "7.00 †", "—", "12.00 †"]
+    assert width_row == ["Width", "4.00 †", "—", "6.00 †"]
+    assert q_row == ["Q", "1.50", "—", "1.80"]
+
+
+def test_preview_summary_extreme_bounds_win_over_core_when_both_present(monkeypatch):
+    from database.reference_library import MeasurementSet
+    from ui import add_reference_dialog as picker
+
+    measurement_set = MeasurementSet(
+        id="ms-1",
+        taxon_treatment_id="t-1",
+        character="spore_size",
+        data_kind="range",
+        length_min=6.5,
+        length_core_min=7.0,
+        length_core_max=12.0,
+        length_max=12.5,
+    )
+    monkeypatch.setattr(
+        picker.MeasurementSetRepository, "get", lambda _id: measurement_set
+    )
+    dialog = _make_dialog()
+    dialog.results_list.setCurrentRow(_result_row_for(dialog, "ms-1"))
+
+    table = dialog.preview_pane.summary_table
+    length_row = [table.item(0, col).text() for col in range(4)]
+    assert length_row == ["Length", "6.50", "—", "12.50"]
+
+
 # ---------------------------------------------------------------------
 # My observations tab
 # ---------------------------------------------------------------------
@@ -395,6 +465,7 @@ def _community_results() -> list[dict]:
     return [
         {
             "_kind": "observation",
+            "observation_id": 4242,
             "genus": "Cortinarius",
             "species": "limonius",
             "contributor_label": "sporely_community_user_7",
@@ -497,6 +568,57 @@ def test_community_tab_shows_empty_state_with_no_results():
     dialog = _make_community_dialog(community_results=[])
     assert dialog._community_pane.results_list.count() == 0
     assert dialog._community_pane.status_label.text() != ""
+
+
+def test_community_excludes_exact_current_observation_by_cloud_id():
+    """The dataset built from the observation already being plotted must not
+    reappear as its own comparison candidate (stage-6 manual test 2, defect A)."""
+    dialog = _make_community_dialog(exclude_observation_cloud_id="4242")
+    # _community_results() has one "observation" row with observation_id=4242
+    # (the self-reference) and one "reference" row -- only the self-reference
+    # is dropped.
+    assert dialog._community_pane.results_list.count() == 1
+    remaining = dialog._community_pane._results
+    assert len(remaining) == 1
+    assert remaining[0]["_kind"] == "reference"
+
+
+def test_community_keeps_other_observation_of_same_taxon():
+    """A different observation's dataset for the same taxon is a valid
+    comparison candidate and must not be filtered by taxon identity."""
+    dialog = _make_community_dialog(exclude_observation_cloud_id="9999")
+    assert dialog._community_pane.results_list.count() == 2
+    kinds = [row["_kind"] for row in dialog._community_pane._results]
+    assert kinds == ["observation", "reference"]
+
+
+def test_community_unrelated_taxon_rows_unaffected_by_exclusion():
+    """Rows for other taxa (never matching the excluded cloud id) pass
+    through the exclusion filter untouched."""
+    results = _community_results() + [
+        {
+            "_kind": "observation",
+            "observation_id": 7777,
+            "genus": "Amanita",
+            "species": "muscaria",
+            "contributor_label": "sporely_community_user_9",
+            "measurement_count": 5,
+        }
+    ]
+    dialog = _make_community_dialog(
+        community_results=results, exclude_observation_cloud_id="4242"
+    )
+    remaining_ids = [
+        row.get("observation_id")
+        for row in dialog._community_pane._results
+        if row["_kind"] == "observation"
+    ]
+    assert remaining_ids == [7777]
+
+
+def test_community_no_exclusion_id_keeps_all_rows():
+    dialog = _make_community_dialog()
+    assert dialog._community_pane.results_list.count() == 2
 
 
 def test_default_my_observation_candidates_filters_by_taxon_and_requires_points(monkeypatch):

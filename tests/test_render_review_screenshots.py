@@ -70,6 +70,17 @@ REFERENCE_IDS = {
     "reference.add-dialog-manual-invalid",
     "reference.add-dialog-manual-invalid-dark",
     "reference.add-dialog-manual-nb-no",
+    "reference.add-dialog-manual-species-mean",
+    "reference.provenance-preview",
+    "reference.provenance-preview-method",
+    "reference.provenance-preview-nb-no",
+    "reference.provenance-preview-dark",
+    "reference.analysis-panel-empty",
+    "reference.analysis-panel-populated",
+    "reference.analysis-panel-suppressed",
+    "reference.analysis-panel-longnames",
+    "reference.analysis-panel-dark",
+    "reference.analysis-panel-nb-no",
 }
 CONFLICT_IDS = {
     "conflict.local-changes",

@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 import ui.main_window as main_window
 from database.taxon_lookup import TaxonChoice
 from database.vernacular_db import VernacularDB
+from ui.comparison_panel import ComparisonListWidget
 from ui.taxon_input_controller import TaxonInputController
 
 
@@ -252,39 +253,16 @@ def test_reference_panel_ensure_lookup_reuses_cached_service(tmp_path: Path, mon
     assert window.ref_vernacular_db.language_code == "no"
 
 
-def test_reference_series_table_shows_row_controls_and_respects_row_height(
+def test_comparison_list_shows_row_and_marks_it_editable(
     monkeypatch,
     qapp,
 ) -> None:
+    """Stage 6: the comparison list replaced ``ref_series_table`` as the
+    sole reference-plot list surface; this row-level data (not a removed
+    table's per-column widgets) is now what the overflow menu's actions
+    key off of (see ui.comparison_panel._open_overflow_menu)."""
     window = _build_minimal_window(monkeypatch, qapp)
-    window.ref_series_table = QTableWidget(0, 5)
-    window.ref_series_table.setObjectName("referenceSeriesTable")
-    window.ref_series_table.setFocusPolicy(Qt.NoFocus)
-    window.ref_series_table.setWordWrap(False)
-    window.ref_series_table.setTextElideMode(Qt.ElideRight)
-    window.ref_series_table.setHorizontalHeaderLabels(
-        [
-            window.tr("Plot"),
-            "",
-            window.tr("Data set"),
-            window.tr("Color"),
-            window.tr("Library"),
-        ]
-    )
-    window.ref_series_table.verticalHeader().setVisible(False)
-    window.ref_series_table.verticalHeader().setDefaultSectionSize(34)
-    window.ref_series_table.verticalHeader().setMinimumSectionSize(28)
-    window.ref_series_table.setSelectionMode(QAbstractItemView.SingleSelection)
-    window.ref_series_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-    window.ref_series_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-    window.ref_series_table.horizontalHeader().setStretchLastSection(False)
-    window.ref_series_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-    window.ref_series_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-    window.ref_series_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-    window.ref_series_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-    window.ref_series_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-    window.ref_series_table.setShowGrid(False)
-    window.ref_series_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+    window.comparison_list = ComparisonListWidget()
 
     window.reference_series = [
         {
@@ -300,21 +278,27 @@ def test_reference_series_table_shows_row_controls_and_respects_row_height(
 
     window._refresh_reference_series_table()
 
-    assert window.ref_series_table.rowCount() == 1
-    assert window.ref_series_table.rowHeight(0) >= 34
-    assert window.ref_series_table.cellWidget(0, 0) is not None
-    assert isinstance(window.ref_series_table.cellWidget(0, 1), QToolButton)
-    assert window.ref_series_table.item(0, 2).text() == "A. bisporus (Reference sheet)"
-    assert window.ref_series_table.cellWidget(0, 3) is not None
-    assert window.ref_series_table.cellWidget(0, 4) is None
+    rows = window.comparison_list.rows()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.title == "A. bisporus (Reference sheet)"
+    assert row.visible is True
+    # A plain ReferenceDB-backed row (no observation_reference_use_id) is
+    # the "supported legacy row" _edit_reference_series_row can open.
+    assert row.can_edit is True
+    assert row.library_update_available is False
+    assert row.library_successor_available is False
 
 
-def test_reference_series_table_offers_explicit_update_only_for_stale_attachment(
+def test_comparison_list_offers_explicit_update_only_for_stale_attachment(
     monkeypatch, qapp
 ) -> None:
     window = _build_minimal_window(monkeypatch, qapp)
+    window.comparison_list = ComparisonListWidget()
+    window.comparison_list.library_update_requested.connect(
+        window._on_comparison_library_update_requested
+    )
     window.active_observation_id = 42
-    window.ref_series_table = QTableWidget(0, 5)
     window.reference_series = [
         {
             "key": "use-1",
@@ -337,19 +321,26 @@ def test_reference_series_table_offers_explicit_update_only_for_stale_attachment
 
     window._refresh_reference_series_table()
 
-    update_button = window.ref_series_table.cellWidget(0, 4)
-    assert isinstance(update_button, QToolButton)
-    assert update_button.text() == "Update"
-    update_button.click()
+    row = next(r for r in window.comparison_list.rows() if r.dataset_id == "use-1")
+    assert row.library_update_available is True
+    assert row.library_successor_available is False
+    # Normalized library attachments are not editable via the row-driven
+    # legacy-form adapter; they go through library management instead.
+    assert row.can_edit is False
+
+    window.comparison_list.library_update_requested.emit(row.observation_reference_use_id)
     assert calls == [("use-1", 42)]
 
 
-def test_reference_series_table_offers_distinct_successor_review_action(
+def test_comparison_list_offers_distinct_successor_review_action(
     monkeypatch, qapp
 ) -> None:
     window = _build_minimal_window(monkeypatch, qapp)
+    window.comparison_list = ComparisonListWidget()
+    window.comparison_list.library_successor_requested.connect(
+        window._on_comparison_library_successor_requested
+    )
     window.active_observation_id = 42
-    window.ref_series_table = QTableWidget(0, 5)
     window.reference_series = [
         {
             "key": "use-1",
@@ -373,10 +364,11 @@ def test_reference_series_table_offers_distinct_successor_review_action(
 
     window._refresh_reference_series_table()
 
-    review_button = window.ref_series_table.cellWidget(0, 4)
-    assert isinstance(review_button, QToolButton)
-    assert review_button.text() == "Review successor…"
-    review_button.click()
+    row = next(r for r in window.comparison_list.rows() if r.dataset_id == "use-1")
+    assert row.library_update_available is False
+    assert row.library_successor_available is True
+
+    window.comparison_list.library_successor_requested.emit(row.observation_reference_use_id)
     assert calls == [("use-1", 42)]
 
 

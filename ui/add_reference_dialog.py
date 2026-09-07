@@ -250,6 +250,7 @@ class AddReferenceDialog(GeometryMixin, QDialog):
         genus: str = "",
         species: str = "",
         exclude_observation_id: int | None = None,
+        exclude_observation_cloud_id: str | None = None,
         exclude_measurement_set_ids: Iterable[str] | None = None,
         attach_callback: Callable[[str, str], None] | None = None,
         cloud_attach_callback: Callable[[dict], None] | None = None,
@@ -276,6 +277,11 @@ class AddReferenceDialog(GeometryMixin, QDialog):
         # observation's identification.
         self._ai_candidates = list(ai_candidates or [])
         self._exclude_observation_id = exclude_observation_id
+        self._exclude_observation_cloud_id = (
+            str(exclude_observation_cloud_id).strip() or None
+            if exclude_observation_cloud_id is not None
+            else None
+        )
         self._exclude_ids = {str(x) for x in (exclude_measurement_set_ids or [])}
         self._attach_callback = attach_callback
         self._cloud_attach_callback = cloud_attach_callback
@@ -706,14 +712,34 @@ class AddReferenceDialog(GeometryMixin, QDialog):
         if candidate.locator_text:
             meta = f"{meta} · {candidate.locator_text}" if meta else candidate.locator_text
         rows: list[tuple[str, str, str, str]] = []
+        derived_cells: list[tuple[bool, bool, bool]] = []
         if measurement_set is not None:
             for label, prefix in (
                 (QCoreApplication.translate("AddReferenceDialog", "Length"), "length"),
                 (QCoreApplication.translate("AddReferenceDialog", "Width"), "width"),
                 (QCoreApplication.translate("AddReferenceDialog", "Q"), "q"),
             ):
+                # Extreme (parenthesised) bounds win when present; otherwise
+                # fall back to the "core"/typical bound the parser stores
+                # separately (``length_core_min``/``width_core_max`` etc —
+                # there is no such fallback field for Q). This mirrors the
+                # same extreme-or-typical rule already applied when writing
+                # Q's min/max (``ReferenceAddDialog.normalized_measurement_
+                # set_payload``) and when the plotting path resolves a
+                # drawable rectangle (``references.reference_plotting.
+                # range_payload_is_plottable``); without it, a source
+                # reported only as a typical range (the common case) shows
+                # correctly in the raw-text list line but as "—" here.
                 vmin = getattr(measurement_set, f"{prefix}_min", None)
+                min_derived = False
+                if vmin is None:
+                    vmin = getattr(measurement_set, f"{prefix}_core_min", None)
+                    min_derived = vmin is not None
                 vmax = getattr(measurement_set, f"{prefix}_max", None)
+                max_derived = False
+                if vmax is None:
+                    vmax = getattr(measurement_set, f"{prefix}_core_max", None)
+                    max_derived = vmax is not None
                 vmean = getattr(measurement_set, f"{prefix}_mean", None)
                 rows.append(
                     (
@@ -723,8 +749,9 @@ class AddReferenceDialog(GeometryMixin, QDialog):
                         self._format_stat(vmax),
                     )
                 )
+                derived_cells.append((min_derived, False, max_derived))
         note = candidate.raw_text or QCoreApplication.translate("AddReferenceDialog", "No additional notes.")
-        self.preview_pane.set_summary(title, meta, rows, note)
+        self.preview_pane.set_summary(title, meta, rows, note, derived=derived_cells)
         method_recorded = bool(
             measurement_set is not None
             and (
@@ -839,6 +866,7 @@ class AddReferenceDialog(GeometryMixin, QDialog):
             species=self._species,
             preview_pane=self.preview_pane,
             results=self._injected_community_results,
+            exclude_observation_cloud_id=self._exclude_observation_cloud_id,
         )
         self._community_pane.selection_changed.connect(self._update_footer_state)
         layout.addWidget(self._community_pane, 1)
