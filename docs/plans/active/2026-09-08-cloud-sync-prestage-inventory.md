@@ -1097,3 +1097,81 @@ this candidate commit on the review branch. This pass does **not** self-declare
 the Pre-stage independently accepted — that decision belongs to a fresh
 independent `sporely-sparring` review of the pushed candidate. Stage 0 remains
 blocked until that review explicitly accepts this repair.
+
+## End-of-pass handoff — WAL-safe dry-run follow-up, 2026-09-08
+
+Implemented via `stage-cloud-sync-prestage-baseline-repair-wal-followup.md` on
+review branch `review/cloud-sync-prestage-2026-09-08`, base commit
+`0e9482647c395ee69a6ed581f93d5098062881b0` (which sits on top of the immutable
+baseline-repair candidate `ca16130fa54bfc6597a6215b8b6b87979a80e845`, itself
+unmodified by this pass).
+
+The independent web reviewer reviewed `b72af25..ca16130` and provisionally
+accepted repairs 2 and 3 above (materialization `suppress_reverse_identity`,
+the stale `push_image_metadata` fixture) and the conditional DOI/ISBN index
+migration described under repair 1. Those are not redesigned here. One
+blocker remained: the dry-run scratch copy at
+`tools/migrate_legacy_reference_values.py:run_migration` used
+`shutil.copy2(database_path, scratch_path)`, a raw filesystem copy of only
+the main `.db` file. `database/schema.py::get_reference_connection` runs the
+reference database in `PRAGMA journal_mode = WAL`, so a committed
+transaction can exist only in the `reference_values.db-wal` sidecar until a
+checkpoint occurs; a raw copy of the main file alone can miss such committed
+state, without requiring the caller to close Sporely or checkpoint first.
+Rejected as insufficient evidence of committed source state under WAL.
+
+Repair: added `_snapshot_reference_database_for_dry_run` in
+`tools/migrate_legacy_reference_values.py`, following the existing WAL-safe
+precedent `utils/archive/full_backup.py::_snapshot_database` — open the
+source read-only via a `mode=ro` URI connection and use
+`sqlite3.Connection.backup` so committed WAL pages are included in the
+scratch snapshot, then normalize the scratch copy's journal mode back to
+`DELETE` (a WAL-mode source can otherwise propagate that setting to the
+throwaway copy). `run_migration`'s `dry_run=True` branch now calls this
+helper instead of `shutil.copy2`; `--apply` behavior is unchanged. The
+now-unused `shutil` import was removed from the migration tool.
+
+Added `test_migration_dry_run_sees_committed_row_still_resident_in_wal` to
+`tests/test_legacy_reference_migration.py`: a writer connection commits a
+legacy row under `PRAGMA journal_mode=WAL` / `PRAGMA wal_autocheckpoint=0`
+and stays open (asserting the `-wal` sidecar is non-empty, so the row is
+verified resident only there, not checkpointed into the main file), then
+`run_migration(..., dry_run=True)` is asserted to report the row as a
+simulated create while the real database's byte fingerprint is unchanged.
+Verified this regression actually protects the contract: temporarily
+reverting the helper call to `shutil.copy2` makes the test fail
+(`report.created` empty, the row reported `"not found in reference_values"`);
+restoring the WAL-safe snapshot makes it pass again.
+
+Test results (`QT_QPA_PLATFORM=offscreen ./.venv/bin/pytest`, project
+`.venv`):
+
+- New WAL regression, standalone: 1 passed.
+- Full `tests/test_legacy_reference_migration.py`: 24 passed — preserves the
+  three formerly-red baseline nodes' repairs, the initialized-database and
+  legacy-only dry-run no-write regressions, and normal `--apply` coverage.
+- Focused baseline (9 files, frozen list): 170 passed, unchanged from the
+  `ca16130` repair.
+- Broader selection (97 files, frozen list): 1,740 passed, 6 skipped — one
+  more pass than `ca16130`'s 1,739, from the new WAL regression; the six
+  Stage 6l cross-repository skips remain unavailable evidence, not counted
+  as passes.
+- Additional-consumer selection (11 files, frozen list): 203 passed,
+  unchanged.
+- `git diff --check` clean; `py_compile` clean on
+  `tools/migrate_legacy_reference_values.py` and
+  `tests/test_legacy_reference_migration.py`.
+
+Out of scope, not touched: Stage 0 extraction, early synced-stamp/re-dirty
+behavior, the summary retry signature mismatch, observation/image identity
+architecture beyond the already-landed `NameError` fix, reference-cloud
+sibling architecture, anchor risks, general SQLite backup/refactoring, the
+full-backup implementation itself, unrelated workflow documentation, and the
+broader no-op-write audit. These remain deferred exactly as recorded above.
+
+**Current disposition:** no baseline failure remains outstanding from this
+follow-up's scope; the dry-run scratch-copy mechanism is now WAL-safe. This
+pass does **not** self-declare the Pre-stage independently accepted — that
+decision belongs to a fresh independent `sporely-sparring` review of the
+complete repair (`ca16130` plus this follow-up commit) on the review branch.
+Stage 0 remains blocked until that review explicitly accepts it.

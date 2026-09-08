@@ -430,6 +430,61 @@ def test_migration_dry_run_makes_no_changes(libs, tmp_path):
     assert count == 0
 
 
+def test_migration_dry_run_sees_committed_row_still_resident_in_wal(libs, tmp_path):
+    """Pre-stage WAL-safe follow-up regression: a dry-run scratch snapshot
+    taken with a raw ``shutil.copy2`` of only the main ``.db`` file can miss
+    a row that is committed but not yet checkpointed out of the WAL
+    sidecar. The dry-run must see it anyway, and must still leave the real
+    database unchanged."""
+    _, ref_path = libs
+
+    writer = sqlite3.connect(ref_path, timeout=10)
+    writer.execute("PRAGMA journal_mode=WAL")
+    writer.execute("PRAGMA wal_autocheckpoint=0")
+    try:
+        cursor = writer.execute(
+            """
+            INSERT INTO reference_values (
+                genus, species, source, length_min, length_max, width_min, width_max
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("Russula", "paludosa", "Petersen 1990", 8.0, 10.0, 5.0, 6.0),
+        )
+        writer.commit()
+        legacy_id = int(cursor.lastrowid)
+
+        wal_path = ref_path.with_name(ref_path.name + "-wal")
+        assert wal_path.exists() and wal_path.stat().st_size > 0, (
+            "the committed row must still be resident only in the WAL sidecar, "
+            "not checkpointed into the main file, for this regression to be "
+            "meaningful"
+        )
+
+        manifest = _build_manifest(
+            ref_path=ref_path,
+            works=[_work_entry(key="petersen-1990", title="Danmarks Basidiesvampe", year=1990)],
+            rows=[_row_migrate(legacy_id, work_key="petersen-1990", name_as_published="Russula paludosa")],
+        )
+        validated = migrate_tool.validate_manifest(manifest)
+        fingerprint_before = _hash_file(ref_path)
+
+        report = migrate_tool.run_migration(
+            validated, database_path=ref_path, dry_run=True
+        )
+    finally:
+        writer.close()
+
+    assert report.dry_run is True
+    assert len(report.created) == 1, (
+        "dry-run must see the legacy row committed to the WAL sidecar, not "
+        "just a stale copy of the main .db file"
+    )
+    assert len(report.failed) == 0
+    assert _hash_file(ref_path) == fingerprint_before, (
+        "dry-run must not mutate the real reference database"
+    )
+
+
 def _create_legacy_only_ref_db(ref_path: Path) -> None:
     """A ``reference_values``-only database: no normalized tables exist yet,
     reproducing a database that predates the normalized reference library."""

@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sqlite3
 import sys
 import tempfile
@@ -714,6 +713,31 @@ def _apply_attach_to_existing(
     )
 
 
+def _snapshot_reference_database_for_dry_run(source_path: Path, destination_path: Path) -> None:
+    """Copy ``source_path`` into ``destination_path`` via SQLite's backup API.
+
+    ``reference_values.db`` is opened in WAL mode (see ``database/schema.py``),
+    so committed transactions can live only in the ``-wal`` sidecar until a
+    checkpoint occurs. A raw filesystem copy of the main file can therefore
+    miss committed rows. Opening the source read-only and using
+    ``sqlite3.Connection.backup`` (the same pattern as
+    ``utils/archive/full_backup.py::_snapshot_database``) pulls in all
+    committed pages regardless of where they currently live, without
+    requiring the caller to checkpoint or close the real database first.
+    """
+    source = sqlite3.connect(f"{source_path.resolve().as_uri()}?mode=ro", uri=True, timeout=10)
+    destination = sqlite3.connect(destination_path)
+    try:
+        source.backup(destination)
+        # A WAL-mode source can transfer that journal setting to the
+        # standalone snapshot; normalize it back to a single-file journal so
+        # the scratch copy behaves like an ordinary throwaway database.
+        destination.execute("PRAGMA journal_mode=DELETE")
+    finally:
+        destination.close()
+        source.close()
+
+
 def run_migration(
     manifest: ValidatedManifest,
     *,
@@ -741,7 +765,7 @@ def run_migration(
         # file is never opened for writing.
         with tempfile.TemporaryDirectory() as scratch_dir:
             scratch_path = Path(scratch_dir) / Path(database_path).name
-            shutil.copy2(database_path, scratch_path)
+            _snapshot_reference_database_for_dry_run(Path(database_path), scratch_path)
             _run_migration_body(
                 manifest, database_path=scratch_path, dry_run=True, report=report
             )

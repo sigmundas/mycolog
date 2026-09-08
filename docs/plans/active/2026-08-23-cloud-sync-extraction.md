@@ -4,9 +4,9 @@ Status: authoritative planning document for the staged decomposition and hardeni
 
 ## Agent handoff
 
-- **Status:** Cloud-sync Pre-stage baseline repair candidate committed 2026-09-08 on review branch `review/cloud-sync-prestage-2026-09-08`; **not independently accepted**. All three previously-red baseline failures are now repaired and green in this candidate. No extraction stage is implemented or verified. Stage 0 remains blocked until a fresh independent `sporely-sparring` review accepts this repair candidate.
+- **Status:** Cloud-sync Pre-stage baseline repair, plus a follow-up correction, both committed on review branch `review/cloud-sync-prestage-2026-09-08`; **not independently accepted**. All three previously-red baseline failures remain repaired and green, and the dry-run scratch-copy mechanism is now WAL-safe. No extraction stage is implemented or verified. Stage 0 remains blocked until a fresh independent `sporely-sparring` review accepts the complete repair (base repair `ca16130` plus this WAL-safe follow-up).
 - **Last completed stage:** Pre-existing E1c dead-code cleanup, commit `919b3e7` (a prerequisite, not an extraction stage).
-- **Current/next stage:** Fresh independent `sporely-sparring` review of the repair candidate on `review/cloud-sync-prestage-2026-09-08` (base `b72af25`). Stage 0 prompt remains drafted only; execution is blocked on independent acceptance of this repair.
+- **Current/next stage:** Fresh independent `sporely-sparring` review of the complete repair (candidate `ca16130` plus the WAL-safe follow-up commit) on `review/cloud-sync-prestage-2026-09-08` (base `b72af25`). Stage 0 prompt remains drafted only; execution is blocked on independent acceptance of this repair.
 - **Repository baseline:** `main` at local HEAD `7acaad12824ec4d6bdd1848f3ef6603d063507a1` at inventory time; the repair candidate lives on the review branch, base commit `b72af258ce0c6b01bacd4ab421b06a616d331da8`. No GitHub or remembered state used.
 - **Relevant commits:** `919b3e7` (prerequisite), `de824a4` (authorship/history anchor), `6db603c` (latest cloud-sync production change), `b72af25` (frozen Pre-stage review snapshot on the review branch); later deltas below.
 - **Evidence:** [Pre-stage inventory annex](2026-09-08-cloud-sync-prestage-inventory.md): exact test selections/failures, imports/patch targets, and Stage 0 symbol/dependency manifest.
@@ -178,6 +178,79 @@ deferred debt recorded above and in the inventory annex.
 This stage is **not self-declared accepted**. Independent review of the
 pushed candidate on `review/cloud-sync-prestage-2026-09-08` decides whether
 Stage 0 may become executable.
+
+### WAL-safe dry-run follow-up — 2026-09-08
+
+The independent web reviewer reviewed `b72af25..ca16130` and provisionally
+accepted the materialization `suppress_reverse_identity` fix, the stale
+`push_image_metadata` fixture repair, and the conditional DOI/ISBN index
+migration in `init_reference_library_schema`. Those three repairs are not
+redesigned here.
+
+One blocker remained: `run_migration(..., dry_run=True)`'s scratch-copy
+mechanism used `shutil.copy2(database_path, scratch_path)`, a raw filesystem
+copy of only the main `.db` file. `database/schema.py::get_reference_connection`
+runs the reference database in `PRAGMA journal_mode = WAL`, so a committed
+transaction can exist only in the `reference_values.db-wal` sidecar until a
+checkpoint occurs; copying just the main file can simulate against stale or
+incomplete committed state without requiring the caller to close Sporely or
+checkpoint first. Rejected as insufficient; a raw copy cannot be trusted to
+represent committed source state under WAL.
+
+Repair: added `_snapshot_reference_database_for_dry_run` in
+`tools/migrate_legacy_reference_values.py`, following the existing WAL-safe
+precedent in `utils/archive/full_backup.py::_snapshot_database` — open the
+source read-only via a `mode=ro` URI connection and use
+`sqlite3.Connection.backup` to pull all committed pages (main file and
+outstanding WAL) into the scratch database, then normalize the scratch
+copy's journal mode back to `DELETE` since a WAL-mode source can otherwise
+propagate that setting to the throwaway copy. `run_migration`'s dry-run
+branch now calls this helper instead of `shutil.copy2`; `--apply` behavior
+is unchanged. The now-unused `shutil` import was removed from the migration
+tool.
+
+Added `test_migration_dry_run_sees_committed_row_still_resident_in_wal` to
+`tests/test_legacy_reference_migration.py`: opens a writer connection to the
+reference database in WAL mode with `PRAGMA wal_autocheckpoint=0`, commits a
+legacy row while keeping that connection open (so the row is verified
+resident only in the `-wal` sidecar, not checkpointed into the main file),
+then calls `run_migration(..., dry_run=True)` and asserts it reports the row
+as a simulated create and leaves the real database's byte fingerprint
+unchanged. Confirmed by temporarily reverting the helper call back to
+`shutil.copy2`: the test fails (`created=0`, the row reported as "not found
+in reference_values") against the raw-copy implementation, and passes again
+once the WAL-safe snapshot is restored.
+
+Verification run from `sporely-py` with
+`QT_QPA_PLATFORM=offscreen ./.venv/bin/pytest` (project `.venv`):
+
+- New WAL regression, standalone: 1 passed.
+- Full `tests/test_legacy_reference_migration.py`: 24 passed (all
+  previously-green cases preserved, including the initialized-database and
+  legacy-only dry-run no-write regressions and normal `--apply` coverage).
+- Focused baseline (9 files, frozen list): 170 passed (unchanged from the
+  `ca16130` repair; the three previously-red nodes remain green).
+- Broader selection (97 files, frozen list): 1,740 passed, 6 skipped (one
+  more pass than the `ca16130` repair's 1,739, from the new WAL regression;
+  the six Stage 6l cross-repository skips remain unavailable evidence, not
+  passing checks).
+- Additional-consumer selection (11 files, frozen list): 203 passed,
+  unchanged.
+- `git diff --check`: clean. `py_compile` on
+  `tools/migrate_legacy_reference_values.py` and
+  `tests/test_legacy_reference_migration.py`: clean.
+
+No baseline failure remains outstanding from this follow-up's scope. Stage 0
+extraction, early synced-stamp/re-dirty behavior, the summary retry
+signature mismatch, observation/image identity architecture beyond the
+already-landed `NameError` fix, and the Stage 6l cross-repository gate were
+not touched and remain exactly the deferred debt recorded above and in the
+inventory annex.
+
+This follow-up is **not self-declared accepted**. The independent web
+reviewer decides whether the WAL correction is clean and whether the
+complete Pre-stage baseline repair (encompassing both `ca16130` and this
+follow-up) may be accepted, authorizing Stage 0.
 
 ### Current-code / test / documentation discrepancies
 
