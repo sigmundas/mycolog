@@ -7,13 +7,20 @@ Search symbols first. Never read main_window.py, observations_tab.py, or cloud_s
 - Do not run heavy build steps, including Capacitor syncs, PyInstaller, Docker builds, full app builds, packaging commands, or dependency installation, unless explicitly requested.
 - Keep patches narrow. If a task touches multiple workflows or large UI files, propose staged patches and stop after the current stage.
 - Do not rewrite or refactor unrelated code while fixing a bug. Preserve existing behavior unless the prompt explicitly asks for a behavior change.
-- Agents may commit, but only work whose verification has actually passed, and never push. When a task defines numbered stages, commit each verified stage as its own commit and report the hash.
-  - On every staged implementation pass, update the canonical active plan's current-stage/handoff record before stopping, including verification, commit or manual-test status, and deferred work.
-  - **Self-verifiable stages** — the checks are ones you can run: unit tests, syntax checks, renderer screenshots for static layout. Run them, then commit.
-  - **Human-gated stages** — verification needs the user: interactive behavior (signal loops, focus, scroll retention, drag/resize), state surviving an app restart, camera/microscope hardware, live Supabase writes, RLS, cross-client sync, performance on real data, or judgment about whether output reads correctly to a mycologist. Do not commit. Leave the work uncommitted, and report a numbered checklist of exactly what the user must do to verify. The commit happens after the user confirms, in the next task.
+- **Staged implementation on feature branches:**
+  - Use or create a feature branch (e.g., `feature/cloud-sync-extraction`) for each stage of work.
+  - Commit all candidate changes to that branch with a clear, logical commit message.
+  - **Push the branch** so it's available for review. The branch is the authoritative review surface.
+  - Only commit work whose verification has actually passed (see below for stage verification levels).
+  - On every staged implementation pass, update the canonical active plan's current-stage/handoff record before stopping, including verification status, candidate commit SHA, and deferred work.
+  - After the candidate commit, generate the handoff and provide the reviewer with: branch, exact SHAs, stage prompt, verification results, and any unresolved questions.
+  - **Candidate commit is immutable:** Once a candidate SHA is handed to review, do not amend or force-push it. If corrections are needed, create a new commit on the same branch. A verdict always refers to an exact frozen state.
+  - **Do not merge to main.** That is a separate decision after independent reviewer acceptance; may be done by reviewer, author, or automated action.
+  - Never rewrite published history or force-push without explicit authorization.
+  - **Self-verifiable stages** — the checks are ones you can run: unit tests, syntax checks, renderer screenshots for static layout. Run them, then commit and push.
+  - **Human-gated stages** — verification needs the user: interactive behavior (signal loops, focus, scroll retention, drag/resize), state surviving an app restart, camera/microscope hardware, live Supabase writes, RLS, cross-client sync, performance on real data, or judgment about whether output reads correctly to a mycologist. Do not commit to the feature branch. Leave the work uncommitted locally, and report a numbered checklist of exactly what the user must do to verify. The commit and push happen after the user confirms the manual tests, in the next task.
   - A renderer screenshot proves layout, not behavior. A change to what happens when the user interacts is human-gated even when every screenshot is clean.
   - If verification fails partway, do not commit a partial stage — the failure is the report.
-  - Never rewrite published history or force-push without explicit authorization.
 - For sporely-py, always use the project virtual environment:
   `/Users/sigmundas/Documents/Code/sporely/sporely-py/.venv/bin/python` and
   `/Users/sigmundas/Documents/Code/sporely/sporely-py/.venv/bin/pytest`.
