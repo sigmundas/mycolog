@@ -4,14 +4,14 @@ Status: authoritative planning document for the staged decomposition and hardeni
 
 ## Agent handoff
 
-- **Status:** Pre-stage candidate prepared 2026-09-08; **not independently accepted**. No extraction stage is implemented or verified. A bounded evidence-follow-up pass (same day) diagnosed all three baseline failures and proposed repairs without implementing them; see below.
+- **Status:** Cloud-sync Pre-stage baseline repair candidate committed 2026-09-08 on review branch `review/cloud-sync-prestage-2026-09-08`; **not independently accepted**. All three previously-red baseline failures are now repaired and green in this candidate. No extraction stage is implemented or verified. Stage 0 remains blocked until a fresh independent `sporely-sparring` review accepts this repair candidate.
 - **Last completed stage:** Pre-existing E1c dead-code cleanup, commit `919b3e7` (a prerequisite, not an extraction stage).
-- **Current/next stage:** Fresh independent `sporely-sparring` review of the bounded-repair diagnosis in [the Pre-stage inventory annex](2026-09-08-cloud-sync-prestage-inventory.md#follow-up-evidence--bounded-repair-diagnosis-2026-09-08), to author the actual baseline repair. Stage 0 prompt remains drafted only; execution is blocked on baseline repair + disposition, then independent acceptance.
-- **Repository baseline:** `main` at local HEAD `7acaad12824ec4d6bdd1848f3ef6603d063507a1`; worktree/index clean before this pass. No GitHub or remembered state used.
-- **Relevant commits:** `919b3e7` (prerequisite), `de824a4` (authorship/history anchor), `6db603c` (latest cloud-sync production change); later deltas below.
+- **Current/next stage:** Fresh independent `sporely-sparring` review of the repair candidate on `review/cloud-sync-prestage-2026-09-08` (base `b72af25`). Stage 0 prompt remains drafted only; execution is blocked on independent acceptance of this repair.
+- **Repository baseline:** `main` at local HEAD `7acaad12824ec4d6bdd1848f3ef6603d063507a1` at inventory time; the repair candidate lives on the review branch, base commit `b72af258ce0c6b01bacd4ab421b06a616d331da8`. No GitHub or remembered state used.
+- **Relevant commits:** `919b3e7` (prerequisite), `de824a4` (authorship/history anchor), `6db603c` (latest cloud-sync production change), `b72af25` (frozen Pre-stage review snapshot on the review branch); later deltas below.
 - **Evidence:** [Pre-stage inventory annex](2026-09-08-cloud-sync-prestage-inventory.md): exact test selections/failures, imports/patch targets, and Stage 0 symbol/dependency manifest.
 - **Next prompt:** workspace `.sparring/prompts/sporely-py/stage-cloud-sync-0.md` — Stage 0 only, unaccepted draft.
-- **Verification / commit:** documentation candidate only, uncommitted for independent review as requested. Focused baseline 169 passed / 1 failed; broader 1,732 passed / 3 failed / 6 skipped; additional consumers 203 passed. All three failures reproduce in isolation. No production or test files changed; no manual/live test performed. `git diff --check` passed; all 59 candidate symbol ranges and frozen test-file paths were checked against the local source. These checks verify the report artifacts, not independent acceptance.
+- **Verification / commit:** the baseline-repair stage is a committed candidate on the review branch (see "Baseline repair — 2026-09-08" below for the exact repairs and test results), not local-only documentation. `b72af25` itself remains the earlier, already-frozen review snapshot — it is not "uncommitted"; the repair adds a new candidate commit on top of it. These checks verify the repaired candidate's own tests, not independent acceptance.
 - **Primary design principle:** **Preserve contracts, not accidents.**
 - **Compatibility decision:** Keep `utils/cloud_sync.py` as a stable public compatibility facade unless there is a concrete reason to remove it later.
 - **Mechanical-extraction rule:** Mechanical movement commits do not intentionally change behavior.
@@ -96,6 +96,88 @@ The evidence annex is part of this handoff. It is a factual inventory, not accep
 of either implementation debt or the proposed Stage 0 boundary. No baseline failure
 was fixed, quarantined, or waived. Review must resolve baseline disposition before
 mechanical movement; do not silently proceed with a known red suite.
+
+### Baseline repair — 2026-09-08
+
+Implemented the bounded repair authorized by
+`stage-cloud-sync-prestage-baseline-repair.md`, following exactly the diagnosis
+above plus the independent web sparring reviewer's correction that the SQLite
+repair must also cover a genuinely legacy-only database, not just narrow the
+test to the already-normalized fixture. All three baseline failures are now
+repaired and green.
+
+1. **Materialization `NameError`:** added
+   `suppress_reverse_identity = _portable_cloud_identity_pending_for_observation(local_id)`
+   in `cloud_media_materialization_state_for_observation`
+   (`utils/cloud_sync.py`), exactly the client-free predicate reuse the
+   diagnosis identified. No observation/image identity policy changed. Added
+   three regressions to `tests/test_cloud_media_pull_retry.py`: pending
+   portable identity suppresses reverse desktop-id recovery, ordinary
+   non-pending state permits it, and a verified direct cloud-id match still
+   succeeds while portable identity is pending.
+2. **Stale `push_image_metadata` fixture:** `tests/test_cloud_sync_progress_reset_and_prepare.py`'s
+   stub at the `test_reconcile_metadata_only_linked_images_skips_unchanged_siblings`
+   test now accepts `*, remote_row=None`, matching the real client contract.
+   Added an assertion that the actual drifted remote row (`existing_rows[0]`,
+   `notes == "cloud-updated note"`) was supplied to the call, not merely that
+   the `TypeError` stopped firing. No production behavior changed.
+3. **Legacy-reference migration dry-run:**
+   - Fixed the idempotency defect at its owner: `init_reference_library_schema`
+     (`database/reference_library_schema.py`) now only drops
+     `idx_reference_works_doi_normalized`/`idx_reference_works_isbn_normalized`
+     when the index's stored `sqlite_master.sql` definition actually differs
+     from the target (comparing with the `IF NOT EXISTS` clause normalized
+     out, since SQLite strips it from the stored text). An already-normalized
+     library now performs a byte-identical no-op on a repeat call; the legacy
+     unique-index variant still migrates.
+   - That alone was insufficient for a genuinely legacy-only database, where
+     `init_reference_library_schema` still has to create the normalized
+     tables from nothing so the simulation's read queries (for example
+     `_find_existing_by_legacy_id`) have something to read. `run_migration`
+     (`tools/migrate_legacy_reference_values.py`) now branches on `dry_run`:
+     the real per-connection logic moved into `_run_migration_body`, and a
+     `dry_run=True` call copies `database_path` into a `tempfile.TemporaryDirectory`
+     scratch file first and runs the entire simulation against that copy only.
+     The real file is never opened for writing under dry-run, so schema
+     initialization, index migration, and any row writes all land on the
+     discarded copy. `--apply` behavior (`dry_run=False`) is unchanged — it
+     still runs directly against `database_path`.
+   - Added `test_migration_dry_run_on_legacy_only_database_makes_no_changes`
+     to `tests/test_legacy_reference_migration.py`, exercising a
+     `reference_values`-only database (no normalized tables at all) through
+     `run_migration(..., dry_run=True)` and asserting the file is
+     byte-identical before/after and that no normalized table exists
+     afterward. The existing `test_migration_dry_run_makes_no_changes`
+     (already-normalized fixture) continues to pass.
+
+Verification run from `sporely-py` with `QT_QPA_PLATFORM=offscreen ./.venv/bin/pytest`:
+
+- The three previously failing nodes, individually: 3 passed. The 6 Stage 6l
+  cross-repository checks in the same invocation remain skipped (sibling
+  worktrees unavailable), as before.
+- Focused baseline (9 files): 170 passed (was 169 passed / 1 failed).
+- Broader selection (97 files, frozen list in the inventory annex): 1739
+  passed, 6 skipped (was 1,732 passed / 3 failed / 6 skipped); the delta is
+  exactly the 3 previously-failing nodes plus the 4 new regression tests
+  added in this repair.
+- Additional-consumer selection (11 files): 203 passed, unchanged.
+- `git diff --check`: clean. `py_compile` on every touched production file:
+  clean.
+- Direct SQLite dry-run demonstrations: an already-normalized in-memory
+  reference DB produces byte-identical `sqlite_master` content across two
+  `init_reference_library_schema` calls; the new legacy-only regression test
+  demonstrates zero byte change and zero normalized tables left behind after
+  a legacy-only `dry_run=True` migration.
+
+No deviation from the stage prompt. Out-of-scope items (early `synced`
+stamp/re-dirty, summary retry signature mismatch, Stage 0 extraction, typed
+issue/outcome architecture, anchor adoption risk, broader no-op-write audit,
+Stage 6l cross-repository gate) were not touched and remain exactly the
+deferred debt recorded above and in the inventory annex.
+
+This stage is **not self-declared accepted**. Independent review of the
+pushed candidate on `review/cloud-sync-prestage-2026-09-08` decides whether
+Stage 0 may become executable.
 
 ### Current-code / test / documentation discrepancies
 

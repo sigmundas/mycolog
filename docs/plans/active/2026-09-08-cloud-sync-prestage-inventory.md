@@ -1032,3 +1032,68 @@ Artifact checks: `git diff --check` passed. Deferred: implementing any of the
 three proposed repairs, running the three named tests against an implemented
 repair, and a fresh independent `sporely-sparring` review of this diagnosis
 before any repair or Stage 0 movement is authorized.
+
+## End-of-pass handoff — baseline repair, 2026-09-08
+
+Implemented via `stage-cloud-sync-prestage-baseline-repair.md` on review branch
+`review/cloud-sync-prestage-2026-09-08`, base commit `b72af258ce0c6b01bacd4ab421b06a616d331da8`.
+Correcting stale wording elsewhere in this document and the canonical extraction
+plan: `b72af25` is the frozen review snapshot on the review branch, not an
+"uncommitted" candidate — this repair adds a new commit on top of it.
+
+All three baseline failures named above are repaired; production/test changes:
+
+- `utils/cloud_sync.py`: defined `suppress_reverse_identity` in
+  `cloud_media_materialization_state_for_observation` by reusing
+  `_portable_cloud_identity_pending_for_observation`, exactly as diagnosed.
+- `tests/test_cloud_media_pull_retry.py`: 3 new regressions for the pending/
+  non-pending/verified-cloud-id-match cases.
+- `tests/test_cloud_sync_progress_reset_and_prepare.py`: the
+  `push_image_metadata` stub now accepts `*, remote_row=None`; added an
+  assertion that the actual drifted remote row reached the call.
+- `database/reference_library_schema.py`: `init_reference_library_schema` only
+  drops/recreates the doi/isbn indexes when the stored index definition
+  actually differs from the target, making an already-normalized library's
+  initialization byte-identical on repeat calls.
+- `tools/migrate_legacy_reference_values.py`: `run_migration` now runs its
+  `dry_run=True` simulation against a `tempfile.TemporaryDirectory` copy of
+  `database_path`, never opening the real file for writing — this is the
+  additional mechanism the independent web sparring reviewer required beyond
+  the index-idempotency fix, since a genuinely legacy-only database still
+  needs normalized tables to exist somewhere for the simulation's read
+  queries. `--apply` (`dry_run=False`) is unchanged.
+- `tests/test_legacy_reference_migration.py`: added
+  `test_migration_dry_run_on_legacy_only_database_makes_no_changes` exercising
+  a `reference_values`-only database (Case B); the existing already-normalized
+  test (Case A) continues to pass unmodified.
+
+Test results (`QT_QPA_PLATFORM=offscreen ./.venv/bin/pytest`, project `.venv`):
+
+- Three formerly-failing nodes, individually: 3 passed (was 3 failed); the 6
+  Stage 6l cross-repository checks in the same invocation remain skipped
+  (sibling worktrees unavailable) — not counted as passes.
+- Focused baseline (9 files): 170 passed (was 169 passed / 1 failed).
+- Broader selection (97 files): 1739 passed, 6 skipped (was 1,732 passed / 3
+  failed / 6 skipped) — the +7 is the 3 previously-failing nodes plus the 4
+  new regression tests.
+- Additional-consumer selection (11 files): 203 passed, unchanged.
+- `git diff --check` clean; `py_compile` clean on every touched production
+  file.
+- Direct SQLite demonstrations: already-normalized init is byte-identical on
+  a repeat call (Case A); the new legacy-only regression test demonstrates
+  zero byte change and zero normalized tables left behind after a
+  `dry_run=True` migration against a `reference_values`-only database
+  (Case B).
+
+Out of scope, not touched: the early `synced` stamp/re-dirty behavior, the
+summary retry `mark_observation_sync_dirty` signature mismatch, Stage 0
+extraction, typed issue/outcome architecture, push/pull orchestration,
+reference-cloud sibling architecture, anchor adoption/reservation risk, the
+broader no-op-write audit, and the Stage 6l cross-repository gate. These
+remain deferred exactly as recorded above.
+
+**Current disposition:** all three baseline failures are repaired and green in
+this candidate commit on the review branch. This pass does **not** self-declare
+the Pre-stage independently accepted — that decision belongs to a fresh
+independent `sporely-sparring` review of the pushed candidate. Stage 0 remains
+blocked until that review explicitly accepts this repair.

@@ -729,6 +729,23 @@ def _ensure_restrict_foreign_keys(conn: sqlite3.Connection) -> None:
         )
 
 
+def _normalized_index_ddl(sql: str) -> str:
+    # SQLite stores CREATE INDEX statements without the "IF NOT EXISTS"
+    # clause, so strip it before comparing a target DDL string to what is
+    # actually persisted in ``sqlite_master``.
+    return sql.strip().replace("IF NOT EXISTS ", "", 1)
+
+
+def _existing_index_sql(conn: sqlite3.Connection, index_name: str) -> str | None:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='index' AND name=?",
+        (index_name,),
+    ).fetchone()
+    if row is None or row[0] is None:
+        return None
+    return str(row[0]).strip()
+
+
 def init_reference_library_schema(conn: sqlite3.Connection) -> None:
     """Create the normalized reference library tables and indexes.
 
@@ -748,8 +765,16 @@ def init_reference_library_schema(conn: sqlite3.Connection) -> None:
     # fresh private graph for every explicitly copied curated revision, even
     # when immutable bibliographic identifiers repeat. Duplicate discovery
     # remains available through repository lookups; identity is never merged.
-    cursor.execute("DROP INDEX IF EXISTS idx_reference_works_doi_normalized")
-    cursor.execute("DROP INDEX IF EXISTS idx_reference_works_isbn_normalized")
+    # Only drop when the stored definition actually differs from the target
+    # (e.g. the old unique variant) — an already-migrated index must not be
+    # rewritten on every ordinary initialization call.
+    for legacy_index_name, target_sql in (
+        ("idx_reference_works_doi_normalized", _REFERENCE_LIBRARY_INDEXES[2]),
+        ("idx_reference_works_isbn_normalized", _REFERENCE_LIBRARY_INDEXES[3]),
+    ):
+        existing_sql = _existing_index_sql(conn, legacy_index_name)
+        if existing_sql is not None and existing_sql != _normalized_index_ddl(target_sql):
+            cursor.execute(f"DROP INDEX IF EXISTS {legacy_index_name}")
     for statement in _REFERENCE_LIBRARY_INDEXES:
         cursor.execute(statement)
     conn.commit()

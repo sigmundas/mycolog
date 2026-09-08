@@ -26070,6 +26070,8 @@ def cloud_media_materialization_state_for_observation(local_observation_id: int 
         summary['reason'] = 'no_cloud_snapshot'
         return summary
 
+    suppress_reverse_identity = _portable_cloud_identity_pending_for_observation(local_id)
+
     local_images_by_cloud_id, local_images_by_id = _load_local_image_lookup(local_id)
     local_measurements_by_cloud_id, local_measurements_by_id = _load_local_measurement_lookup(local_id)
     local_image_rows = list(local_images_by_id.values()) or list(local_images_by_cloud_id.values())

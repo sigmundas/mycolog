@@ -430,6 +430,99 @@ def test_migration_dry_run_makes_no_changes(libs, tmp_path):
     assert count == 0
 
 
+def _create_legacy_only_ref_db(ref_path: Path) -> None:
+    """A ``reference_values``-only database: no normalized tables exist yet,
+    reproducing a database that predates the normalized reference library."""
+    conn = sqlite3.connect(ref_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE reference_values (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                genus TEXT NOT NULL,
+                species TEXT NOT NULL,
+                source TEXT,
+                mount_medium TEXT,
+                stain TEXT,
+                plot_color TEXT,
+                parmasto_length_mean REAL,
+                length_min REAL,
+                length_p05 REAL,
+                length_p50 REAL,
+                length_p95 REAL,
+                length_max REAL,
+                length_avg REAL,
+                width_min REAL,
+                width_p05 REAL,
+                width_p50 REAL,
+                width_p95 REAL,
+                width_max REAL,
+                width_avg REAL,
+                q_min REAL,
+                q_p05 REAL,
+                q_p50 REAL,
+                q_p95 REAL,
+                q_max REAL,
+                q_avg REAL,
+                metadata_json TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_migration_dry_run_on_legacy_only_database_makes_no_changes(tmp_path):
+    """AC-C1: dry-run never writes, even when the database is genuinely
+    legacy-only and normalized tables do not yet exist. The simulation must
+    still be able to determine the migration outcome without leaving any
+    schema, rows, or other persistent state behind on the real file."""
+    ref_path = tmp_path / "reference_values.db"
+    _create_legacy_only_ref_db(ref_path)
+    legacy_id = _insert_legacy(
+        ref_path,
+        genus="Russula",
+        species="paludosa",
+        source="Petersen 1990",
+        length_min=8.0,
+        length_max=10.0,
+        width_min=5.0,
+        width_max=6.0,
+    )
+    manifest = _build_manifest(
+        ref_path=ref_path,
+        works=[_work_entry(key="petersen-1990", title="Danmarks Basidiesvampe", year=1990)],
+        rows=[_row_migrate(legacy_id, work_key="petersen-1990", name_as_published="Russula paludosa")],
+    )
+    validated = migrate_tool.validate_manifest(manifest)
+    fingerprint_before = _hash_file(ref_path)
+    report = migrate_tool.run_migration(
+        validated, database_path=ref_path, dry_run=True
+    )
+    assert _hash_file(ref_path) == fingerprint_before, (
+        "dry-run against a legacy-only database must not create normalized "
+        "schema or otherwise mutate the real file"
+    )
+    assert report.dry_run is True
+    assert len(report.created) == 1  # simulated create
+    assert len(report.failed) == 0
+    conn = sqlite3.connect(ref_path)
+    try:
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+    finally:
+        conn.close()
+    assert tables == {"reference_values", "sqlite_sequence"}, (
+        "no normalized tables must be left behind on the real database"
+    )
+
+
 def test_migration_apply_creates_work_treatment_and_measurement_set(libs, tmp_path):
     """AC-C1: --apply creates all three normalized entities and preserves
     ``legacy_reference_value_id``."""

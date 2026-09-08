@@ -25,8 +25,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sqlite3
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -731,6 +733,33 @@ def run_migration(
                 f"entries are still 'unresolved': {unresolved_ids[:10]}"
             )
 
+    if dry_run:
+        # A dry run must never leave persistent state behind, even when the
+        # database is legacy-only and schema initialization would otherwise
+        # create normalized tables/indexes for the simulation reads below to
+        # use. Run the whole simulation against a throwaway copy so the real
+        # file is never opened for writing.
+        with tempfile.TemporaryDirectory() as scratch_dir:
+            scratch_path = Path(scratch_dir) / Path(database_path).name
+            shutil.copy2(database_path, scratch_path)
+            _run_migration_body(
+                manifest, database_path=scratch_path, dry_run=True, report=report
+            )
+        return report
+
+    _run_migration_body(
+        manifest, database_path=database_path, dry_run=False, report=report
+    )
+    return report
+
+
+def _run_migration_body(
+    manifest: ValidatedManifest,
+    *,
+    database_path: Path,
+    dry_run: bool,
+    report: MigrationReport,
+) -> None:
     legacy_conn = sqlite3.connect(database_path)
     legacy_conn.row_factory = sqlite3.Row
     normalized_conn = sqlite3.connect(database_path)
@@ -821,7 +850,6 @@ def run_migration(
     finally:
         legacy_conn.close()
         normalized_conn.close()
-    return report
 
 
 # ---------------------------------------------------------------------------
