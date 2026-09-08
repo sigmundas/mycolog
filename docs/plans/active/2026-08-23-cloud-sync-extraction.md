@@ -17,9 +17,10 @@ Status: authoritative planning document for the staged decomposition and hardeni
   selection 170 passed; frozen broader selection 1,740 passed / 6 skipped;
   additional-consumer selection 203 passed; `git diff --check` and Stage 0
   `py_compile` passed. The six Stage 6l cross-repository skips remain
-  unavailable evidence, not passes. Candidate commit: pending creation on
-  `review/cloud-sync-prestage-2026-09-08`; stop for independent review after
-  push. No Stage 1 work was performed.
+  unavailable evidence, not passes. Immutable implementation commit:
+  `6e05f319d9deb916dfb71a3c7a1e0d9c84561118` on
+  `review/cloud-sync-prestage-2026-09-08`; stop for independent review. No
+  Stage 1 work was performed.
 - **Stage 0 facade corrective pass (2026-09-08):** Removed the remaining
   facade definitions that shadowed the imported Stage 0 owner objects:
   `ProgressCallback`; progress helpers/constants from `_progress_done` through
