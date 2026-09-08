@@ -28,6 +28,15 @@ class CloudSyncError(Exception):
     pass
 
 
+class CloudImageBytesNotDesiredError(CloudSyncError):
+    """Raised when a byte upload is attempted for an image the user unchecked.
+
+    The cloud-storage-desired predicate rejects the upload at the client
+    boundary. Recovery flows may opt in explicitly by passing
+    ``recovery_authorized=True`` to the upload method.
+    """
+
+
 class AccountMismatchError(CloudSyncError):
     pass
 

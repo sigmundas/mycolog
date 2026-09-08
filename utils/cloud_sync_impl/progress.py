@@ -1,11 +1,10 @@
 """Cloud sync progress tracking infrastructure."""
 from __future__ import annotations
 
-from contextlib import nullcontext
 from contextvars import ContextVar
 from typing import Callable
 
-from .profiling import _cloud_sync_perf_counter, _CLOUD_SYNC_SLOW_STEP_SECONDS, CloudSyncProfiler
+from .profiling import _cloud_sync_perf_counter, _CLOUD_SYNC_SLOW_STEP_SECONDS
 
 
 ProgressCallback = Callable[[str, int, int], None]
@@ -149,12 +148,6 @@ def _current_progress_phase(progress_state: dict | None) -> str | None:
     if isinstance(phase, str) and phase in _SYNC_PROGRESS_PHASE_RANGES:
         return phase
     return None
-
-
-def _cloud_sync_phase_scope(profiler: 'CloudSyncProfiler | None', phase_name: str):
-    if profiler is None:
-        return nullcontext()
-    return profiler.phase(phase_name)
 
 
 def _emit_progress(

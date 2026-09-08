@@ -5,7 +5,7 @@ import json
 import os
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 
@@ -62,6 +62,12 @@ def _cloud_sync_profile_scope(profiler: 'CloudSyncProfiler'):
             _CLOUD_SYNC_PROFILE_CONTEXT.reset(token)
         except Exception:
             pass
+
+
+def _cloud_sync_phase_scope(profiler: 'CloudSyncProfiler | None', phase_name: str):
+    if profiler is None:
+        return nullcontext()
+    return profiler.phase(phase_name)
 
 
 def _cloud_sync_perf_counter() -> float:

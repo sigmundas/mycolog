@@ -3,9 +3,6 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 
-from .progress import _CLOUD_SYNC_SLOW_STEP_SECONDS, _cloud_sync_perf_counter, _progress_done, _progress_total
-
-
 _CLOUD_SYNC_SUMMARY_CONTEXT: ContextVar[dict[str, int] | None] = ContextVar(
     'cloud_sync_summary',
     default=None,

@@ -112,6 +112,7 @@ from utils.cloud_sync_impl.errors import (
     ObservationIdentityConflictError,
     ImageIdentityConflictError,
     CloudSessionAccountMismatchError,
+    CloudImageBytesNotDesiredError,
     ACCOUNT_MISMATCH_MESSAGE,
     _SUPABASE_TRANSIENT_STATUS_CODES,
     _SUPABASE_TRANSIENT_ERROR_HINTS,
@@ -135,6 +136,7 @@ from utils.cloud_sync_impl.profiling import (
     _cloud_sync_debug_enabled,
     _cloud_sync_current_profiler,
     _cloud_sync_profile_scope,
+    _cloud_sync_phase_scope,
     _cloud_sync_perf_counter,
     _cloud_sync_profile_print,
     CloudSyncProfiler,
@@ -152,7 +154,6 @@ from utils.cloud_sync_impl.progress import (
     _sync_progress_percent,
     _set_progress_phase,
     _current_progress_phase,
-    _cloud_sync_phase_scope,
     _emit_progress,
     _advance_progress,
     _extend_progress_total,
@@ -202,24 +203,6 @@ _SUPABASE_PROFILE_UPLOAD_TIMEOUT = 60
 _SUPABASE_REQUEST_MAX_ATTEMPTS = 4
 _SUPABASE_REQUEST_BACKOFF_BASE_SECONDS = 0.5
 _SUPABASE_REQUEST_BACKOFF_MAX_SECONDS = 8.0
-_SUPABASE_TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
-_SUPABASE_TRANSIENT_ERROR_HINTS = (
-    'bad gateway',
-    'connection aborted',
-    'connection refused',
-    'connection reset',
-    'could not connect to server',
-    'gateway timeout',
-    'postgrest unavailable',
-    'schema cache',
-    'service unavailable',
-    'temporarily unavailable',
-    'timed out',
-    'timeout',
-)
-_CLOUD_TEMPORARILY_UNAVAILABLE_MESSAGE = (
-    'Supabase/cloud sync is temporarily unavailable; local data was not overwritten.'
-)
 _CLOUD_LAST_CHILD_SAFETY_PULL_AT_SETTING = 'cloud_last_child_safety_pull_at'
 _CLOUD_CHILD_SAFETY_PULL_INTERVAL_HOURS = 24
 _CLOUD_MEASUREMENT_RECONCILE_VERSION_SETTING = 'cloud_measurement_reconcile_version'
@@ -4690,15 +4673,6 @@ def cloud_image_bytes_desired(
         return False
     excluded = _cloud_image_storage_excluded_image_ids(obs_id)
     return local_image_id not in excluded
-
-
-class CloudImageBytesNotDesiredError(CloudSyncError):
-    """Raised when a byte upload is attempted for an image the user unchecked.
-
-    The cloud-storage-desired predicate rejects the upload at the client
-    boundary. Recovery flows may opt in explicitly by passing
-    ``recovery_authorized=True`` to the upload method.
-    """
 
 
 def _cloud_image_storage_initialized(observation_id: int | str) -> bool:

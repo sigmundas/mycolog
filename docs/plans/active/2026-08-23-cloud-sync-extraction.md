@@ -4,6 +4,22 @@ Status: authoritative planning document for the staged decomposition and hardeni
 
 ## Agent handoff
 
+- **Stage 0 final ownership cleanup (2026-09-08):** Corrected four remaining
+  frozen-manifest discrepancies on top of corrective candidate `4dc6b8259a34fef32c9f2c8645e9a8f413beae7d`: the facade now retains the imported
+  `_SUPABASE_TRANSIENT_STATUS_CODES`, `_SUPABASE_TRANSIENT_ERROR_HINTS`, and
+  `_CLOUD_TEMPORARILY_UNAVAILABLE_MESSAGE` objects without redefining them;
+  `CloudImageBytesNotDesiredError` now has its sole definition in `errors.py`
+  and is re-exported by the facade; `_cloud_sync_phase_scope` now has its sole
+  definition in `profiling.py` and is re-exported by the facade; and
+  `summary.py` no longer imports `progress.py`. The byte-storage policy and all
+  orchestration behavior remain unmoved. Explicit ownership/static checks: 7
+  passed. Validation: direct affected owner tests 98 passed; frozen focused
+  selection 170 passed; frozen broader selection 1,740 passed / 6 skipped;
+  additional-consumer selection 203 passed; `git diff --check` and Stage 0
+  `py_compile` passed. The six Stage 6l cross-repository skips remain
+  unavailable evidence, not passes. Candidate commit: pending creation on
+  `review/cloud-sync-prestage-2026-09-08`; stop for independent review after
+  push. No Stage 1 work was performed.
 - **Stage 0 facade corrective pass (2026-09-08):** Removed the remaining
   facade definitions that shadowed the imported Stage 0 owner objects:
   `ProgressCallback`; progress helpers/constants from `_progress_done` through
