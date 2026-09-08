@@ -58,7 +58,8 @@ def _patch_common(monkeypatch, *, local_obs, remote_obs,
                   apply_remote_fields=None,
                   store_remote_snapshot=None, stamp=None,
                   refresh_signature=None, image_updates=None,
-                  fail_snapshot=False):
+                  fail_snapshot=False, push_spore_mosaic=None,
+                  push_spore_mosaic_impl=None):
     """Central monkeypatch bundle so each test only overrides what it cares about."""
     local_images = local_images or []
     remote_images = remote_images or []
@@ -77,6 +78,16 @@ def _patch_common(monkeypatch, *, local_obs, remote_obs,
     stamp_calls = [] if stamp is None else stamp
     refresh_calls = [] if refresh_signature is None else refresh_signature
     image_update_calls = [] if image_updates is None else image_updates
+    push_spore_mosaic_calls = [] if push_spore_mosaic is None else push_spore_mosaic
+
+    def _default_push_spore_mosaic(*a, **k):
+        push_spore_mosaic_calls.append(a[1:])
+        return cloud_sync.MOSAIC_STATUS_GENERATED
+    monkeypatch.setattr(
+        cloud_sync, "_push_spore_mosaic_for_observation",
+        push_spore_mosaic_impl if push_spore_mosaic_impl is not None
+        else _default_push_spore_mosaic,
+    )
 
     monkeypatch.setattr(cloud_sync.ObservationDB, "get_observation", lambda _id: dict(local_obs))
     monkeypatch.setattr(cloud_sync.ImageDB, "get_images_for_observation",
@@ -128,6 +139,7 @@ def _patch_common(monkeypatch, *, local_obs, remote_obs,
         'stamp': stamp_calls,
         'refresh_signature': refresh_calls,
         'image_updates': image_update_calls,
+        'push_spore_mosaic': push_spore_mosaic_calls,
     }
 
 
@@ -378,6 +390,494 @@ def test_keep_local_only_measurement_produces_no_writes(monkeypatch):
     assert tracker['push_measurements'] == []
     assert tracker['import_remote_measurements'] == []
     assert any(op['op'] == 'keep_asymmetric_measurement' for op in result['operations'])
+    assert tracker['push_spore_mosaic'] == []
+
+
+# ── Public spore mosaic after a reviewed measurement upload (stage mosaic-1) ─
+
+def test_reviewed_measurement_upload_generates_mosaic_before_finalization(monkeypatch):
+    """A reviewed local->cloud measurement upload runs the canonical mosaic
+    helper before snapshot/signature/stamp finalization. The mosaic helper's
+    own eligibility query only requires ``images.cloud_id``/measurement
+    ``cloud_id`` (utils/cloud_sync.py:23044-23078), so this also covers a
+    metadata-only microscope anchor whose source bytes are never uploaded.
+    """
+    local_obs = {"id": 1, "cloud_id": "obs-cloud"}
+    remote_obs = {"id": "obs-cloud"}
+    local_meas = [{"id": 42, "image_id": 5, "length_um": 5.0}]
+    baseline = _baseline_from_state(local_obs, remote_obs, [], [], local_meas, [])
+    tracker = _patch_common(monkeypatch, local_obs=local_obs, remote_obs=remote_obs,
+                            local_measurements=local_meas)
+    order = []
+    monkeypatch.setattr(cloud_sync, "_push_spore_mosaic_for_observation",
+                        lambda *a, **k: order.append('mosaic') or cloud_sync.MOSAIC_STATUS_GENERATED)
+    monkeypatch.setattr(cloud_sync, "_store_remote_snapshot",
+                        lambda *a, **k: order.append('snapshot'))
+    monkeypatch.setattr(cloud_sync, "_stamp_observation_synced",
+                        lambda *a: order.append('stamp'))
+    client = _RecordingClient(remote_obs=remote_obs)
+
+    result = resolve_conflict_plan(client, 1, plan={
+        'baseline': baseline,
+        'items': [{'kind': 'measurement', 'side': 'local_only',
+                   'local_id': 42, 'choice': 'upload'}],
+    })
+    assert tracker['push_measurements'] == [{42}]
+    assert order == ['mosaic', 'snapshot', 'stamp']
+    ops = {op['op']: op for op in result['operations']}
+    assert ops['push_spore_mosaic']['status'] == 'best_effort_completed'
+    assert ops['push_spore_mosaic']['mosaic_status'] == cloud_sync.MOSAIC_STATUS_GENERATED
+
+
+def test_mosaic_auth_error_blocks_finalization_then_retry_reattempts_without_replaying_push(
+    monkeypatch,
+):
+    """Auth/temporary mosaic failure enters the partial-error path before
+    finalization; a verified retry runs mosaic again without re-pushing the
+    already-completed measurement.
+    """
+    local_obs = {"id": 1, "cloud_id": "obs-cloud"}
+    remote_obs = {"id": "obs-cloud"}
+    local_meas = [{"id": 42, "image_id": 5, "length_um": 5.0}]
+    baseline = _baseline_from_state(local_obs, remote_obs, [], [], local_meas, [])
+    push_calls = []
+    tracker = _patch_common(monkeypatch, local_obs=local_obs, remote_obs=remote_obs,
+                            local_measurements=local_meas, push_measurements=push_calls)
+    # A real push materializes a cloud row; simulate that so the post-push
+    # verification read (material_remote.stable.cloud_id) has something to find.
+    remote_meas_store = []
+    monkeypatch.setattr(cloud_sync, "_pull_remote_measurements_for_images",
+                        lambda *a: [dict(row) for row in remote_meas_store])
+
+    def _push_and_materialize(client_, local_id_, *, measurement_ids):
+        push_calls.append(measurement_ids)
+        for mid in measurement_ids:
+            remote_meas_store.append({
+                'id': f'm{mid}', 'desktop_id': mid,
+                'image_id': 'img-cloud-5', 'length_um': 5.0,
+            })
+    monkeypatch.setattr(cloud_sync, "_push_measurements_for_observation", _push_and_materialize)
+    mosaic_calls = []
+
+    def _mosaic_fails_once(client_, local_id_, cloud_id_, **k):
+        mosaic_calls.append((local_id_, cloud_id_))
+        if len(mosaic_calls) == 1:
+            raise cloud_sync.CloudTemporarilyUnavailableError('cloud unavailable')
+        return cloud_sync.MOSAIC_STATUS_GENERATED
+
+    monkeypatch.setattr(cloud_sync, "_push_spore_mosaic_for_observation", _mosaic_fails_once)
+    client = _RecordingClient(remote_obs=remote_obs)
+    plan = {
+        'baseline': baseline,
+        'items': [{'kind': 'measurement', 'side': 'local_only',
+                   'local_id': 42, 'choice': 'upload'}],
+    }
+
+    with pytest.raises(cloud_sync.PartialConflictPlanError) as exc_info:
+        resolve_conflict_plan(client, 1, plan=plan)
+    partial = exc_info.value.partial_result
+    assert tracker['store_remote_snapshot'] == []
+    assert tracker['stamp'] == []
+    assert push_calls == [{42}]
+    completed_ops = [op for op in partial['operations'] if op.get('status') == 'completed']
+    assert any(op['op'] == 'push_measurement' and op.get('local_id') == 42
+               for op in completed_ops)
+    failed_ops = [op for op in partial['operations'] if op.get('status') == 'failed']
+    assert any(op['op'] == 'push_spore_mosaic' for op in failed_ops)
+
+    result = resolve_conflict_plan(client, 1, plan=plan, prior_result=partial)
+    # Only one attempted push (the original); retry never re-pushed measurement 42.
+    assert push_calls == [{42}]
+    assert len(mosaic_calls) == 2
+    assert result['plan_applied']
+    ops = {op['op']: op for op in result['operations']}
+    assert ops['push_spore_mosaic']['status'] == 'best_effort_completed'
+
+
+def test_ordinary_mosaic_error_does_not_block_finalization(monkeypatch):
+    """A non-auth/non-temporary mosaic failure is best-effort: it is logged,
+    does not raise, and finalization still runs — matching the existing
+    mosaic error policy used by push_all/resolve_conflict_keep_local.
+    """
+    local_obs = {"id": 1, "cloud_id": "obs-cloud"}
+    remote_obs = {"id": "obs-cloud"}
+    local_meas = [{"id": 42, "image_id": 5, "length_um": 5.0}]
+    baseline = _baseline_from_state(local_obs, remote_obs, [], [], local_meas, [])
+
+    def _mosaic_ordinary_error(*a, **k):
+        raise ValueError('render failure')
+
+    tracker = _patch_common(monkeypatch, local_obs=local_obs, remote_obs=remote_obs,
+                            local_measurements=local_meas,
+                            push_spore_mosaic_impl=_mosaic_ordinary_error)
+    client = _RecordingClient(remote_obs=remote_obs)
+
+    result = resolve_conflict_plan(client, 1, plan={
+        'baseline': baseline,
+        'items': [{'kind': 'measurement', 'side': 'local_only',
+                   'local_id': 42, 'choice': 'upload'}],
+    })
+    assert result['plan_applied']
+    assert tracker['store_remote_snapshot'] != []
+    assert tracker['stamp'] != []
+    ops = {op['op']: op for op in result['operations']}
+    assert ops['push_spore_mosaic']['status'] == 'best_effort_failed'
+
+
+def test_field_only_plan_has_no_mosaic_write(monkeypatch):
+    local_obs = {"id": 1, "cloud_id": "obs-cloud", "common_name": "local"}
+    remote_obs = {"id": "obs-cloud", "common_name": "cloud"}
+    baseline = _baseline_from_state(local_obs, remote_obs, [], [], [], [])
+    tracker = _patch_common(monkeypatch, local_obs=local_obs, remote_obs=remote_obs)
+    client = _RecordingClient(remote_obs=remote_obs)
+
+    resolve_conflict_plan(client, 1, plan={
+        'baseline': baseline,
+        'items': [{'kind': 'field', 'field': 'common_name', 'choice': 'cloud'}],
+    })
+    assert tracker['push_spore_mosaic'] == []
+
+
+def test_import_only_measurement_plan_has_no_mosaic_write(monkeypatch):
+    local_obs = {"id": 1, "cloud_id": "obs-cloud"}
+    remote_obs = {"id": "obs-cloud"}
+    local_meas = [{"id": 31, "cloud_id": "m31", "image_id": 5, "length_um": 8.0}]
+    remote_meas = [{"id": "m31", "desktop_id": 31, "image_id": "img-cloud-5", "length_um": 9.5}]
+    baseline = _baseline_from_state(local_obs, remote_obs, [], [], local_meas, remote_meas)
+    tracker = _patch_common(monkeypatch, local_obs=local_obs, remote_obs=remote_obs,
+                            local_measurements=local_meas, remote_measurements=remote_meas)
+    client = _RecordingClient(remote_obs=remote_obs)
+
+    resolve_conflict_plan(client, 1, plan={
+        'baseline': baseline,
+        'items': [{'kind': 'measurement', 'side': 'matched',
+                   'local_id': 31, 'cloud_id': 'm31', 'choice': 'cloud'}],
+    })
+    assert tracker['push_spore_mosaic'] == []
+
+
+def test_mixed_upload_and_keep_local_asymmetry_skips_mosaic(monkeypatch):
+    """A plan that both uploads one measurement and keeps another local-only
+    conservatively skips mosaic work: the observation-wide mosaic helper
+    cannot be proven to match only the reviewed/uploaded state.
+    """
+    local_obs = {"id": 1, "cloud_id": "obs-cloud"}
+    remote_obs = {"id": "obs-cloud"}
+    local_meas = [
+        {"id": 42, "image_id": 5, "length_um": 5.0},
+        {"id": 99, "image_id": 5, "length_um": 9.0},
+    ]
+    baseline = _baseline_from_state(local_obs, remote_obs, [], [], local_meas, [])
+    tracker = _patch_common(monkeypatch, local_obs=local_obs, remote_obs=remote_obs,
+                            local_measurements=local_meas)
+    client = _RecordingClient(remote_obs=remote_obs)
+
+    result = resolve_conflict_plan(client, 1, plan={
+        'baseline': baseline,
+        'items': [
+            {'kind': 'measurement', 'side': 'local_only',
+             'local_id': 42, 'choice': 'upload'},
+            {'kind': 'measurement', 'side': 'local_only',
+             'local_id': 99, 'choice': 'keep_local'},
+        ],
+    })
+    assert tracker['push_measurements'] == [{42}]
+    assert tracker['push_spore_mosaic'] == []
+    ops = {op['op']: op for op in result['operations']}
+    assert ops['push_spore_mosaic']['status'] == 'skipped_asymmetry'
+
+
+def test_asymmetry_from_previous_snapshot_skips_mosaic_on_later_push(monkeypatch):
+    """Asymmetry accepted in an earlier plan (not this round's items) still
+    forces the conservative skip, since it survives in the merged snapshot.
+    """
+    local_obs = {"id": 1, "cloud_id": "obs-cloud"}
+    remote_obs = {"id": "obs-cloud"}
+    local_meas = [{"id": 99, "image_id": 5, "length_um": 9.0}]
+    baseline = _baseline_from_state(local_obs, remote_obs, [], [], local_meas, [])
+    stored_snapshot = {'value': ''}
+
+    def _fake_store(client, cloud_id, *args, **kwargs):
+        stored_snapshot['value'] = cloud_sync._cloud_observation_snapshot(
+            {"id": cloud_id}, [], [],
+            accepted_asymmetry=kwargs.get('accepted_asymmetry'),
+        )
+
+    _patch_common(monkeypatch, local_obs=local_obs, remote_obs=remote_obs,
+                  local_measurements=local_meas)
+    monkeypatch.setattr(cloud_sync, "_store_remote_snapshot", _fake_store)
+    monkeypatch.setattr(cloud_sync, "_load_cloud_observation_snapshot",
+                        lambda _cid: stored_snapshot['value'])
+    client = _RecordingClient(remote_obs=remote_obs)
+
+    # First plan: accept measurement 99 as local-only (no push, no mosaic).
+    resolve_conflict_plan(client, 1, plan={
+        'baseline': baseline,
+        'items': [{'kind': 'measurement', 'side': 'local_only',
+                   'local_id': 99, 'choice': 'keep_local'}],
+    })
+    assert stored_snapshot['value']
+
+    # Second, unrelated plan: a fresh conflict uploads measurement 42.
+    # Measurement 99 is untouched by this plan and its acceptance still
+    # resolves against current state, so the mosaic step must skip.
+    local_meas2 = local_meas + [{"id": 42, "image_id": 5, "length_um": 5.0}]
+    baseline2 = _baseline_from_state(local_obs, remote_obs, [], [], local_meas2, [])
+    tracker2 = _patch_common(monkeypatch, local_obs=local_obs, remote_obs=remote_obs,
+                             local_measurements=local_meas2)
+    monkeypatch.setattr(cloud_sync, "_store_remote_snapshot", _fake_store)
+    monkeypatch.setattr(cloud_sync, "_load_cloud_observation_snapshot",
+                        lambda _cid: stored_snapshot['value'])
+
+    result = resolve_conflict_plan(client, 1, plan={
+        'baseline': baseline2,
+        'items': [{'kind': 'measurement', 'side': 'local_only',
+                   'local_id': 42, 'choice': 'upload'}],
+    })
+    assert tracker2['push_measurements'] == [{42}]
+    assert tracker2['push_spore_mosaic'] == []
+    ops = {op['op']: op for op in result['operations']}
+    assert ops['push_spore_mosaic']['status'] == 'skipped_asymmetry'
+    assert result['accepted_asymmetry']['local_only_measurements']
+
+
+def test_mixed_plan_retry_still_skips_mosaic(monkeypatch):
+    """A retry of a mixed upload+keep-local plan must not become eligible for
+    mosaic work merely because the measurement push already completed.
+    """
+    local_obs = {"id": 1, "cloud_id": "obs-cloud"}
+    remote_obs = {"id": "obs-cloud"}
+    local_meas = [
+        {"id": 42, "image_id": 5, "length_um": 5.0},
+        {"id": 99, "image_id": 5, "length_um": 9.0},
+    ]
+    baseline = _baseline_from_state(local_obs, remote_obs, [], [], local_meas, [])
+    tracker = _patch_common(monkeypatch, local_obs=local_obs, remote_obs=remote_obs,
+                            local_measurements=local_meas, fail_snapshot=True)
+    remote_meas_store = []
+    monkeypatch.setattr(cloud_sync, "_pull_remote_measurements_for_images",
+                        lambda *a: [dict(row) for row in remote_meas_store])
+
+    def _push_and_materialize(client_, local_id_, *, measurement_ids):
+        tracker['push_measurements'].append(measurement_ids)
+        for mid in measurement_ids:
+            remote_meas_store.append({
+                'id': f'm{mid}', 'desktop_id': mid,
+                'image_id': 'img-cloud-5', 'length_um': 5.0,
+            })
+    monkeypatch.setattr(cloud_sync, "_push_measurements_for_observation", _push_and_materialize)
+    client = _RecordingClient(remote_obs=remote_obs)
+    plan = {
+        'baseline': baseline,
+        'items': [
+            {'kind': 'measurement', 'side': 'local_only',
+             'local_id': 42, 'choice': 'upload'},
+            {'kind': 'measurement', 'side': 'local_only',
+             'local_id': 99, 'choice': 'keep_local'},
+        ],
+    }
+    with pytest.raises(cloud_sync.PartialConflictPlanError) as exc_info:
+        resolve_conflict_plan(client, 1, plan=plan)
+    partial = exc_info.value.partial_result
+    non_failed_ops = {op['op']: op for op in partial['operations']
+                      if op.get('status') != 'failed'}
+    assert non_failed_ops['push_spore_mosaic']['status'] == 'skipped_asymmetry'
+    assert tracker['push_spore_mosaic'] == []
+
+    # Retry: let the previously-failing snapshot store succeed this time.
+    monkeypatch.setattr(cloud_sync, "_store_remote_snapshot",
+                        lambda *a, **k: tracker['store_remote_snapshot'].append((a, k)))
+    result = resolve_conflict_plan(client, 1, plan=plan, prior_result=partial)
+    assert result['plan_applied']
+    assert tracker['push_spore_mosaic'] == []
+    ops = {op['op']: op for op in result['operations']}
+    assert ops['push_spore_mosaic']['status'] == 'skipped_asymmetry'
+
+
+def test_unresolved_matched_measurement_skips_mosaic_without_accepted_asymmetry(monkeypatch):
+    """Reproduces the independent-review gap: an automatic plan uploads one
+    local-only measurement while a matched cloud-linked measurement differs
+    from cloud and is left out of the plan's items entirely (a genuine
+    two-sided divergence reserved for manual review, per
+    ``_build_plan_from_automatic_decisions``/``finalize_sync_candidates``).
+    ``merged_asymmetry`` never sees measurement 99 because no item names it,
+    so the mosaic step must be proven unsafe some other way.
+
+    Measurement 99 carries ``width_um``/valid ``p1``/``p2`` on both sides
+    (only ``length_um`` disagrees) so it is exactly the row shape the real
+    mosaic SQL (utils/cloud_sync.py:23177-23206) would select — an
+    intentionally short/missing-field row would already be excluded by that
+    SQL regardless of this guard, which would prove nothing.
+    """
+    local_obs = {"id": 1, "cloud_id": "obs-cloud"}
+    remote_obs = {"id": "obs-cloud"}
+    local_images = [{"id": 5, "cloud_id": "img5", "image_type": "microscope",
+                     "scale_microns_per_pixel": 0.25, "resample_scale_factor": 1.0}]
+    remote_images = [{"id": "img5", "desktop_id": 5, "image_type": "microscope",
+                      "scale_microns_per_pixel": 0.25, "resample_scale_factor": 1.0}]
+    local_meas = [
+        {"id": 42, "image_id": 5, "length_um": 5.0},
+        {"id": 99, "cloud_id": "m99", "image_id": 5, "length_um": 9.0,
+         "width_um": 3.0, "p1_x": 0, "p1_y": 0, "p2_x": 1, "p2_y": 1},
+    ]
+    remote_meas = [
+        {"id": "m99", "desktop_id": 99, "image_id": "img5", "length_um": 12.0,
+         "width_um": 3.0, "p1_x": 0, "p1_y": 0, "p2_x": 1, "p2_y": 1},
+    ]
+    baseline = _baseline_from_state(local_obs, remote_obs, local_images, remote_images,
+                                    local_meas, remote_meas)
+    tracker = _patch_common(monkeypatch, local_obs=local_obs, remote_obs=remote_obs,
+                            local_images=local_images, remote_images=remote_images,
+                            local_measurements=local_meas, remote_measurements=remote_meas)
+    client = _RecordingClient(remote_obs=remote_obs)
+
+    # Automatic-only plan: measurement 99's genuine two-sided divergence is
+    # not named by any item, matching what finalize_sync_candidates builds
+    # via _build_plan_from_automatic_decisions before the dialog is offered.
+    plan = cloud_sync._build_plan_from_automatic_decisions({
+        'automatic_decisions': {
+            'media': [{'kind': 'measurement', 'side': 'local_only', 'local_id': 42}],
+        },
+        'plan_baseline': baseline,
+    })
+    result = resolve_conflict_plan(client, 1, plan=plan)
+    assert tracker['push_measurements'] == [{42}]
+    assert tracker['push_spore_mosaic'] == []
+    ops = {op['op']: op for op in result['operations']}
+    assert ops['push_spore_mosaic']['status'] == 'skipped_asymmetry'
+
+
+def test_unresolved_render_relevant_image_scale_skips_mosaic(monkeypatch):
+    """Same gap, but the unresolved difference is the owning microscope
+    image's render scale rather than the measurement's own geometry — the
+    mosaic helper reads both from the current local row (23100 onward).
+
+    Measurement 99 has ``width_um`` set and agrees on geometry between local
+    and remote, isolating the image-scale disagreement as the only unresolved
+    difference; a row missing ``width_um`` would already be excluded by the
+    real mosaic SQL regardless of this guard.
+    """
+    local_obs = {"id": 1, "cloud_id": "obs-cloud"}
+    remote_obs = {"id": "obs-cloud"}
+    local_images = [{"id": 5, "cloud_id": "img5", "image_type": "microscope",
+                     "scale_microns_per_pixel": 0.5, "resample_scale_factor": 1.0}]
+    remote_images = [{"id": "img5", "desktop_id": 5, "image_type": "microscope",
+                      "scale_microns_per_pixel": 0.25, "resample_scale_factor": 1.0}]
+    local_meas = [
+        {"id": 42, "image_id": 5, "length_um": 5.0},
+        {"id": 99, "cloud_id": "m99", "image_id": 5, "length_um": 9.0,
+         "width_um": 3.0, "p1_x": 0, "p1_y": 0, "p2_x": 1, "p2_y": 1},
+    ]
+    remote_meas = [
+        {"id": "m99", "desktop_id": 99, "image_id": "img5", "length_um": 9.0,
+         "width_um": 3.0, "p1_x": 0, "p1_y": 0, "p2_x": 1, "p2_y": 1},
+    ]
+    baseline = _baseline_from_state(local_obs, remote_obs, local_images, remote_images,
+                                    local_meas, remote_meas)
+    tracker = _patch_common(monkeypatch, local_obs=local_obs, remote_obs=remote_obs,
+                            local_images=local_images, remote_images=remote_images,
+                            local_measurements=local_meas, remote_measurements=remote_meas)
+    client = _RecordingClient(remote_obs=remote_obs)
+
+    plan = cloud_sync._build_plan_from_automatic_decisions({
+        'automatic_decisions': {
+            'media': [{'kind': 'measurement', 'side': 'local_only', 'local_id': 42}],
+        },
+        'plan_baseline': baseline,
+    })
+    result = resolve_conflict_plan(client, 1, plan=plan)
+    assert tracker['push_measurements'] == [{42}]
+    assert tracker['push_spore_mosaic'] == []
+    ops = {op['op']: op for op in result['operations']}
+    assert ops['push_spore_mosaic']['status'] == 'skipped_asymmetry'
+
+
+def test_unresolved_image_type_disagreement_skips_mosaic(monkeypatch):
+    """Second independent-review gap: the local image is microscope but the
+    cloud-approved counterpart is a different ``image_type``. The mosaic SQL
+    (23177-23206) selects purely on the *local* image_type, so an unresolved
+    local/cloud image_type divergence must not let this measurement's tile
+    render from a classification the cloud side has not agreed to, even when
+    every other field (scale, geometry, width_um) already matches.
+    """
+    local_obs = {"id": 1, "cloud_id": "obs-cloud"}
+    remote_obs = {"id": "obs-cloud"}
+    local_images = [{"id": 5, "cloud_id": "img5", "image_type": "microscope",
+                     "scale_microns_per_pixel": 0.25, "resample_scale_factor": 1.0}]
+    remote_images = [{"id": "img5", "desktop_id": 5, "image_type": "field",
+                      "scale_microns_per_pixel": 0.25, "resample_scale_factor": 1.0}]
+    local_meas = [
+        {"id": 42, "image_id": 5, "length_um": 5.0},
+        {"id": 99, "cloud_id": "m99", "image_id": 5, "length_um": 9.0,
+         "width_um": 3.0, "p1_x": 0, "p1_y": 0, "p2_x": 1, "p2_y": 1},
+    ]
+    remote_meas = [
+        {"id": "m99", "desktop_id": 99, "image_id": "img5", "length_um": 9.0,
+         "width_um": 3.0, "p1_x": 0, "p1_y": 0, "p2_x": 1, "p2_y": 1},
+    ]
+    baseline = _baseline_from_state(local_obs, remote_obs, local_images, remote_images,
+                                    local_meas, remote_meas)
+    tracker = _patch_common(monkeypatch, local_obs=local_obs, remote_obs=remote_obs,
+                            local_images=local_images, remote_images=remote_images,
+                            local_measurements=local_meas, remote_measurements=remote_meas)
+    client = _RecordingClient(remote_obs=remote_obs)
+
+    plan = cloud_sync._build_plan_from_automatic_decisions({
+        'automatic_decisions': {
+            'media': [{'kind': 'measurement', 'side': 'local_only', 'local_id': 42}],
+        },
+        'plan_baseline': baseline,
+    })
+    result = resolve_conflict_plan(client, 1, plan=plan)
+    assert tracker['push_measurements'] == [{42}]
+    assert tracker['push_spore_mosaic'] == []
+    ops = {op['op']: op for op in result['operations']}
+    assert ops['push_spore_mosaic']['status'] == 'skipped_asymmetry'
+
+
+def test_fully_reconciled_matched_measurement_and_image_mosaic_still_runs(monkeypatch):
+    """The new render-state guard must not over-block: a matched cloud-linked
+    measurement (and its owning image's scale and image_type) that already
+    agrees with cloud lets the mosaic step proceed alongside an unrelated
+    upload.
+
+    Measurement 99 carries ``width_um`` and valid ``p1``/``p2`` — the same
+    row shape ``test_cloud_spore_mosaic_unchanged_sync.py`` proves the real
+    mosaic SQL actually selects — so this positive case is not merely passing
+    because the fixture would already be excluded on its own.
+    """
+    local_obs = {"id": 1, "cloud_id": "obs-cloud"}
+    remote_obs = {"id": "obs-cloud"}
+    local_images = [{"id": 5, "cloud_id": "img5", "image_type": "microscope",
+                     "scale_microns_per_pixel": 0.25, "resample_scale_factor": 1.0}]
+    remote_images = [{"id": "img5", "desktop_id": 5, "image_type": "microscope",
+                      "scale_microns_per_pixel": 0.25, "resample_scale_factor": 1.0}]
+    local_meas = [
+        {"id": 42, "image_id": 5, "length_um": 5.0},
+        {"id": 99, "cloud_id": "m99", "image_id": 5, "length_um": 9.0,
+         "width_um": 3.0, "p1_x": 0, "p1_y": 0, "p2_x": 1, "p2_y": 1},
+    ]
+    remote_meas = [
+        {"id": "m99", "desktop_id": 99, "image_id": "img5", "length_um": 9.0,
+         "width_um": 3.0, "p1_x": 0, "p1_y": 0, "p2_x": 1, "p2_y": 1},
+    ]
+    baseline = _baseline_from_state(local_obs, remote_obs, local_images, remote_images,
+                                    local_meas, remote_meas)
+    tracker = _patch_common(monkeypatch, local_obs=local_obs, remote_obs=remote_obs,
+                            local_images=local_images, remote_images=remote_images,
+                            local_measurements=local_meas, remote_measurements=remote_meas)
+    client = _RecordingClient(remote_obs=remote_obs)
+
+    plan = cloud_sync._build_plan_from_automatic_decisions({
+        'automatic_decisions': {
+            'media': [{'kind': 'measurement', 'side': 'local_only', 'local_id': 42}],
+        },
+        'plan_baseline': baseline,
+    })
+    result = resolve_conflict_plan(client, 1, plan=plan)
+    assert tracker['push_measurements'] == [{42}]
+    ops = {op['op']: op for op in result['operations']}
+    assert ops['push_spore_mosaic']['status'] == 'best_effort_completed'
 
 
 # ── Resolver-side identity guard ─────────────────────────────────────────────

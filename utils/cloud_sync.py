@@ -13927,6 +13927,81 @@ def _iso_timestamp_now() -> str:
         return ''
 
 
+def _mosaic_render_state_unverified(
+    *,
+    local_images: list[dict],
+    remote_images: list[dict],
+    local_measurements: list[dict],
+    remote_measurements: list[dict],
+) -> bool:
+    """True when some mosaic-eligible measurement's geometry, or its owning
+    image's render scale or image_type, cannot be proven equal to the
+    cloud-approved state.
+
+    Mirrors ``_push_spore_mosaic_for_observation``'s own eligibility query
+    (~23100 onward): a cloud-linked microscope image and a cloud-linked
+    measurement are both required for a tile. ``merged_asymmetry`` only
+    tracks *accepted* local-only/cloud-only entries, so a matched local/cloud
+    pair that a plan's automatic items never addressed (a genuine two-sided
+    divergence left for manual review) would otherwise be invisible here —
+    checking it directly against the reconciled state closes that gap without
+    a second renderer or a new persisted eligibility format.
+    """
+    local_images_by_id = {
+        _safe_int(row.get('id')): row
+        for row in (local_images or []) if _safe_int(row.get('id'))
+    }
+    remote_images_by_cloud_id = {
+        str(row.get('id') or '').strip(): row
+        for row in (remote_images or []) if str(row.get('id') or '').strip()
+    }
+    remote_measurements_by_cloud_id = {
+        str(row.get('id') or '').strip(): row
+        for row in (remote_measurements or []) if str(row.get('id') or '').strip()
+    }
+    for measurement in local_measurements or []:
+        measurement_cloud_id = str(measurement.get('cloud_id') or '').strip()
+        if not measurement_cloud_id:
+            continue
+        image = local_images_by_id.get(_safe_int(measurement.get('image_id')))
+        if not image or str(image.get('image_type') or '').strip() != 'microscope':
+            continue
+        image_cloud_id = str(image.get('cloud_id') or '').strip()
+        if not image_cloud_id:
+            continue
+        remote_measurement = remote_measurements_by_cloud_id.get(measurement_cloud_id)
+        if remote_measurement is None:
+            return True
+        if not _measurement_payloads_match(
+            measurement, remote_measurement, cloud_image_id=image_cloud_id,
+        ):
+            return True
+        remote_image = remote_images_by_cloud_id.get(image_cloud_id)
+        if remote_image is None:
+            return True
+        if str(remote_image.get('image_type') or '').strip() != 'microscope':
+            # The local image is microscope (selected by the query above),
+            # but the cloud-approved image_type disagrees. The mosaic SQL
+            # (~23190) selects purely on the *local* image_type, so an
+            # unresolved local/cloud image_type divergence would otherwise
+            # let this measurement's tile render from a classification the
+            # cloud side has not agreed to.
+            return True
+        for field in ('scale_microns_per_pixel', 'resample_scale_factor'):
+            local_value = _normalize_measurement_float_value(image.get(field))
+            remote_value = _normalize_measurement_float_value(remote_image.get(field))
+            if local_value is None or remote_value is None:
+                if local_value != remote_value:
+                    return True
+                continue
+            if not math.isclose(
+                local_value, remote_value,
+                rel_tol=_MEASUREMENT_FLOAT_REL_TOL, abs_tol=_MEASUREMENT_FLOAT_ABS_TOL,
+            ):
+                return True
+    return False
+
+
 def resolve_conflict_plan(
     client: "SporelyCloudClient",
     local_id: int,
@@ -14701,6 +14776,75 @@ def resolve_conflict_plan(
         matched_local_measurement_ids=matched_local_measurement_ids_now,
         matched_cloud_measurement_ids=matched_cloud_measurement_ids,
     )
+
+    # ── Step 9b: public spore mosaic for a reviewed measurement upload ────────
+    # Restore the observation-wide mosaic step that normal push_all (19303)
+    # and legacy resolve_conflict_keep_local (11825) already run after a
+    # measurement push. ``executed`` also carries forward verified prior
+    # push_measurement completions (status 'already_complete') from a partial
+    # retry, so a retry that only had mosaic work outstanding still runs it —
+    # checking just this call's ``ops`` would lose that upload on retry.
+    pushed_measurement_this_plan = any(
+        op.get('op') == 'push_measurement' and op.get('status') in {
+            'completed', 'already_complete',
+        }
+        for op in executed
+    )
+    # Conservative mixed-asymmetry guard: the mosaic helper selects an
+    # observation-wide set of cloud-linked eligible measurements
+    # (_push_spore_mosaic_for_observation, ~23044-23078), so any retained
+    # measurement OR image asymmetry — new, carried from a prior plan, or
+    # inherited from a previous snapshot — means the local render-relevant
+    # state cannot be proven equal to the cloud-approved set. This skips
+    # mosaic work for every kind of retained asymmetry (including image-only
+    # asymmetry unrelated to spore geometry, e.g. a kept-local field photo);
+    # distinguishing microscope-relevant asymmetry from harmless asymmetry is
+    # deferred to a later stage.
+    mosaic_asymmetry_present = bool(
+        merged_asymmetry.get('local_only_images')
+        or merged_asymmetry.get('cloud_only_images')
+        or merged_asymmetry.get('local_only_measurements')
+        or merged_asymmetry.get('cloud_only_measurements')
+    )
+    # ``merged_asymmetry`` only records *accepted* keep-local/keep-cloud
+    # entries. A genuine two-sided ("both changed") matched measurement or
+    # image-render difference that this plan's automatic items left for
+    # manual review never becomes an accepted-asymmetry entry, yet still
+    # means the local render-relevant state is not proven to match the
+    # cloud-approved set. Guard against that separately.
+    if not mosaic_asymmetry_present:
+        mosaic_asymmetry_present = _mosaic_render_state_unverified(
+            local_images=reconciled_local_images,
+            remote_images=reconciled_remote_images,
+            local_measurements=reconciled_local_measurements,
+            remote_measurements=reconciled_remote_measurements,
+        )
+    if pushed_measurement_this_plan and mosaic_asymmetry_present:
+        executed.append({'op': 'push_spore_mosaic', 'status': 'skipped_asymmetry'})
+    elif pushed_measurement_this_plan:
+        try:
+            mosaic_status = _push_spore_mosaic_for_observation(
+                client, int(local_id), resolved_cloud_id,
+            )
+        except Exception as exc:
+            if is_cloud_auth_error(exc) or is_cloud_temporary_unavailable_error(exc):
+                raise _partial_error(
+                    f'Could not push spore mosaic: {exc}',
+                    failing={'op': 'push_spore_mosaic'}, cause=exc,
+                )
+            print(
+                f'[cloud_sync] Mosaic push errored while resolving conflict for '
+                f'observation {int(local_id)}: {exc}',
+                flush=True,
+            )
+            # Non-'completed'/'verification_pending' status: this is a
+            # best-effort side effect, not part of the retry-verified op
+            # vocabulary that _verify_completed_ops_and_rebase understands.
+            executed.append({'op': 'push_spore_mosaic', 'status': 'best_effort_failed',
+                             'error': str(exc)})
+        else:
+            executed.append({'op': 'push_spore_mosaic', 'status': 'best_effort_completed',
+                             'mosaic_status': mosaic_status})
 
     # ── Step 10: finalize in order — snapshot → signature → stamp ─────────────
     try:
