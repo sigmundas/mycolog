@@ -279,7 +279,20 @@ Record, but do not fix during the pre-stage:
 - duplicated push/pull reconciliation logic;
 - unnecessary no-op remote writes where still present;
 - deeply distributed ownership of sync-state mutation;
-- any known anchor reservation/adoption risks already documented elsewhere.
+- any known anchor reservation/adoption risks already documented elsewhere;
+- conflict-plan-local reconciliation re-derivation: `_mosaic_render_state_
+  unverified` (`utils/cloud_sync.py:13930`, added 2026-09-07 for the
+  "Spore mosaic after conflict resolution" work) needed two independent
+  review-driven patches in the same day — first because the
+  accepted-asymmetry guard didn't cover unresolved *matched*
+  measurement/image differences an automatic plan never names, then
+  because it checked only the local image's `image_type`, not its remote
+  counterpart's. Both gaps existed because `resolve_conflict_plan`
+  re-derives "is this state fully agreed with remote" itself instead of
+  reusing the canonical comparison logic Stage 4a is meant to own
+  (`_analyze_observation_push_conflicts`, `_measurement_payloads_match`).
+  See `docs/plans/active/2026-09-07-conflict-resolution-spore-mosaic.md`
+  for the full review history.
 
 These items feed Stage 6.5 and Stage 8.
 
@@ -919,6 +932,21 @@ ReconciliationPlan(
 ```
 
 The plan describes **what should happen**.
+
+### Design input: derived best-effort products should query the plan, not re-derive agreement
+
+Best-effort products with their own observation-wide selection criteria —
+public spore mosaic generation is the concrete case (see the Pre-stage D
+entry above) — should determine eligibility by querying the
+`ReconciliationPlan` for "any unresolved action relevant to this product's
+selection" rather than by walking reconciled state a second time with a
+bespoke helper. The mosaic guard needed two separate patches in one review
+cycle because it had to be told about each field the mosaic SQL's selection
+depends on (measurement geometry, image scale, then image type) one at a
+time. A plan-shaped query does not have this failure mode: as long as the
+reconciliation layer classifies every field the mosaic (or any future
+derived product) depends on, "no unresolved relevant action" is a single
+check against the plan, not a growing bespoke comparison function.
 
 It does not:
 
