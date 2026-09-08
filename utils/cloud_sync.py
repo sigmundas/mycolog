@@ -101,6 +101,74 @@ from utils.spore_summary_sync import (
 
 logger = logging.getLogger(__name__)
 
+# Re-exports from cloud_sync_impl modules (mechanical extraction of leaf infrastructure)
+from utils.cloud_sync_impl.errors import (
+    CloudSyncError,
+    AccountMismatchError,
+    CloudTemporarilyUnavailableError,
+    CloudReauthRequiredError,
+    PullOnlyModeError,
+    PartialConflictPlanError,
+    ObservationIdentityConflictError,
+    ImageIdentityConflictError,
+    CloudSessionAccountMismatchError,
+    ACCOUNT_MISMATCH_MESSAGE,
+    _SUPABASE_TRANSIENT_STATUS_CODES,
+    _SUPABASE_TRANSIENT_ERROR_HINTS,
+    _CLOUD_TEMPORARILY_UNAVAILABLE_MESSAGE,
+    _CLOUD_AUTH_ERROR_HINTS,
+    _CLOUD_REAUTH_REQUIRED_HINTS,
+    _collect_sync_error_details,
+    format_cloud_sync_error_details,
+    is_cloud_auth_error,
+    is_cloud_reauth_required_error,
+    is_cloud_temporary_unavailable_error,
+)
+from utils.cloud_sync_impl.profiling import (
+    _CLOUD_DEBUG_TIMING,
+    _cloud_timing_log,
+    _CLOUD_SYNC_PROFILE_ENV,
+    _CLOUD_SYNC_DEBUG_ENV,
+    _CLOUD_SYNC_PROFILE_CONTEXT,
+    _CLOUD_SYNC_SLOW_STEP_SECONDS,
+    _cloud_sync_profile_enabled,
+    _cloud_sync_debug_enabled,
+    _cloud_sync_current_profiler,
+    _cloud_sync_profile_scope,
+    _cloud_sync_perf_counter,
+    _cloud_sync_profile_print,
+    CloudSyncProfiler,
+)
+from utils.cloud_sync_impl.progress import (
+    ProgressCallback,
+    _CLOUD_SYNC_PROGRESS_TRACE_CONTEXT,
+    _cloud_sync_progress_trace,
+    _progress_done,
+    _progress_total,
+    _trace_progress_gap,
+    _SYNC_PROGRESS_PHASES,
+    _SYNC_PROGRESS_PHASE_RANGES,
+    _SYNC_PROGRESS_TOTAL_UNITS,
+    _sync_progress_percent,
+    _set_progress_phase,
+    _current_progress_phase,
+    _cloud_sync_phase_scope,
+    _emit_progress,
+    _advance_progress,
+    _extend_progress_total,
+)
+from utils.cloud_sync_impl.summary import (
+    _CLOUD_SYNC_SUMMARY_CONTEXT,
+    _cloud_sync_current_summary,
+    _cloud_sync_summary_scope,
+    _SYNC_SUMMARY_KEYS,
+    _new_sync_summary,
+    _sync_summary_value,
+    _increment_sync_summary,
+    format_sync_summary,
+)
+from utils.cloud_sync_impl.common import _safe_int
+
 # Sporely-py's source_app_version for public.observation_spore_summaries
 # rows (Stage D). Set once at app startup via
 # ``set_cloud_sync_source_app_version(main.APP_VERSION)`` — kept as a
@@ -124,17 +192,6 @@ def _current_source_app_version() -> str | None:
     return _CLOUD_SYNC_SOURCE_APP_VERSION
 
 
-_CLOUD_DEBUG_TIMING = str(os.environ.get('SPORELY_DEBUG_RAW_TIMING') or '').strip().lower() in {'1', 'true', 'yes', 'on'}
-
-
-def _cloud_timing_log(stage: str, start: float | None, *, detail: str = '') -> None:
-    if not _CLOUD_DEBUG_TIMING or start is None:
-        return
-    elapsed_ms = max(0.0, (_cloud_sync_perf_counter() - start) * 1000.0)
-    if detail:
-        print(f"[raw-timing] cloud delete {stage}: {elapsed_ms:.1f} ms | {detail}")
-    else:
-        print(f"[raw-timing] cloud delete {stage}: {elapsed_ms:.1f} ms")
 
 SUPABASE_URL = 'https://zkpjklzfwzefhjluvhfw.supabase.co'
 SUPABASE_KEY = 'sb_publishable_nZrERVFN3WR4Aqn2yggc7Q_siAG1TCV'
@@ -1697,366 +1754,6 @@ _CONFLICT_FIELD_LABELS = {
 ProgressCallback = Callable[[str, int, int], None]
 PreparedImagesCallback = Callable[[dict, ProgressCallback | None], tuple[list[dict], object | None, list[str]]]
 
-_CLOUD_SYNC_PROFILE_ENV = 'SPORELY_CLOUD_SYNC_PROFILE'
-_CLOUD_SYNC_DEBUG_ENV = 'SPORELY_DEBUG_CLOUD_SYNC'
-_CLOUD_SYNC_PROFILE_CONTEXT: ContextVar['CloudSyncProfiler | None'] = ContextVar(
-    'cloud_sync_profiler',
-    default=None,
-)
-_CLOUD_SYNC_SUMMARY_CONTEXT: ContextVar[dict[str, int] | None] = ContextVar(
-    'cloud_sync_summary',
-    default=None,
-)
-
-# A single sync sub-step taking longer than this is logged so a silent UI pause
-# can be traced to the exact calibration / step responsible.
-_CLOUD_SYNC_SLOW_STEP_SECONDS = 1.0
-
-# Per-sync progress trace. When set, every progress message emission records its
-# monotonic timestamp so a gap between two UI updates (i.e. a backend step that
-# produced no progress text) can be logged and traced to whatever was running.
-_CLOUD_SYNC_PROGRESS_TRACE_CONTEXT: ContextVar[dict | None] = ContextVar(
-    'cloud_sync_progress_trace',
-    default=None,
-)
-
-
-def _cloud_sync_progress_trace() -> dict | None:
-    try:
-        return _CLOUD_SYNC_PROGRESS_TRACE_CONTEXT.get()
-    except Exception:
-        return None
-
-
-def _cloud_sync_profile_enabled() -> bool:
-    return str(os.getenv(_CLOUD_SYNC_PROFILE_ENV) or '').strip().lower() in {'1', 'true', 'yes', 'on'}
-
-
-def _cloud_sync_debug_enabled() -> bool:
-    return str(os.getenv(_CLOUD_SYNC_DEBUG_ENV) or '').strip().lower() in {'1', 'true', 'yes', 'on'}
-
-
-def _cloud_sync_current_profiler() -> 'CloudSyncProfiler | None':
-    try:
-        return _CLOUD_SYNC_PROFILE_CONTEXT.get()
-    except Exception:
-        return None
-
-
-def _cloud_sync_current_summary() -> dict[str, int] | None:
-    try:
-        return _CLOUD_SYNC_SUMMARY_CONTEXT.get()
-    except Exception:
-        return None
-
-
-@contextmanager
-def _cloud_sync_profile_scope(profiler: 'CloudSyncProfiler'):
-    token = _CLOUD_SYNC_PROFILE_CONTEXT.set(profiler)
-    try:
-        yield profiler
-    finally:
-        try:
-            _CLOUD_SYNC_PROFILE_CONTEXT.reset(token)
-        except Exception:
-            pass
-
-
-@contextmanager
-def _cloud_sync_summary_scope(sync_summary: dict[str, int]):
-    token = _CLOUD_SYNC_SUMMARY_CONTEXT.set(sync_summary)
-    try:
-        yield sync_summary
-    finally:
-        try:
-            _CLOUD_SYNC_SUMMARY_CONTEXT.reset(token)
-        except Exception:
-            pass
-
-
-def _cloud_sync_phase_scope(profiler: 'CloudSyncProfiler | None', phase_name: str):
-    if profiler is None:
-        return nullcontext()
-    return profiler.phase(phase_name)
-
-
-def _cloud_sync_perf_counter() -> float:
-    try:
-        return time.perf_counter()
-    except Exception:
-        return 0.0
-
-
-def _cloud_sync_profile_print(payload: dict) -> None:
-    try:
-        print(
-            f"[cloud_sync_profile] {json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))}",
-            flush=True,
-        )
-    except Exception:
-        pass
-
-
-@dataclass
-class CloudSyncProfiler:
-    sync_id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
-    started_at: float = field(default_factory=_cloud_sync_perf_counter)
-    phase_durations_ms: dict[str, float] = field(default_factory=dict)
-    download_image_file_calls: int = 0
-    download_image_file_duration_ms: float = 0.0
-    download_image_file_bytes: int = 0
-    generate_all_sizes_calls: int = 0
-    generate_all_sizes_duration_ms: float = 0.0
-    pull_bulk_image_metadata_calls: int = 0
-    pull_bulk_image_metadata_rows: int = 0
-    pull_measurements_for_images_calls: int = 0
-    pull_measurements_for_images_rows: int = 0
-    store_remote_snapshot_fetch_images_count: int = 0
-    store_remote_snapshot_fetch_measurements_count: int = 0
-    retry_missing_cloud_media_branch_runs: int = 0
-    original_upload_calls: int = 0
-    original_upload_bytes: int = 0
-    original_upload_skipped_disabled: int = 0
-    original_upload_skipped_ineligible: int = 0
-    original_upload_skipped_too_large: int = 0
-    original_upload_failed_uploads: int = 0
-    original_download_calls: int = 0
-    original_download_bytes: int = 0
-    original_download_skipped_disabled: int = 0
-    original_download_skipped_missing_key: int = 0
-    original_download_skipped_existing_local_original: int = 0
-    original_download_skipped_existing_cache: int = 0
-    original_download_failed_downloads: int = 0
-
-    def _emit(self, payload: dict) -> None:
-        payload = dict(payload or {})
-        payload.setdefault('sync_id', self.sync_id)
-        _cloud_sync_profile_print(payload)
-
-    def phase(self, phase_name: str):
-        @contextmanager
-        def _phase_scope():
-            start = _cloud_sync_perf_counter()
-            try:
-                yield
-            finally:
-                try:
-                    elapsed_ms = max(0.0, (_cloud_sync_perf_counter() - start) * 1000.0)
-                    key = str(phase_name or '').strip() or 'unknown'
-                    self.phase_durations_ms[key] = self.phase_durations_ms.get(key, 0.0) + elapsed_ms
-                    self._emit({
-                        'event': 'phase',
-                        'phase': key,
-                        'duration_ms': round(elapsed_ms, 3),
-                    })
-                except Exception:
-                    pass
-
-        return _phase_scope()
-
-    def record_download_image_file(self, duration_ms: float, bytes_downloaded: int = 0) -> None:
-        try:
-            self.download_image_file_calls += 1
-            self.download_image_file_duration_ms += max(0.0, float(duration_ms))
-            self.download_image_file_bytes += max(0, int(bytes_downloaded))
-        except Exception:
-            pass
-
-    def record_generate_all_sizes(self, duration_ms: float) -> None:
-        try:
-            self.generate_all_sizes_calls += 1
-            self.generate_all_sizes_duration_ms += max(0.0, float(duration_ms))
-        except Exception:
-            pass
-
-    def record_pull_bulk_image_metadata(self, row_count: int) -> None:
-        try:
-            self.pull_bulk_image_metadata_calls += 1
-            self.pull_bulk_image_metadata_rows += max(0, int(row_count))
-        except Exception:
-            pass
-
-    def record_pull_measurements_for_images(self, row_count: int) -> None:
-        try:
-            self.pull_measurements_for_images_calls += 1
-            self.pull_measurements_for_images_rows += max(0, int(row_count))
-        except Exception:
-            pass
-
-    def record_store_remote_snapshot_fetch(self, *, images: bool = False, measurements: bool = False) -> None:
-        try:
-            if images:
-                self.store_remote_snapshot_fetch_images_count += 1
-            if measurements:
-                self.store_remote_snapshot_fetch_measurements_count += 1
-        except Exception:
-            pass
-
-    def record_retry_missing_cloud_media_branch(self) -> None:
-        try:
-            self.retry_missing_cloud_media_branch_runs += 1
-        except Exception:
-            pass
-
-    def record_original_upload_success(self, bytes_uploaded: int = 0) -> None:
-        try:
-            self.original_upload_calls += 1
-            self.original_upload_bytes += max(0, int(bytes_uploaded))
-        except Exception:
-            pass
-
-    def record_original_upload_skipped_disabled(self) -> None:
-        try:
-            self.original_upload_skipped_disabled += 1
-        except Exception:
-            pass
-
-    def record_original_upload_skipped_ineligible(self) -> None:
-        try:
-            self.original_upload_skipped_ineligible += 1
-        except Exception:
-            pass
-
-    def record_original_upload_skipped_too_large(self) -> None:
-        try:
-            self.original_upload_skipped_too_large += 1
-        except Exception:
-            pass
-
-    def record_original_upload_failed(self) -> None:
-        try:
-            self.original_upload_failed_uploads += 1
-        except Exception:
-            pass
-
-    def record_original_download_success(self, bytes_downloaded: int = 0) -> None:
-        try:
-            self.original_download_calls += 1
-            self.original_download_bytes += max(0, int(bytes_downloaded))
-        except Exception:
-            pass
-
-    def record_original_download_skipped_disabled(self) -> None:
-        try:
-            self.original_download_skipped_disabled += 1
-        except Exception:
-            pass
-
-    def record_original_download_skipped_missing_key(self) -> None:
-        try:
-            self.original_download_skipped_missing_key += 1
-        except Exception:
-            pass
-
-    def record_original_download_skipped_existing_local_original(self) -> None:
-        try:
-            self.original_download_skipped_existing_local_original += 1
-        except Exception:
-            pass
-
-    def record_original_download_skipped_existing_cache(self) -> None:
-        try:
-            self.original_download_skipped_existing_cache += 1
-        except Exception:
-            pass
-
-    def record_original_download_failed(self) -> None:
-        try:
-            self.original_download_failed_downloads += 1
-        except Exception:
-            pass
-
-    def summary_payload(self, result: dict | None = None, error: Exception | None = None) -> dict:
-        try:
-            now = _cloud_sync_perf_counter()
-            payload = {
-                'event': 'summary',
-                'status': 'error' if error else 'ok',
-                'duration_ms': round(max(0.0, (now - self.started_at) * 1000.0), 3),
-                'phases_ms': {
-                    key: round(value, 3)
-                    for key, value in sorted(self.phase_durations_ms.items(), key=lambda item: item[0])
-                },
-                'metrics': {
-                    'download_image_file': {
-                        'calls': self.download_image_file_calls,
-                        'duration_ms': round(self.download_image_file_duration_ms, 3),
-                        'bytes': self.download_image_file_bytes,
-                    },
-                    'generate_all_sizes': {
-                        'calls': self.generate_all_sizes_calls,
-                        'duration_ms': round(self.generate_all_sizes_duration_ms, 3),
-                    },
-                    'pull_bulk_image_metadata': {
-                        'calls': self.pull_bulk_image_metadata_calls,
-                        'rows': self.pull_bulk_image_metadata_rows,
-                    },
-                    'pull_measurements_for_images': {
-                        'calls': self.pull_measurements_for_images_calls,
-                        'rows': self.pull_measurements_for_images_rows,
-                    },
-                    'store_remote_snapshot': {
-                        'fetched_images': self.store_remote_snapshot_fetch_images_count,
-                        'fetched_measurements': self.store_remote_snapshot_fetch_measurements_count,
-                    },
-                    'retry_missing_cloud_media': {
-                        'branch_runs': self.retry_missing_cloud_media_branch_runs,
-                    },
-                    'original_upload': {
-                        'calls': self.original_upload_calls,
-                        'bytes': self.original_upload_bytes,
-                        'skipped_disabled': self.original_upload_skipped_disabled,
-                        'skipped_ineligible': self.original_upload_skipped_ineligible,
-                        'skipped_too_large': self.original_upload_skipped_too_large,
-                        'failed_uploads': self.original_upload_failed_uploads,
-                    },
-                    'original_download': {
-                        'calls': self.original_download_calls,
-                        'bytes': self.original_download_bytes,
-                        'skipped_disabled': self.original_download_skipped_disabled,
-                        'skipped_missing_key': self.original_download_skipped_missing_key,
-                        'skipped_existing_local_original': self.original_download_skipped_existing_local_original,
-                        'skipped_existing_cache': self.original_download_skipped_existing_cache,
-                        'failed_downloads': self.original_download_failed_downloads,
-                    },
-                },
-            }
-            if result is not None:
-                payload['result'] = {
-                    'pushed': int(result.get('pushed', 0) or 0),
-                    'pulled': int(result.get('pulled', 0) or 0),
-                    'calibrations_pushed': int(result.get('calibrations_pushed', 0) or 0),
-                    'calibrations_pulled': int(result.get('calibrations_pulled', 0) or 0),
-                    'deleted_remote': len(result.get('deleted_remote') or []),
-                    'error_count': len(result.get('errors') or []),
-                }
-                sync_summary = result.get('sync_summary')
-                if isinstance(sync_summary, dict):
-                    payload['result']['sync_summary'] = {
-                        str(key): _safe_int(value)
-                        for key, value in sync_summary.items()
-                    }
-            if error is not None:
-                error_text = str(error or '').strip()
-                if error_text:
-                    payload['error'] = error_text[:300]
-                payload['error_type'] = error.__class__.__name__
-            return payload
-        except Exception:
-            return {
-                'event': 'summary',
-                'status': 'error' if error else 'ok',
-                'duration_ms': 0.0,
-                'phases_ms': {},
-                'metrics': {},
-            }
-
-    def finish(self, result: dict | None = None, error: Exception | None = None) -> None:
-        try:
-            self._emit(self.summary_payload(result=result, error=error))
-        except Exception:
-            pass
-
 _PUSH_CONFLICT_RE = re.compile(
     r"^obs\s+(?P<local_id>\d+):\s+skipped desktop push because the linked cloud observation changed on the web$"
 )
@@ -2072,38 +1769,6 @@ _MEASUREMENT_CONFLICT_RE = re.compile(
 )
 
 
-class CloudSyncError(Exception):
-    pass
-
-
-class AccountMismatchError(CloudSyncError):
-    pass
-
-
-class CloudTemporarilyUnavailableError(CloudSyncError):
-    pass
-
-
-class CloudReauthRequiredError(CloudSyncError):
-    """Raised when the refresh endpoint proves the refresh token is dead.
-
-    Distinct from CloudTemporarilyUnavailableError (Supabase glitch, retry
-    likely fine) and from generic CloudSyncError (transport-level noise).
-    Reaching this state means the current session cannot be resumed and the
-    user must sign in again — but callers still must not wipe stored tokens
-    unless the user explicitly signs out.
-    """
-
-
-class PullOnlyModeError(CloudSyncError):
-    """Raised when a cloud-write is attempted during a Download-from-Cloud run.
-
-    Download from Cloud is strictly cloud → desktop. Any code path that
-    reaches an upload, PATCH/POST/DELETE, storage removal, or write-back
-    identity call while the pull-only client is active raises this error.
-    The wrapper counts every attempt on ``write_attempts`` so tests can
-    prove zero cloud writes reached the network.
-    """
 
 
 _PULL_ONLY_BLOCKED_CLIENT_METHODS = frozenset({
@@ -2284,62 +1949,6 @@ def partition_download_from_cloud_issues(errors) -> tuple[list[str], list[str]]:
     return review_items, real_errors
 
 
-class PartialConflictPlanError(CloudSyncError):
-    """Raised when a conflict plan fails mid-execution.
-
-    Carries the partial operation log so the caller (typically the in-dialog
-    apply worker) can present per-item statuses, keep the conflict visible,
-    and offer a safe retry using ``prior_result`` on the next call.
-    """
-
-    def __init__(self, message: str, *, partial_result: dict):
-        super().__init__(message)
-        self.partial_result = dict(partial_result or {})
-
-
-class ObservationIdentityConflictError(CloudSyncError):
-    """Raised when observation push identity cannot be resolved safely.
-
-    Two links tie a local observation to a cloud row: the direct link
-    (local ``observations.cloud_id``) and the reverse link (remote
-    ``observations.desktop_id``). This error is raised when they resolve to
-    different cloud rows, or when the reverse-link recovery lookup matches
-    more than one cloud row. PATCHing either candidate could overwrite the
-    wrong row and POSTing would create a duplicate, so the push must fail
-    and leave the observation dirty/retryable for review.
-    """
-
-
-class ImageIdentityConflictError(CloudSyncError):
-    """Raised when image push identity is ambiguous or contradictory.
-
-    The caller must not PATCH or POST. Leave the image dirty/retryable.
-    """
-
-
-class CloudSessionAccountMismatchError(AccountMismatchError):
-    """Raised when a stale SporelyCloudClient sees on-disk session tokens
-    that belong to a different Sporely Cloud user than the one this
-    client is bound to.
-
-    Usually happens when the user signed out and signed back in as a
-    different account while an old worker/thread was still alive: the
-    worker's in-memory ``user_id`` still points at the previous
-    account, but the on-disk tokens now belong to the new one.  We
-    refuse to adopt the new account's tokens or call the refresh
-    endpoint with them — the worker should surface this and stop.
-    Inherits from :class:`AccountMismatchError` so existing handlers
-    that only catch that base class keep working; catch this subclass
-    to distinguish "stale worker" from "database linked to a different
-    account".
-    """
-
-
-ACCOUNT_MISMATCH_MESSAGE = (
-    "This local database is permanently linked to another Sporely Cloud account. "
-    "Please switch to the correct OS user profile, or use the 'Reset Cloud Sync' "
-    "tool in Settings to migrate your data to a new account."
-)
 PRIVACY_SLOT_LIMIT_USER_MESSAGE = (
     "Free accounts can have up to 20 private or fuzzed-location cloud observations. "
     "Make one public, delete one, or upgrade to Pro."
@@ -2731,119 +2340,6 @@ def fetch_cloud_usage_summary(client) -> dict:
     return summary
 
 
-def _collect_sync_error_details(value, seen: set[int] | None = None) -> tuple[str, list[str]]:
-    if seen is None:
-        seen = set()
-    try:
-        marker = id(value)
-    except Exception:
-        marker = None
-    if marker is not None and marker in seen:
-        return '', []
-    if marker is not None:
-        seen.add(marker)
-
-    code = ''
-    texts: list[str] = []
-    if value is None:
-        return code, texts
-
-    if isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return code, texts
-        texts.append(text)
-        if text[:1] in {'{', '['}:
-            try:
-                parsed = json.loads(text)
-            except Exception:
-                return code, texts
-            parsed_code, parsed_texts = _collect_sync_error_details(parsed, seen)
-            if parsed_code and not code:
-                code = parsed_code
-            texts.extend(parsed_texts)
-        if not code:
-            lowered = text.lower()
-            if '23514' in text:
-                code = '23514'
-            elif 'check_violation' in lowered:
-                code = 'check_violation'
-        return code, texts
-
-    if isinstance(value, dict):
-        for key in ('code', 'sqlstate', 'status_code', 'statusCode', 'status'):
-            raw_code = value.get(key)
-            if raw_code not in (None, ''):
-                candidate = str(raw_code).strip()
-                if candidate and not code:
-                    code = candidate
-        for key in ('message', 'details', 'hint', 'error', 'body', 'text', 'reason', 'response'):
-            if key not in value:
-                continue
-            sub_code, sub_texts = _collect_sync_error_details(value.get(key), seen)
-            if sub_code and not code:
-                code = sub_code
-            texts.extend(sub_texts)
-        return code, texts
-
-    for attr in ('code', 'sqlstate', 'status_code', 'statusCode', 'status'):
-        try:
-            raw_code = getattr(value, attr)
-        except Exception:
-            raw_code = None
-        if raw_code not in (None, ''):
-            candidate = str(raw_code).strip()
-            if candidate and not code:
-                code = candidate
-    for attr in ('message', 'details', 'hint', 'error', 'body', 'text', 'reason', 'response', 'payload', 'response_payload'):
-        try:
-            raw_value = getattr(value, attr)
-        except Exception:
-            raw_value = None
-        if raw_value is None:
-            continue
-        sub_code, sub_texts = _collect_sync_error_details(raw_value, seen)
-        if sub_code and not code:
-            code = sub_code
-        texts.extend(sub_texts)
-    for attr in ('__cause__', '__context__'):
-        try:
-            chained_value = getattr(value, attr)
-        except Exception:
-            chained_value = None
-        if chained_value is None:
-            continue
-        sub_code, sub_texts = _collect_sync_error_details(chained_value, seen)
-        if sub_code and not code:
-            code = sub_code
-        texts.extend(sub_texts)
-    text = str(value).strip()
-    if text:
-        texts.append(text)
-        if not code:
-            lowered = text.lower()
-            if '23514' in text:
-                code = '23514'
-            elif 'check_violation' in lowered:
-                code = 'check_violation'
-    return code, texts
-
-
-def format_cloud_sync_error_details(error) -> str:
-    code, texts = _collect_sync_error_details(error)
-    parts: list[str] = []
-    code_text = str(code or '').strip()
-    if code_text:
-        parts.append(f"code={code_text}")
-    for text in dict.fromkeys(texts):
-        cleaned = str(text or '').strip()
-        if cleaned and cleaned not in parts:
-            parts.append(cleaned)
-    if not parts:
-        fallback = str(error or '').strip()
-        if fallback:
-            parts.append(fallback)
-    return " | ".join(parts)
 
 
 def is_privacy_slot_limit_error(error) -> bool:
@@ -2875,87 +2371,8 @@ def is_webp_support_required_for_cloud_media_upload_error(error) -> bool:
     return WEBP_REQUIRED_FOR_CLOUD_MEDIA_UPLOAD_MESSAGE.lower() in str(error or '').lower()
 
 
-_CLOUD_AUTH_ERROR_HINTS = (
-    'jwt expired',
-    'invalid jwt',
-    'expired access token',
-    'access token expired',
-    'token expired',
-    'session expired',
-    'authentication failed',
-    'invalid_grant',
-    'not logged in',
-    'unauthorized',
-    'pgrst301',
-    'pgrst303',
-    # Supabase returns this when password login is attempted without a captcha
-    # token — the user must sign in interactively (e.g. via browser).
-    'captcha_failed',
-)
-
-# Hints that identify a *terminal* refresh-token invalidation coming from
-# Supabase's refresh endpoint.  Anything matching this list means the
-# session cannot be resumed and the user must sign in again.  A plain
-# 401 or an expired-JWT hint is NOT enough — those are recoverable by
-# refreshing.
-_CLOUD_REAUTH_REQUIRED_HINTS = (
-    'invalid_grant',
-    'invalid refresh token',
-    'refresh token not found',
-    'refresh_token_not_found',
-    'refresh_token_already_used',
-)
 
 
-def is_cloud_auth_error(error) -> bool:
-    """Broad classification: does *error* smell like an auth/token issue?
-
-    Used by the request layer to decide whether to try a refresh and by
-    the sync loops to decide whether to abort early.  Deliberately does
-    not match a raw ``403`` — PostgREST returns 403 for RLS denials,
-    which are authorization (not authentication) failures and must not
-    be conflated with an expired session.
-    """
-    if isinstance(error, CloudReauthRequiredError):
-        return True
-    code, texts = _collect_sync_error_details(error)
-    haystack = ' '.join(dict.fromkeys(texts)).lower()
-    code_text = str(code or '').strip().lower()
-    if code_text == '401':
-        return True
-    return any(hint in haystack for hint in _CLOUD_AUTH_ERROR_HINTS)
-
-
-def is_cloud_reauth_required_error(error) -> bool:
-    """Strict classification: is this error terminal for the current session?
-
-    Returns True only when we can prove the stored refresh token itself
-    is dead — e.g. the refresh endpoint returned ``invalid_grant`` — so
-    the UI can prompt the user to sign in again.  A wrapper such as
-    ``CloudTemporarilyUnavailableError`` chained from a generic ``"auth
-    refresh failed"`` string is NOT sufficient: that shape can result
-    from a rotation race or a transient Supabase blip, and treating it
-    as terminal would wipe a still-valid refresh token on next restart.
-    """
-    if isinstance(error, CloudReauthRequiredError):
-        return True
-    seen: set[int] = set()
-    value = error
-    while value is not None:
-        if isinstance(value, CloudReauthRequiredError):
-            return True
-        try:
-            marker = id(value)
-        except Exception:
-            marker = None
-        if marker is not None:
-            if marker in seen:
-                break
-            seen.add(marker)
-        value = getattr(value, '__cause__', None) or getattr(value, '__context__', None)
-    code, texts = _collect_sync_error_details(error)
-    haystack = ' '.join(dict.fromkeys(texts)).lower()
-    return any(hint in haystack for hint in _CLOUD_REAUTH_REQUIRED_HINTS)
 
 
 def _sleep_supabase_backoff(attempt: int) -> None:
@@ -3020,19 +2437,6 @@ def _response_indicates_auth_error(response: requests.Response) -> bool:
         return False
 
 
-def is_cloud_temporary_unavailable_error(error) -> bool:
-    if isinstance(error, CloudTemporarilyUnavailableError):
-        return True
-    code, texts = _collect_sync_error_details(error)
-    haystack = ' '.join(dict.fromkeys(texts)).lower()
-    code_text = str(code or '').strip().lower()
-    if code_text in {'pgrst000', 'pgrst001', 'pgrst002', 'pgrst003'}:
-        return True
-    if code_text in {str(status) for status in _SUPABASE_TRANSIENT_STATUS_CODES}:
-        return True
-    if _CLOUD_TEMPORARILY_UNAVAILABLE_MESSAGE.lower() in haystack:
-        return True
-    return any(hint in haystack for hint in _SUPABASE_TRANSIENT_ERROR_HINTS)
 
 
 def _request_with_transient_retry(

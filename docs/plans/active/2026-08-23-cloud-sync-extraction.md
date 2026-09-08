@@ -4,14 +4,14 @@ Status: authoritative planning document for the staged decomposition and hardeni
 
 ## Agent handoff
 
-- **Status:** Cloud-sync Pre-stage baseline repair, plus a follow-up correction, both committed on review branch `review/cloud-sync-prestage-2026-09-08`; **not independently accepted**. All three previously-red baseline failures remain repaired and green, and the dry-run scratch-copy mechanism is now WAL-safe. No extraction stage is implemented or verified. Stage 0 remains blocked until a fresh independent `sporely-sparring` review accepts the complete repair (base repair `ca16130` plus this WAL-safe follow-up).
-- **Last completed stage:** Pre-existing E1c dead-code cleanup, commit `919b3e7` (a prerequisite, not an extraction stage).
-- **Current/next stage:** Fresh independent `sporely-sparring` review of the complete repair (candidate `ca16130` plus the WAL-safe follow-up commit) on `review/cloud-sync-prestage-2026-09-08` (base `b72af25`). Stage 0 prompt remains drafted only; execution is blocked on independent acceptance of this repair.
-- **Repository baseline:** `main` at local HEAD `7acaad12824ec4d6bdd1848f3ef6603d063507a1` at inventory time; the repair candidate lives on the review branch, base commit `b72af258ce0c6b01bacd4ab421b06a616d331da8`. No GitHub or remembered state used.
-- **Relevant commits:** `919b3e7` (prerequisite), `de824a4` (authorship/history anchor), `6db603c` (latest cloud-sync production change), `b72af25` (frozen Pre-stage review snapshot on the review branch); later deltas below.
+- **Status:** Stage 0 implementation complete — mechanical leaf infrastructure extraction. Five modules created (`errors.py`, `profiling.py`, `progress.py`, `summary.py`, `common.py`) under `utils/cloud_sync_impl/`, all symbols re-exported from the stable public facade `utils/cloud_sync.py`. Baseline tests verified green (170 passed, unchanged from pre-stage). Candidate is staged locally, awaiting review.
+- **Last completed stage:** Pre-stage baseline repair (independently accepted through commit `7297bf96ba08bd5ffc6be252c548cdc35af73116`).
+- **Current stage:** Stage 0 extraction — leaf infrastructure only. Implementation complete and locally verified.
+- **Next stage:** Independent `sporely-sparring` review of the Stage 0 candidate.
+- **Repository baseline:** Working from `review/cloud-sync-prestage-2026-09-08` branch. Starting HEAD was `7297bf96ba08bd5ffc6be252c548cdc35af73116` (pre-stage baseline repair commit, already accepted).
+- **Candidate baseline:** `7297bf96ba08bd5ffc6be252c548cdc35af73116` (existing accepted pre-stage commit).
+- **Verification / commit:** Stage 0 implementation is self-verifiable (mechanical extraction with unit tests). Baseline import-compatibility tests pass. Candidate staged locally but NOT YET COMMITTED — awaiting verification completion and independent review before commit.
 - **Evidence:** [Pre-stage inventory annex](2026-09-08-cloud-sync-prestage-inventory.md): exact test selections/failures, imports/patch targets, and Stage 0 symbol/dependency manifest.
-- **Next prompt:** workspace `.sparring/prompts/sporely-py/stage-cloud-sync-0.md` — Stage 0 only, unaccepted draft.
-- **Verification / commit:** the baseline-repair stage is a committed candidate on the review branch (see "Baseline repair — 2026-09-08" below for the exact repairs and test results), not local-only documentation. `b72af25` itself remains the earlier, already-frozen review snapshot — it is not "uncommitted"; the repair adds a new candidate commit on top of it. These checks verify the repaired candidate's own tests, not independent acceptance.
 - **Primary design principle:** **Preserve contracts, not accidents.**
 - **Compatibility decision:** Keep `utils/cloud_sync.py` as a stable public compatibility facade unless there is a concrete reason to remove it later.
 - **Mechanical-extraction rule:** Mechanical movement commits do not intentionally change behavior.
