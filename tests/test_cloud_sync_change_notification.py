@@ -11,6 +11,7 @@ These cover two regressions:
 import pytest
 
 from utils import cloud_sync
+from utils.cloud_sync_impl import progress as cloud_sync_progress
 
 
 def _result_with_summary(**summary):
@@ -148,7 +149,7 @@ def test_progress_gap_logs_slow_step_between_ui_updates(monkeypatch, capsys):
     trace = {"start": 0.0, "last_t": None, "last_msg": None}
     token = cloud_sync._CLOUD_SYNC_PROGRESS_TRACE_CONTEXT.set(trace)
     times = iter([0.0, 5.0])  # first emit at t=0, second at t=5s
-    monkeypatch.setattr(cloud_sync, "_cloud_sync_perf_counter", lambda: next(times))
+    monkeypatch.setattr(cloud_sync_progress, "_cloud_sync_perf_counter", lambda: next(times))
     try:
         cloud_sync._emit_progress(None, "Checking calibration 4/8: 100X…", {})
         cloud_sync._emit_progress(None, "Linking calibration images…", {})
@@ -165,7 +166,7 @@ def test_progress_gap_quiet_for_fast_updates(monkeypatch, capsys):
     trace = {"start": 0.0, "last_t": None, "last_msg": None}
     token = cloud_sync._CLOUD_SYNC_PROGRESS_TRACE_CONTEXT.set(trace)
     times = iter([0.0, 0.1])
-    monkeypatch.setattr(cloud_sync, "_cloud_sync_perf_counter", lambda: next(times))
+    monkeypatch.setattr(cloud_sync_progress, "_cloud_sync_perf_counter", lambda: next(times))
     try:
         cloud_sync._emit_progress(None, "Syncing observation 1/3…", {})
         cloud_sync._emit_progress(None, "Syncing observation 2/3…", {})

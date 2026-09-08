@@ -4,6 +4,26 @@ Status: authoritative planning document for the staged decomposition and hardeni
 
 ## Agent handoff
 
+- **Stage 0 facade corrective pass (2026-09-08):** Removed the remaining
+  facade definitions that shadowed the imported Stage 0 owner objects:
+  `ProgressCallback`; progress helpers/constants from `_progress_done` through
+  `_extend_progress_total`; summary helpers/constants from `_SYNC_SUMMARY_KEYS`
+  through `format_sync_summary`; and `_safe_int`. The facade now re-exports
+  the exact owner objects. `_cloud_sync_progress_trace` and
+  `_cloud_sync_phase_scope` were already exact re-exports. Retargeted only the
+  two direct progress-gap clock mocks in
+  `tests/test_cloud_sync_change_notification.py` to
+  `utils.cloud_sync_impl.progress._cloud_sync_perf_counter`; calibration and
+  orchestration facade mocks remain because their lookup owners were not moved.
+  Explicit identity checks passed for representative progress, summary,
+  common, profiling, error, and ContextVar objects. Validation: direct owner
+  tests 46 passed; frozen focused selection 170 passed; frozen broader
+  selection 1,740 passed / 6 skipped; additional-consumer selection 203
+  passed; `git diff --check` and `py_compile` for all Stage 0 production
+  modules passed. The six Stage 6l cross-repository skips remain unavailable
+  evidence, not passes. Candidate commit: pending creation on
+  `review/cloud-sync-prestage-2026-09-08`; stop for independent review after
+  push. No Stage 1 work was performed.
 - **Facade-monkeypatch follow-up (2026-09-08):** The reported progress-clock
   regression could not be reproduced against immutable candidate
   `ea55c68db7d40ade1c0d92fdbb9c10b1c694343b`: the named node passes. Although
