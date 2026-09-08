@@ -8,6 +8,7 @@ Search symbols first. Never read main_window.py, observations_tab.py, or cloud_s
 - Keep patches narrow. If a task touches multiple workflows or large UI files, propose staged patches and stop after the current stage.
 - Do not rewrite or refactor unrelated code while fixing a bug. Preserve existing behavior unless the prompt explicitly asks for a behavior change.
 - Agents may commit, but only work whose verification has actually passed, and never push. When a task defines numbered stages, commit each verified stage as its own commit and report the hash.
+  - On every staged implementation pass, update the canonical active plan's current-stage/handoff record before stopping, including verification, commit or manual-test status, and deferred work.
   - **Self-verifiable stages** — the checks are ones you can run: unit tests, syntax checks, renderer screenshots for static layout. Run them, then commit.
   - **Human-gated stages** — verification needs the user: interactive behavior (signal loops, focus, scroll retention, drag/resize), state surviving an app restart, camera/microscope hardware, live Supabase writes, RLS, cross-client sync, performance on real data, or judgment about whether output reads correctly to a mycologist. Do not commit. Leave the work uncommitted, and report a numbered checklist of exactly what the user must do to verify. The commit happens after the user confirms, in the next task.
   - A renderer screenshot proves layout, not behavior. A change to what happens when the user interacts is human-gated even when every screenshot is clean.
@@ -34,11 +35,11 @@ Use one top-level agent for one architectural slice. Subagents are optional and 
 ### Codex roles
 
 - `act` — **Luna, low effort**. Use for small, direct, low-risk work that is already clear: targeted symbol lookup, documentation, narrow mechanical edits, focused test repairs, or one-file/tightly bounded changes. If the task reveals a contract or subsystem question, stop and hand off rather than expanding.
-- `explore-review` — **Luna, medium effort, read-only**. Use as the cheap scout: locate symbols, map a call/data path, triage a diff, or perform a first-pass low-risk review. Return a compact symbol map or concrete findings; do not independently rediscover the whole subsystem.
+- `explore` — **Luna, medium effort, read-only**. Use only as the cheap scout: locate symbols and map a call/data path. Return a compact symbol map; do not solve or review the task.
 - `planner` — **Terra, medium effort, read-only**. Use before ambiguous, cross-repository, persistence/schema, sync, or architecture-changing work. Produce small independently verifiable stages. Do not use for an already-clear local patch.
-- `implementer` — **Terra, low effort**. Use for an approved bounded plan stage that needs nontrivial edits and focused tests. Stop at the stage boundary.
-- `reviewer` — **Terra, medium effort, read-only**. Use once at a meaningful stage/landing boundary or when explicitly requested. Do not spawn it after every small patch.
-- `security_reviewer` — **Terra, high effort, read-only**. Use only when a change materially touches auth/session handling, RLS/authorization, SECURITY DEFINER/public RPCs, storage access, secrets/service-role use, account binding, privacy/visibility, moderation/blocking, deletion, or another authoritative security boundary.
+- `implementer` — **Terra, medium effort**. Use for an approved bounded plan stage that needs nontrivial edits and focused tests. Stop at the stage boundary.
+- `reviewer` — **Terra, high effort, read-only**. Use once at a meaningful stage/landing boundary or when explicitly requested. It is not the independent top-level sparring reviewer.
+- `security_reviewer` — **Sol, high effort, read-only**. Use only when a change materially touches auth/session handling, RLS/authorization, SECURITY DEFINER/public RPCs, storage access, secrets/service-role use, account binding, privacy/visibility, moderation/blocking, deletion, or another authoritative security boundary.
 - **Sol is escalation-only**, not the default. Use it only when the user explicitly requests it, Terra reports unresolved high-risk ambiguity, or a release/production gate has unusual architectural or security risk.
 
 Claude role agents under `.claude/agents/` follow the same boundaries with Claude models (shared routing/escalation policy: `../CLAUDE.md`). Do not invoke a role agent merely because it exists; delegate only when the role boundary above is met.
