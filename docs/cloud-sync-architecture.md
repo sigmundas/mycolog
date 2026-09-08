@@ -1,8 +1,9 @@
 # Cloud Sync Architecture Map
 
-Status: navigation/implementation document, written August 2026 against
-`utils/cloud_sync.py` at 24,163 lines (13 top-level classes, ~447 top-level
-functions, ~142 methods).
+Status: navigation/implementation document, with Pre-stage corrections on
+2026-09-08 against local HEAD `7acaad12824ec4d6bdd1848f3ef6603d063507a1`
+(`utils/cloud_sync.py`: 26,187 lines). Historical line hints below may drift.
+The extraction inventory is an unaccepted candidate; see the active plan handoff.
 
 This document explains **how the current implementation is organized** so a
 developer or agent can find the canonical owner of any sync concern before
@@ -312,7 +313,7 @@ get_conflict_detail()               (L16687)
 | Bulk PostgREST pagination | `SporelyCloudClient._get_paginated` (L14703) | Exhaustively page past the server `db-max-rows` cap | Any bulk `_get` without paging | Callers MUST pass a deterministic `order=` with `id.asc` tie-breaker; page failure propagates; **partial results are never returned** |
 | Bulk readers (must stay on `_get_paginated`) | `list_remote_observations`, `list_remote_calibrations`, `pull_web_observations` (L15749), `pull_measurements_for_images` (L15812), `pull_bulk_image_metadata` (L15865) | Complete remote collections | Single-shot `_get` for unbounded sets | See section F |
 | Metadata-only microscope anchors | `_is_metadata_only_microscope_cloud_image` (L4979), `_is_local_metadata_only_microscope_anchor` (L4999), `_ensure_metadata_only_microscope_image_for_public_spores` (L19518), `_metadata_only_microscope_image_payload` (L19408), `_set_cloud_image_metadata_only_state` (L5279) | Anchor lifecycle, separate from byte storage | Byte predicate; publication logic | `storage_path IS NULL` + `image_type='microscope'` = deliberate anchor, not breakage |
-| sync_status transitions | `_stamp_observation_synced` (L9143), `mark_observation_dirty` (L7368), `mark_observation_media_dirty` (L7384), `_clear_observation_dirty_if_no_real_changes` (L4360) | The only paths that flip dirty/synced | Direct SQL updates on `sync_status` | Stamp only after ALL required child ops succeeded and the snapshot stored |
+| sync_status transitions | `_stamp_observation_synced` (L9143), `mark_observation_dirty` (L7368), `mark_observation_media_dirty` (L7384), `_clear_observation_dirty_if_no_real_changes` (L4360) | Canonical helpers; not an exhaustive set of current writes | Direct SQL updates on `sync_status` | Intended contract: stamp after required children and snapshot. Current `push_all` commits an early synced state then compensates by re-dirtying; see section I |
 | Cloud deletion (soft) | `SporelyCloudClient.soft_delete_image` (L15952) | PATCH `deleted_at` on one image row; **no storage removal** | Hard delete during routine sync | Contract rule 5 |
 | Cloud deletion (hard) | `delete_cloud_observation` (L16067), `delete_cloud_measurements_for_image` (L16063) | Full observation teardown: Worker storage remove first (abort-on-partial keeps it retryable), then DELETE image rows, then observation row | Routine sync loops | Only explicit user deletion flows |
 | Media deletion | `_storage_remove` (L14796) | Worker-owned dual-bucket delete + quota accounting | Direct S3 deletion (legacy-only, never lifecycle cleanup) | |
@@ -583,12 +584,13 @@ under a key from `_cloud_observation_snapshot_key` (L4856).
 - **Read**: `_load_cloud_observation_snapshot` (L5226), parsed by
   `_parse_cloud_observation_snapshot` (L3312); consumed by the pull
   candidate loop (L22327) and push preflight.
-- **Written**: `_store_cloud_observation_snapshot` (L5236) via
-  `_store_remote_snapshot` (L10927) — after successful push/pull of an
-  observation *and all required children*, and by conflict-plan
-  finalization (`finalize_sync_candidates` L10825 stores the snapshot
-  **before** stamping synced; a snapshot failure leaves the conflict
-  unsealed — see `test_cloud_conflict_plan_execution.py`).
+- **Written**: `_store_cloud_observation_snapshot` via
+  `_store_remote_snapshot`. The intended contract requires successful child work
+  before baseline persistence; current `push_all` still reaches its trailing
+  snapshot call after some caught child errors (see section I). Conflict-plan
+  finalization (`finalize_sync_candidates`) stores the snapshot **before**
+  stamping synced; a snapshot failure leaves the conflict unsealed — see
+  `test_cloud_conflict_plan_execution.py`.
 - **Cleared**: `_clear_cloud_observation_snapshot` (L6465),
   `unlink_local_observation_from_cloud`.
 
@@ -631,12 +633,20 @@ The governing rule (contract rule 8): **do not mark an observation fully
 synced if required image, measurement, calibration, summary, or deletion
 work failed.**
 
-- `_stamp_observation_synced` (L9143) may only run after all required child
-  operations succeeded *and* the snapshot stored. Failures leave
-  `sync_status` dirty so the next sync retries.
-- **Child-operation failure**: per-observation push catches child errors,
-  records them in the result's `errors`, and skips the synced stamp for
-  that observation; other observations continue.
+- **Intended completion contract:** stamp synced only after required child work
+  and snapshot persistence succeed. This is not a universal description of
+  current execution.
+- **Current push implementation:** `push_all` commits `sync_status='synced'`
+  directly at `utils/cloud_sync.py:19358–19370`, before child work. Caught
+  measurement/image failures re-dirty through `mark_observation_dirty` (for
+  example 19428, 19635, 19726); the trailing `_store_remote_snapshot` remains
+  at 19763. State mutation and compensation are distributed. The extraction
+  plan's Stages 6.5/7 own the deliberate final-commit redesign.
+- **Current summary retry discrepancy:** `_push_summary_for_current_observation`
+  calls `mark_observation_sync_dirty` with one argument and swallows its failure;
+  the imported database helper requires `(cursor, observation_id)`. The green
+  summary test substitutes a one-argument lambda and does not prove real retry
+  state. This is recorded debt, not fixed by documentation or leaf extraction.
 - **Partial uploads**: the retry-safe upload sequence (contract) is
   row → bytes → `storage_path` PATCH → local `cloud_id` → snapshot. An
   interruption after any step must be recoverable by repeating sync;
@@ -783,7 +793,7 @@ High-value safety tests by invariant (not an exhaustive listing):
 | Pull-only performs zero cloud writes | `tests/test_cloud_download_only.py` — wrapper delegation/blocking suite; `test_sync_all_pull_only_records_zero_cloud_writes`; non-push of pending tombstones during pull; dirty local observations preserved |
 | Pagination past the 1000-row cap | `test_cloud_download_only.py::test_pull_bulk_image_metadata_pages_past_1000_row_cap`, `…test_pull_measurements_for_images_pages_past_1000_row_cap`, `…test_list_remote_observations_pages_past_1000_row_cap`, `…test_list_remote_calibrations_pages_past_1000_row_cap`, `…test_pull_bulk_image_metadata_tail_observation_receives_its_images` |
 | Page failure never yields a partial authoritative result / snapshot | `test_cloud_download_only.py::test_get_paginated_propagates_page_error_without_partial_result`, `…test_pull_bulk_image_metadata_page_2_failure_does_not_yield_page_1_only_snapshot` (the August 2026 regression guard) |
-| Image byte desired-state gate | `tests/test_cloud_image_bytes_desired.py` (gates, sparse defaults, boundary refusal, tombstone queue on uncheck, recheck cancels delete); `tests/test_cloud_storage_desired_initializer.py`; `tests/test_cloud_sync_image_upload_policy.py`; `tests/test_original_sync_policy.py` |
+| Image byte desired-state gate | `tests/test_cloud_image_bytes_desired.py` (gates, per-image intent ledger, boundary refusal, tombstone queue on uncheck, recheck cancels delete); `tests/test_cloud_storage_desired_initializer.py`; `tests/test_cloud_sync_image_upload_policy.py`; `tests/test_original_sync_policy.py` |
 | Tombstone lifecycle | `tests/test_image_tombstones.py` (queue, sync, cancel, restore-after-delete, remote tombstone repair, legacy publish-exclusion non-migration, batch queue); `tests/test_image_gallery_cloud_delete.py` |
 | Identity repair | `test_cloud_image_bytes_desired.py::test_identity_repair_runs_for_unchecked_image_without_upload`; duplicate-identity blockers in `tests/test_cloud_conflict_plan_execution.py` |
 | Observation push identity (no duplicate POST) | `tests/test_observation_push_identity.py` — verified `cloud_id` primary; `desktop_id` recovery; pull-only import → later normal push PATCHes the original row; direct/reverse disagreement and ambiguous reverse matches raise `ObservationIdentityConflictError` (no PATCH/POST/snapshot, stays dirty); reverse-link healing via the normal PATCH payload |

@@ -4,10 +4,14 @@ Status: authoritative planning document for the staged decomposition and hardeni
 
 ## Agent handoff
 
-- **Status:** Active; no extraction stage is verified as implemented.
+- **Status:** Pre-stage candidate prepared 2026-09-08; **not independently accepted**. No extraction stage is implemented or verified. A bounded evidence-follow-up pass (same day) diagnosed all three baseline failures and proposed repairs without implementing them; see below.
 - **Last completed stage:** Pre-existing E1c dead-code cleanup, commit `919b3e7` (a prerequisite, not an extraction stage).
-- **Current/next stage:** Pre-stage inventory and baseline, then Stage 0.
-- **Relevant commits:** `919b3e7`, `de824a4`.
+- **Current/next stage:** Fresh independent `sporely-sparring` review of the bounded-repair diagnosis in [the Pre-stage inventory annex](2026-09-08-cloud-sync-prestage-inventory.md#follow-up-evidence--bounded-repair-diagnosis-2026-09-08), to author the actual baseline repair. Stage 0 prompt remains drafted only; execution is blocked on baseline repair + disposition, then independent acceptance.
+- **Repository baseline:** `main` at local HEAD `7acaad12824ec4d6bdd1848f3ef6603d063507a1`; worktree/index clean before this pass. No GitHub or remembered state used.
+- **Relevant commits:** `919b3e7` (prerequisite), `de824a4` (authorship/history anchor), `6db603c` (latest cloud-sync production change); later deltas below.
+- **Evidence:** [Pre-stage inventory annex](2026-09-08-cloud-sync-prestage-inventory.md): exact test selections/failures, imports/patch targets, and Stage 0 symbol/dependency manifest.
+- **Next prompt:** workspace `.sparring/prompts/sporely-py/stage-cloud-sync-0.md` — Stage 0 only, unaccepted draft.
+- **Verification / commit:** documentation candidate only, uncommitted for independent review as requested. Focused baseline 169 passed / 1 failed; broader 1,732 passed / 3 failed / 6 skipped; additional consumers 203 passed. All three failures reproduce in isolation. No production or test files changed; no manual/live test performed. `git diff --check` passed; all 59 candidate symbol ranges and frozen test-file paths were checked against the local source. These checks verify the report artifacts, not independent acceptance.
 - **Primary design principle:** **Preserve contracts, not accidents.**
 - **Compatibility decision:** Keep `utils/cloud_sync.py` as a stable public compatibility facade unless there is a concrete reason to remove it later.
 - **Mechanical-extraction rule:** Mechanical movement commits do not intentionally change behavior.
@@ -15,6 +19,172 @@ Status: authoritative planning document for the staged decomposition and hardeni
 - **Major intended hardening:** Replace the current early `synced` stamp + compensating re-dirty behavior with a single final synced commit after required work and snapshot persistence succeed.
 - **Do not combine with this job:** E3 garbage collection, historical duplicate cleanup, unrelated schema work, UI redesign, account-link/reset work, broad lint/type migrations, or external-publishing refactors.
 - **Remaining acceptance criteria:** The definition of done and validation matrix at the end of this document.
+
+## Pre-stage current findings — candidate, 2026-09-08
+
+### Independent review — 2026-09-08
+
+Partly confirmed; Pre-stage is not accepted and Stage 0 remains blocked. HEAD
+matches `7acaad12824ec4d6bdd1848f3ef6603d063507a1`; the candidate changes only
+documentation. Independent execution of the three exact failing nodes reproduced
+all three failures (3 failed in 4.68s). Source checks confirmed the early synced
+commit, trailing snapshot call, summary dirty-helper signature mismatch, stale
+`remote_row` test double, and profiler/context ownership observations. Broad
+suite totals and the complete 59-symbol manifest were not independently rerun
+or exhaustively verified; no acceptance commit was made.
+
+Disposition: the materialization NameError must be repaired separately before
+extraction, preserving portable identity suppression. Repair the stale progress
+fixture before using that suite as the movement baseline. The SQLite dry-run
+failure is not waived: `run_migration` unconditionally initializes the normalized
+schema at `tools/migrate_legacy_reference_values.py:739`; establish the exact
+writes and domain impact before choosing a repair. Six unavailable cross-repo
+checks remain unavailable evidence, not passing checks. Early stamping and the
+summary retry mismatch remain named deferred behavior debt outside Stage 0.
+
+Next: bounded evidence follow-up at workspace
+`.sparring/prompts/sporely-py/stage-cloud-sync-prestage-followup.md`, then fresh
+independent review to author the baseline repair. No production repair or
+extraction is authorized by this review record.
+
+### Bounded evidence follow-up — 2026-09-08
+
+Completed the follow-up at `.sparring/prompts/sporely-py/stage-cloud-sync-prestage-followup.md`
+(single agent, documentation only; HEAD unchanged). Full diagnosis and proposed
+repairs are in the [Pre-stage inventory annex's "Follow-up evidence" section](2026-09-08-cloud-sync-prestage-inventory.md#follow-up-evidence--bounded-repair-diagnosis-2026-09-08).
+Summary:
+
+1. **SQLite dry-run write:** root cause is `database/reference_library_schema.py:init_reference_library_schema`
+   unconditionally dropping and recreating `idx_reference_works_doi_normalized`/
+   `idx_reference_works_isbn_normalized` on every call (lines 751–754), even
+   against an already-normalized library — confirmed by synthetic temp-db
+   replay showing every other statement is a true no-op on a second call, and
+   `sqlite_master` is byte-identical before/after. This fails on **both** an
+   already-initialized library (index churn only) and an old/legacy-only
+   library (first-time schema creation is also an unconditional write). The
+   `libs` test fixture already normalizes the reference db before the failing
+   test runs, so the reported failure is the initialized-library case.
+   Proposed repair: make the doi/isbn drop conditional on the index's current
+   `sqlite_master.sql` definition actually needing migration, fixing the
+   defect where it lives (this function also runs on every app startup) without
+   touching `run_migration`'s `dry_run` branching.
+2. **Materialization `NameError`:** `cloud_media_materialization_state_for_observation`
+   (`utils/cloud_sync.py:26120`) references `suppress_reverse_identity`, never
+   assigned. Two existing owners compute this predicate; since this function
+   has no `client` in scope, the fix mirrors the `client`-free owner at
+   `utils/cloud_sync.py:25015-25017`:
+   `suppress_reverse_identity = _portable_cloud_identity_pending_for_observation(local_id)`,
+   reusing the already-verified `_portable_cloud_identity_pending_for_observation`
+   (`utils/cloud_sync.py:9652-9667`). Does not remove or weaken suppression.
+   Three tests named (pending-portable suppression, ordinary reverse-id
+   recovery, verified direct cloud-id match under a pending flag) — see annex.
+3. **Stale fixture:** `tests/test_cloud_sync_progress_reset_and_prepare.py:307`'s
+   `push_image_metadata` stub is missing the real client's keyword-only
+   `remote_row` parameter (`utils/cloud_sync.py:16321`), so the caller's
+   keyword call at `utils/cloud_sync.py:~20251` raises `TypeError`, silently
+   caught by the caller's fallback branch — which is why image 1825 never
+   lands in `skip_ids`. Proposed repair adds the matching `*, remote_row=None`
+   parameter and a new assertion verifying the exact remote row supplied,
+   preserving the existing unchanged-sibling assertion.
+
+No production or test file was changed to implement any of these; the pending
+stage prompt (`stage-cloud-sync-prestage-followup.md`) remains pending, awaiting
+a fresh independent `sporely-sparring` review of this diagnosis before any
+repair is authored/authorized.
+
+The evidence annex is part of this handoff. It is a factual inventory, not acceptance
+of either implementation debt or the proposed Stage 0 boundary. No baseline failure
+was fixed, quarantined, or waived. Review must resolve baseline disposition before
+mechanical movement; do not silently proceed with a known red suite.
+
+### Current-code / test / documentation discrepancies
+
+- **Red production path:** `cloud_media_materialization_state_for_observation`
+  (`utils/cloud_sync.py:26120`) reads undefined `suppress_reverse_identity`.
+  The media-pull retry test reproduces `NameError`. Preserve portable-identity
+  semantics when a separately scoped repair is reviewed.
+- **Stale test double:** the linked-image progress/preparation fixture's
+  `push_image_metadata` lacks the real client's `remote_row` keyword. The
+  failed skip-set assertion follows its exception-triggered upload fallback.
+- **Sibling baseline red:** legacy-reference migration dry-run changes SQLite
+  file bytes. Root cause/domain-row impact not established by this inventory.
+- **Skipped coverage:** six Stage 6l cross-repository assertions use unavailable
+  historical worktree defaults. They are not green cross-repository evidence.
+- **Early synced stamp remains implementation reality:** `push_all` writes and
+  commits `sync_status='synced'` at lines 19358–19370 before image/measurement/
+  summary work and `_store_remote_snapshot` at line 19763. Child error paths
+  compensate via `mark_observation_dirty` (for example 19428, 19635, 19726).
+  Snapshot failure/exception handling and re-dirty ownership are distributed;
+  this is not the final-commit model required by the intended contract.
+- **Summary retry call mismatch masked by tests:**
+  `_push_summary_for_current_observation` calls `mark_observation_sync_dirty`
+  with one argument (22463–22466) and swallows the exception. The imported
+  `database.models.mark_observation_sync_dirty(cursor, observation_id)` needs
+  two (`database/models.py:286`). `test_spore_summary_sync.py:909–910` replaces
+  it with a one-argument lambda. Thus that green test does not prove the real
+  failure path re-dirties the observation. Record for reviewed behavior work;
+  do not turn it into a mechanical Stage 0 fix.
+- **Architecture truth corrected in this pass:** section C previously described
+  four helpers as the only sync-status writers; sections H/I described
+  snapshot-before-stamp and skipped stamps on child failure as universal current
+  behavior. Those are intended invariants, not what `push_all` implements.
+  The architecture's sparse-default test-map phrase is replaced by per-image
+  ledger wording. The retired sentinel is already absent from active policy;
+  `_cloud_image_storage_initialized` is a derived ledger predicate (5617+).
+  The architecture already links this plan and has no old embedded extraction
+  proposal to remove. Historical line numbers elsewhere remain navigation hints.
+- **Plan drift:** the illustrative sibling tree omitted the now-live normalized
+  reference subsystem. Added explicitly below. Technical overview's high-level
+  caller/conflict description remains consistent; it does not establish final
+  commit ordering. The local contract remains normative and is not weakened to
+  match current debt; the sibling contract copy was not audited in this pass.
+
+### Landed after the plan's authorship anchor (`de824a4..HEAD`)
+
+| Local commit(s) | Current effect and later extraction boundary |
+| --- | --- |
+| `034703b`, `f546541`, `c0a02ae`, `2208926`, `592cf1e` | Per-sync child probes, updated-at cursor/bootstrap, encoded timestamp filters, numeric tuple max, and equality-gated image desktop-id relinks. Preserve read completeness/no-op guards in Stages 1, 6, 7; run child-probe suite. Do not classify these already-fixed echo writes as still-unconditional. |
+| `6c753e7` | AI timestamp normalization and adoption of remote merge-filled fields stop local-only dirty loops. Preserve in Stages 4a, 6.5, 7/8 comparison and completion work. |
+| `4078147` | Portable imports suppress reverse desktop-id recovery/writeback until the destination graph is verified. `_finalize_portable_cloud_identity_guard` and observation/image/measurement identity consumers affect Stages 4–7. Includes the materialization NameError now exposed in baseline. |
+| `e8b340b`, `9c5346b` | Typed normalized-reference adapter plus production sibling coordinator, client RPC/read registry additions, result/error/refresh integration. Transport moves in Stage 1 must preserve this seam; Stage 7 must preserve post-legacy-pull ordering. |
+| `b2e4513`, `08f3dea`, `47f46f7`, `4cd6a2f`, `e0397e9` | Curated-fork provenance, integration gate, shared-contribution readers/writers, Retry-After handling, and exact selected-taxon forwarding. These are current client surfaces, not new extraction entities. Keep reference count/error/visibility semantics separate. |
+| `854d016` | Auth/login hardening: terminal `CloudReauthRequiredError`, broad-vs-terminal classifiers, refresh/session behavior. Stage 0 must preserve exact class identity/hierarchy and classifier behavior; Stage 1 must preserve auth request policy. |
+| `6db603c` | Accepted conflict-plan spore mosaic step, retry result bookkeeping and observation-wide render-agreement guards. Stage 4b moves existing machinery; Stages 5b/6.5/7 must preserve required-vs-best-effort semantics and consume canonical reconciliation rather than re-derive it. Current handoff: `2026-09-07-conflict-resolution-spore-mosaic.md`. |
+
+### Frozen debt and boundaries
+
+String-based issue classification (`summarize_sync_issues` and conflict regexes),
+duplicated push/pull comparison/finalization, distributed state writes, and early
+stamp/re-dirty remain deferred to Stages 6.5–8. The summary retry signature mismatch
+is an additional concrete debt item, not covered by the green summary tests.
+Anchor cross-device adoption and dangling reservations remain **documented risks**
+from Stage 6c/8e, not newly reproduced defects in this pass. No exhaustive no-op-write
+audit was performed: verified relink guards are already present; remaining candidate
+writes need value-equality evidence when their owner stage is reviewed. The mosaic
+render-state re-derivation debt in Pre-stage D still applies at this HEAD.
+
+**Normalized references are a sibling boundary.** `utils/reference_cloud_sync.py`
+(`ReferenceSyncResult`, `sync_reference_library`, `merge_reference_sync_result`),
+`utils/reference_cloud_adapter.py`, `utils/curated_reference_sync.py`, and the
+`database/reference_*` repositories/planner/reconcilers own their graph, CAS tokens,
+acknowledgements, tombstones, and frozen snapshots. `sync_all` invokes their facade
+lazily after legacy pull in both modes (6513–6523, 6851–6858); the lazy import avoids
+the adapter's import of public cloud-sync error classes. Four complete owner feeds
+plus the separate immutable provenance feed are not legacy observation children.
+Pull-only passes the fail-closed wrapper and never executes reference writers.
+Results remain under `reference_sync`; merging also surfaces errors, conflicts, and
+blocks through the existing top-level channel. UI activity/refresh predicates at
+4782/4904 consume these fields and must not be extracted as policy-free summary
+bookkeeping in Stage 0. Stage 1 may move named client transport methods/registries;
+no stage absorbs or rewrites the sibling graph merely to complete the file tree.
+
+Stage 0 exact candidate manifest and exclusions are in the annex and prompt. The
+only extra leaf file proposed beyond the illustrative tree is `common.py` for the
+existing `_safe_int` helper needed by `CloudSyncProfiler.summary_payload`; this
+prevents an owner-to-facade cycle without rewriting profiler behavior. This scope
+choice also remains subject to independent review.
+
+---
 
 This document supersedes the older extraction-only plan and the older embedded proposal formerly in `docs/cloud-sync-architecture.md`.
 
@@ -170,6 +340,12 @@ utils/cloud_media_audit.py
 utils/cloud_spore_mosaic.py
 utils/cloud_spore_mosaic_backfill.py
 utils/spore_summary_sync.py
+utils/reference_cloud_sync.py
+utils/reference_cloud_adapter.py
+utils/curated_reference_sync.py
+database/reference_sync_state.py
+database/reference_sync_planner.py
+database/reference_use_sync_reconciliation.py
 utils/r2_storage.py
 ```
 
