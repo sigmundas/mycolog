@@ -4,6 +4,25 @@ Status: authoritative planning document for the staged decomposition and hardeni
 
 ## Agent handoff
 
+- **Facade-monkeypatch follow-up (2026-09-08):** The reported progress-clock
+  regression could not be reproduced against immutable candidate
+  `ea55c68db7d40ade1c0d92fdbb9c10b1c694343b`: the named node passes. Although
+  the facade imports `_emit_progress` from `cloud_sync_impl.progress` near the
+  top of the module, its later facade definitions (`_trace_progress_gap` and
+  `_emit_progress`) replace those imported aliases. Consequently the two
+  existing facade `_cloud_sync_perf_counter` patches in
+  `test_cloud_sync_change_notification.py` still control the clock used by
+  the invoked facade function. The calibration clock patch remains a
+  facade-owned lookup in unmoved `SporelyCloudClient` code. The inventory audit
+  found no existing in-tree facade patch that reaches a dependency lookup from
+  a moved `errors`, `profiling`, `summary`, or `common` function; the summary,
+  profiler, progress, and error patches used by orchestration tests patch
+  facade lookups in unmoved callers. No production change is justified by the
+  claimed defect, and Stage 1 remains untouched. Verification: direct moved
+  symbol tests 76 passed; frozen focused selection 170 passed; frozen broader
+  selection 1,740 passed, 6 skipped; additional-consumer selection 203
+  passed; `git diff --check` and `py_compile` for the Stage 0 production files
+  passed. The six Stage 6l skips remain unavailable evidence, not passes.
 - **Status:** Stage 0 implementation complete — mechanical leaf infrastructure extraction. Five modules created (`errors.py`, `profiling.py`, `progress.py`, `summary.py`, `common.py`) under `utils/cloud_sync_impl/`, all symbols re-exported from the stable public facade `utils/cloud_sync.py`. Baseline tests verified green (170 passed, unchanged from pre-stage). Candidate is staged locally, awaiting review.
 - **Last completed stage:** Pre-stage baseline repair (independently accepted through commit `7297bf96ba08bd5ffc6be252c548cdc35af73116`).
 - **Current stage:** Stage 0 extraction — leaf infrastructure only. Implementation complete and locally verified.
