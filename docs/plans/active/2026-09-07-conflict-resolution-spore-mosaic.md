@@ -31,7 +31,7 @@ correction specifically targeted.
 carry unrelated pre-existing uncommitted changes that predate this stage and
 are not part of it; left uncommitted, untouched.
 
-Commit: see below. Prompt archived to
+Commit: `6db603c2f987423a87360ee34b679ab453737b71`. Prompt archived to
 `.sparring/prompts/sporely-py/completed/stage-mosaic-1.md`. Stage mosaic-1 is
 closed. Retained-asymmetry atlas support, import-only mosaic generation, and
 narrowing the accepted-asymmetry guard to microscope-relevant asymmetry only
