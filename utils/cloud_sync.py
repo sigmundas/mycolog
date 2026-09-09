@@ -169,6 +169,15 @@ from utils.cloud_sync_impl.summary import (
     format_sync_summary,
 )
 from utils.cloud_sync_impl.common import _safe_int
+from utils.cloud_sync_impl.transport import CloudTransportMixin
+from utils.cloud_sync_impl.pagination import CloudPaginationMixin
+from utils.cloud_sync_impl.pull_only import (
+    PullOnlyCloudClient,
+    _PULL_ONLY_BLOCKED_CLIENT_METHODS,
+    _PULL_ONLY_ALLOWED_READ_METHODS,
+    _PULL_ONLY_ALLOWED_RPC_NAMES,
+    summarize_blocked_write_attempts,
+)
 
 # Sporely-py's source_app_version for public.observation_spore_summaries
 # rows (Stage D). Set once at app startup via
@@ -1753,23 +1762,6 @@ _MEASUREMENT_CONFLICT_RE = re.compile(
 
 
 
-_PULL_ONLY_BLOCKED_CLIENT_METHODS = frozenset({
-    '_patch', '_post', '_delete', '_storage_remove',
-    'push_observation', 'push_image_metadata', 'push_measurement',
-    'upload_image_file', 'upload_original_image_file',
-    'set_image_storage_path', 'set_image_desktop_id', 'set_desktop_id',
-    'set_observation_selected_taxon',
-    'set_measurement_desktop_id', 'set_image_original_storage_path',
-    'reserve_image_storage_path_for_promotion',
-    'release_image_storage_path_reservation',
-    'soft_delete_image', 'delete_cloud_observation',
-    'delete_cloud_measurements_for_image',
-    'push_calibration_reference_image', 'push_calibration_metadata',
-    'sync_reference_work', 'sync_reference_taxon_treatment',
-    'sync_reference_measurement_set', 'sync_observation_reference_use',
-    'submit_private_reference_for_curation', 'share_reference_contribution',
-    'withdraw_reference_contribution', 'sync_reference_curated_fork',
-})
 
 
 # Callable methods on the wrapped client that Download-from-Cloud is
@@ -1777,132 +1769,11 @@ _PULL_ONLY_BLOCKED_CLIENT_METHODS = frozenset({
 # potentially write-touching and blocked at the wrapper. Adding a new
 # read method here is an explicit choice; a new writer method is never
 # safe to add.
-_PULL_ONLY_ALLOWED_READ_METHODS = frozenset({
-    # Session / identity — read side of auth, never mutate cloud state.
-    'fetch_current_user_id',
-    'fetch_cloud_plan_profile',
-    'save_credentials',            # writes local settings, no cloud write
-    '_refresh_session_if_possible', # refresh token, no cloud data mutation
-    # Observation reads
-    'list_remote_observations',
-    'get_observation',
-    # Calibration reads
-    'list_remote_calibrations',
-    'find_remote_calibration',
-    'list_reference_works',
-    'list_reference_taxon_treatments',
-    'list_reference_measurement_sets',
-    'list_observation_reference_uses',
-    'search_public_curated_reference_sets',
-    'get_public_curated_reference_set',
-    'search_public_reference_contributions',
-    'get_public_reference_contribution',
-    'list_reference_curated_forks',
-    # Image / measurement metadata reads
-    'pull_bulk_image_metadata',
-    'pull_image_metadata',
-    'pull_measurements_for_images',
-    'pull_observation_identifications',
-    # Media byte reads
-    'download_image_file',
-    'download_image_file_read_only',
-    # Low-level GET helpers. RPC calls are gated by function name below.
-    '_get',
-    'get_read_only',
-    # Client-internal probes and path builders — pure read/compute.
-    '_find_cloud_image',
-    '_get_media_worker',
-    '_build_original_storage_path',
-    '_observation_images_support_ai_crop',
-    '_observation_images_support_ai_crop_custom',
-    '_observation_images_support_sample_source',
-    '_observation_images_support_upload_metadata',
-    '_using_default_r',
-    'list_image_changes_since',
-    'list_measurement_changes_since',
-})
-
-_PULL_ONLY_ALLOWED_RPC_NAMES = frozenset({
-    'search_community_spore_datasets',
-    'get_community_spore_dataset',
-    'community_spore_taxon_summary',
-    'search_public_reference_values',
-    'get_public_observation',
-    'search_public_curated_reference_sets',
-    'get_public_curated_reference_set',
-    'search_public_reference_contributions',
-    'get_public_reference_contribution',
-})
 
 
-class PullOnlyCloudClient:
-    """Fail-closed proxy over ``SporelyCloudClient`` for Download from Cloud.
-
-    Delegation rules:
-
-    * Non-callable attributes on the wrapped client (``user_id``,
-      ``access_token``, …) forward verbatim.
-    * Callable methods on the read allowlist forward verbatim.
-    * Every named writer method raises :class:`PullOnlyModeError` and
-      records the attempt on ``write_attempts``.
-    * **Any other callable** on the wrapped client — including methods
-      not yet named on either list — also raises. Under a plain
-      denylist, a future or unrecognized method whose internals call
-      ``self._patch`` would execute on the wrapped client and bypass
-      the wrapper; the allowlist prevents that class of leak entirely.
-    """
-
-    is_pull_only = True
-
-    def __init__(self, wrapped) -> None:
-        self._wrapped = wrapped
-        self.write_attempts: list[str] = []
-
-    def _block(self, name: str, reason: str):
-        def _blocked(*_args, **_kwargs):
-            self.write_attempts.append(name)
-            raise PullOnlyModeError(
-                f"{reason} '{name}' is not allowed during Download from Cloud"
-            )
-        return _blocked
-
-    def _rpc(self, function_name: str, payload: dict | None = None):
-        rpc_name = str(function_name or '').strip()
-        if rpc_name not in _PULL_ONLY_ALLOWED_RPC_NAMES:
-            attempt = f'_rpc:{rpc_name or "<missing>"}'
-            self.write_attempts.append(attempt)
-            raise PullOnlyModeError(
-                f"Unrecognized or write-capable RPC '{rpc_name}' is not allowed "
-                "during Download from Cloud"
-            )
-        return self._wrapped._rpc(rpc_name, payload)
-
-    def __getattr__(self, name: str):
-        # __getattr__ only fires for attributes not found on ``self``; the
-        # explicit ``is_pull_only`` / ``_wrapped`` / ``write_attempts``
-        # attributes shadow this path.
-        if name in _PULL_ONLY_BLOCKED_CLIENT_METHODS:
-            return self._block(name, "Cloud write")
-        attr = getattr(self._wrapped, name)
-        if not callable(attr):
-            return attr
-        if name in _PULL_ONLY_ALLOWED_READ_METHODS:
-            return attr
-        return self._block(name, "Unrecognized client method")
 
 
-def summarize_blocked_write_attempts(attempts) -> str:
-    """Compress a raw list of blocked writer names into ``name ×N`` groups.
 
-    A single leaky path (e.g. ``set_image_desktop_id``) can fire hundreds of
-    times per run; printing the name once with a count is what the user
-    actually reads.
-    """
-    from collections import Counter as _Counter
-    if not attempts:
-        return ""
-    counts = _Counter(str(n) for n in attempts if n)
-    return ", ".join(f"{name} ×{count}" for name, count in counts.most_common())
 
 
 def partition_download_from_cloud_issues(errors) -> tuple[list[str], list[str]]:
@@ -13981,179 +13852,16 @@ def has_saved_cloud_password() -> bool:
     return bool(email and password)
 
 
-class SporelyCloudClient:
+class SporelyCloudClient(CloudTransportMixin, CloudPaginationMixin):
     """Thin wrapper around Supabase REST API."""
 
-    def __init__(self, access_token: str, user_id: str, refresh_token: str | None = None):
-        self.access_token = access_token
-        self.user_id = user_id
-        self.refresh_token = str(refresh_token or '').strip() or None
-        self._s = requests.Session()
-        self._r2: CloudflareR2Client | None = None
-        self._media_worker: CloudflareMediaWorkerClient | None = None
-        self._column_support_cache: dict[tuple[str, str], bool] = {}
-        self._cloud_image_storage_key_cache: dict[str, str] = {}
-        self._s.headers.update({
-            'apikey': SUPABASE_KEY,
-            'Authorization': f'Bearer {access_token}',
-            'Content-Type': 'application/json',
-        })
 
-    def _get_r2(self) -> CloudflareR2Client:
-        if self._r2 is None:
-            self._r2 = CloudflareR2Client.from_env()
-        return self._r2
 
-    def _get_media_worker(self) -> CloudflareMediaWorkerClient:
-        if self._media_worker is None:
-            self._media_worker = CloudflareMediaWorkerClient.from_access_token(self.access_token)
-        return self._media_worker
 
-    def _using_default_r2_loader(self) -> bool:
-        if "_get_r2" in self.__dict__:
-            return False
-        return type(self)._get_r2 is SporelyCloudClient._get_r2
 
-    def _response_indicates_auth_error(self, response: requests.Response) -> bool:
-        return _response_indicates_auth_error(response)
 
-    def _adopt_session_from_values(
-        self,
-        access_token: str,
-        user_id: str | None,
-        refresh_token: str | None,
-    ) -> None:
-        """Copy a freshly-observed session onto this client in-memory.
 
-        Kept small so both the "adopt from settings" and "adopt from
-        refresh response" branches of :meth:`_refresh_session_if_possible`
-        stay symmetric.
-        """
-        self.access_token = access_token
-        self.user_id = (
-            _decode_jwt_subject(access_token)
-            or _normalize_cloud_user_id(user_id)
-            or self.user_id
-        )
-        if refresh_token:
-            self.refresh_token = refresh_token
-        self._s.headers.update({'Authorization': f'Bearer {self.access_token}'})
-        self._media_worker = None
 
-    def _refresh_session_if_possible(self) -> bool:
-        # Serialize every refresh attempt so concurrent clients cannot
-        # race Supabase into rotating the same refresh token twice.
-        with _CLOUD_REFRESH_LOCK:
-            settings_access, settings_user_id, settings_refresh = (
-                _read_current_cloud_session_settings()
-            )
-            self_access = str(self.access_token or '').strip() or None
-
-            # Account-safety guard: if the on-disk session belongs to a
-            # *different* Sporely Cloud user than this client is bound
-            # to, refuse to adopt or refresh with any of it.  A stale
-            # worker must not authenticate as another account just
-            # because settings rotated under it.
-            if not _settings_session_is_compatible(
-                self.user_id, settings_user_id, settings_access
-            ):
-                raise CloudSessionAccountMismatchError(
-                    "Stored cloud session belongs to a different account "
-                    "than this client instance; refusing to adopt or refresh."
-                )
-
-            # Fast path: another thread already rotated tokens while we
-            # were waiting for the lock.  Adopt the newer access token
-            # and skip the network round-trip entirely.
-            if (
-                settings_access
-                and settings_access != self_access
-                and not _jwt_expires_soon(settings_access)
-            ):
-                self._adopt_session_from_values(
-                    settings_access, settings_user_id, settings_refresh
-                )
-                return True
-
-            # Refresh path: prefer whichever refresh token settings has
-            # right now over our in-memory copy.  The account-safety
-            # guard above has already confirmed settings belongs to the
-            # same user, so preferring the settings refresh token is
-            # safe.
-            candidate_refresh = settings_refresh or (
-                str(self.refresh_token or '').strip() or None
-            )
-            if not candidate_refresh:
-                return False
-
-            try:
-                refreshed = type(self).refresh_login(candidate_refresh)
-            except CloudTemporarilyUnavailableError:
-                raise
-            except CloudReauthRequiredError:
-                # Before treating the session as dead, re-read settings
-                # one more time — another thread may have just rotated
-                # the refresh token so ``candidate_refresh`` looks dead
-                # to Supabase (reuse detection) even though the session
-                # is fine.
-                after_access, after_user_id, after_refresh = (
-                    _read_current_cloud_session_settings()
-                )
-                # Re-apply the account guard to the fresh snapshot.  If
-                # the user switched accounts while we were mid-refresh
-                # we must not adopt or retry with the new account's
-                # tokens.  Propagate the original reauth-required
-                # signal so the caller can prompt sign-in.
-                if not _settings_session_is_compatible(
-                    self.user_id, after_user_id, after_access
-                ):
-                    raise
-                if (
-                    after_access
-                    and after_access != settings_access
-                    and not _jwt_expires_soon(after_access)
-                ):
-                    self._adopt_session_from_values(
-                        after_access, after_user_id, after_refresh
-                    )
-                    return True
-                if after_refresh and after_refresh != candidate_refresh:
-                    # A newer refresh token appeared on disk after we
-                    # snapshotted.  Retry once with it before giving up.
-                    try:
-                        refreshed = type(self).refresh_login(after_refresh)
-                    except CloudTemporarilyUnavailableError:
-                        raise
-                    except CloudReauthRequiredError:
-                        # The newer token is also dead — this session
-                        # really does need sign-in.  Do NOT clear tokens
-                        # here; the UI decides how to prompt the user.
-                        raise
-                    except CloudSyncError:
-                        return False
-                else:
-                    raise
-            except CloudSyncError:
-                return False
-
-            self._adopt_session_from_values(
-                refreshed.access_token, refreshed.user_id, refreshed.refresh_token
-            )
-            try:
-                self.save_credentials()
-            except Exception:
-                pass
-            return True
-
-    def _request_with_refresh(self, method: str, url: str, *, refresh_on_auth_error: bool = True, **kwargs):
-        return _request_with_transient_retry(
-            self._s.request,
-            method,
-            url,
-            refresh_on_auth_error=refresh_on_auth_error,
-            refresh_callback=self._refresh_session_if_possible if refresh_on_auth_error else None,
-            **kwargs,
-        )
 
     def _has_column(self, table_name: str, column_name: str) -> bool:
         cache_key = (str(table_name or '').strip(), str(column_name or '').strip())
@@ -14481,101 +14189,10 @@ class SporelyCloudClient:
 
     # ── REST helpers ─────────────────────────────────────────────────────
 
-    def _get(self, path: str) -> list:
-        resp = self._request_with_refresh('GET', f'{SUPABASE_URL}/rest/v1/{path}', timeout=_SUPABASE_REST_TIMEOUT)
-        if not resp.ok:
-            raise CloudSyncError(f'GET {path}: {resp.text}')
-        return resp.json()
 
-    def _get_paginated(
-        self,
-        path: str,
-        *,
-        page_size: int = _CLOUD_SYNC_MAX_ROWS_PER_PAGE,
-        max_rows: int | None = None,
-        max_response_bytes: int | None = None,
-    ) -> list:
-        """Fully page a PostgREST GET past the server ``db-max-rows`` cap.
 
-        Callers MUST include a deterministic ``order=`` clause (with ``id.asc``
-        as tie-breaker) in ``path``; otherwise offset-based paging can skip or
-        duplicate rows across pages. On any page failure the exception from
-        ``_get`` propagates — partial results are never returned, so callers
-        must not treat truncation as an authoritative empty result.
-        """
-        if (page_size <= 0 or (max_rows is not None and max_rows <= 0)
-                or (max_response_bytes is not None and max_response_bytes <= 0)):
-            raise CloudSyncError(f'GET {path}: invalid page_size {page_size}')
-        all_rows: list = []
-        response_bytes = 0
-        offset = 0
-        sep = '&' if '?' in path else '?'
-        while True:
-            page_path = f'{path}{sep}limit={page_size}&offset={offset}'
-            rows = self._get(page_path)
-            if not isinstance(rows, list):
-                raise CloudSyncError(
-                    f'GET {path}: expected list response for paginated fetch, '
-                    f'got {type(rows).__name__}'
-                )
-            response_bytes += len(json.dumps(
-                rows, ensure_ascii=False, separators=(',', ':'),
-            ).encode('utf-8'))
-            if max_response_bytes is not None and response_bytes > max_response_bytes:
-                raise CloudSyncError(
-                    f'GET {path}: response exceeds {max_response_bytes} bytes'
-                )
-            all_rows.extend(rows)
-            if max_rows is not None and len(all_rows) > max_rows:
-                raise CloudSyncError(f'GET {path}: response exceeds {max_rows} rows')
-            if len(rows) < page_size:
-                return all_rows
-            offset += len(rows)
 
-    def get_read_only(self, path: str) -> list:
-        """Perform one REST GET without token refresh or credential writes."""
-        resp = self._request_with_refresh(
-            'GET',
-            f'{SUPABASE_URL}/rest/v1/{path}',
-            timeout=_SUPABASE_REST_TIMEOUT,
-            refresh_on_auth_error=False,
-        )
-        if not resp.ok:
-            status = int(getattr(resp, 'status_code', 0) or 0)
-            if status in {401, 403} or self._response_indicates_auth_error(resp):
-                raise CloudReauthRequiredError(
-                    'Read-only cloud audit authentication expired; sign in again before retrying.'
-                )
-            raise CloudSyncError(f'GET {path}: {resp.text}')
-        return resp.json()
 
-    def _post(self, path: str, payload: dict) -> list:
-        resp = self._request_with_refresh(
-            'POST',
-            f'{SUPABASE_URL}/rest/v1/{path}',
-            json=payload,
-            headers={'Prefer': 'return=representation'},
-            timeout=_SUPABASE_REST_TIMEOUT,
-        )
-        if not resp.ok:
-            raise CloudSyncError(f'POST {path}: {resp.text}')
-        return resp.json()
-
-    def _rpc(self, function_name: str, payload: dict | None = None):
-        rpc_name = str(function_name or '').strip()
-        if not rpc_name:
-            raise CloudSyncError('Missing RPC function name')
-        resp = self._request_with_refresh(
-            'POST',
-            f'{SUPABASE_URL}/rest/v1/rpc/{rpc_name}',
-            json=dict(payload or {}),
-            timeout=_SUPABASE_REST_TIMEOUT,
-        )
-        if not resp.ok:
-            raise CloudSyncError(f'RPC {rpc_name}: {resp.text}')
-        if not resp.content:
-            return None
-        return resp.json()
 
     def sync_reference_work(self, payload: dict, expected_row_version: int):
         return self._rpc('sync_reference_work', {
@@ -14758,46 +14375,8 @@ class SporelyCloudClient:
             max_response_bytes=64 * 1024 * 1024,
         )
 
-    def _patch(self, path: str, payload: dict) -> None:
-        resp = self._request_with_refresh(
-            'PATCH',
-            f'{SUPABASE_URL}/rest/v1/{path}',
-            json=payload,
-            headers={'Prefer': 'return=minimal'},
-            timeout=_SUPABASE_REST_TIMEOUT,
-        )
-        if not resp.ok:
-            raise CloudSyncError(f'PATCH {path}: {resp.text}')
 
-    def _delete(self, path: str) -> None:
-        resp = self._request_with_refresh(
-            'DELETE',
-            f'{SUPABASE_URL}/rest/v1/{path}',
-            headers={'Prefer': 'return=minimal'},
-            timeout=_SUPABASE_REST_TIMEOUT,
-        )
-        if not resp.ok:
-            raise CloudSyncError(f'DELETE {path}: {resp.text}')
 
-    def _storage_remove(self, storage_paths: list[str]) -> None:
-        cleaned = []
-        for path in (storage_paths or []):
-            path_str = _normalize_cloud_media_key(path)
-            if not path_str:
-                continue
-            cleaned.append(path_str)
-
-        if not cleaned:
-            return
-        try:
-            # The authenticated Worker owns dual-bucket targeting and logical
-            # quota accounting. Direct S3 deletion is legacy-bucket-only and
-            # must not be used for lifecycle cleanup, even in an explicitly
-            # enabled local admin runtime.
-            self._get_media_worker().delete_objects(cleaned)
-            _increment_sync_summary(_cloud_sync_current_summary(), 'storage_quota_delta_rpc_calls')
-        except Exception as exc:
-            raise CloudSyncError(f'Media delete failed: {exc}') from exc
 
     # ── Observation push ─────────────────────────────────────────────────
 
