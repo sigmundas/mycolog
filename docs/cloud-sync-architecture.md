@@ -1,9 +1,9 @@
 # Cloud Sync Architecture Map
 
-Status: navigation/implementation document, with Pre-stage corrections on
-2026-09-08 against local HEAD `7acaad12824ec4d6bdd1848f3ef6603d063507a1`
-(`utils/cloud_sync.py`: 26,187 lines). Historical line hints below may drift.
-The extraction inventory is an unaccepted candidate; see the active plan handoff.
+Status: navigation/implementation document. Stage 1 established the accepted
+transport/pagination/pull-only ownership boundary; `utils/cloud_sync.py`
+remains the compatibility facade and orchestration owner. Historical line hints
+below may drift; use symbols and module names as the stable reference.
 
 This document explains **how the current implementation is organized** so a
 developer or agent can find the canonical owner of any sync concern before
@@ -15,6 +15,16 @@ fixed.
 Line numbers refer to `utils/cloud_sync.py` unless another file is named.
 They will drift; symbol names are the stable reference. Verify with
 `grep -n "def <name>" utils/cloud_sync.py`.
+
+## Stage 1 ownership boundary
+
+- `utils/cloud_sync_impl/transport.py` owns request/session refresh and REST
+  transport primitives.
+- `utils/cloud_sync_impl/pagination.py` owns deterministic full pagination.
+- `utils/cloud_sync_impl/pull_only.py` owns `PullOnlyCloudClient` and the
+  canonical pull-only read/write/RPC registries.
+- `utils/cloud_sync.py` remains the compatibility facade; orchestration stays
+  there and was not moved in Stage 1.
 
 
 ## Visual overview
@@ -310,14 +320,14 @@ get_conflict_detail()               (L16687)
 | Observation pull | `pull_all` per-candidate loop (L22251+) | Apply remote updates to clean local rows; import new | — | Conflicted rows are skipped, not overwritten |
 | Measurement push/pull | `push_measurement` (L15968), `pull_measurements_for_images` (L15812), `delete_cloud_measurements_for_image` (L16063) | Upsert with semantic no-op detection; paginated pull | — | Measurements may reference metadata-only anchors |
 | Calibration push/pull | `push_calibrations` (L6890), `pull_calibrations` (L7030), `push_calibration_metadata` (L15086), `push_calibration_reference_image` (L14955) | Calibration identity, data, reference image | — | Local-wins repair: `repair_calibrations_local_wins` (L7212) |
-| Bulk PostgREST pagination | `SporelyCloudClient._get_paginated` (L14703) | Exhaustively page past the server `db-max-rows` cap | Any bulk `_get` without paging | Callers MUST pass a deterministic `order=` with `id.asc` tie-breaker; page failure propagates; **partial results are never returned** |
+| Bulk PostgREST pagination | `pagination.CloudPaginationMixin._get_paginated` (facade: `SporelyCloudClient._get_paginated`) | Exhaustively page past the server `db-max-rows` cap | Any bulk `_get` without paging | Callers MUST pass a deterministic `order=` with `id.asc` tie-breaker; page failure propagates; **partial results are never returned** |
 | Bulk readers (must stay on `_get_paginated`) | `list_remote_observations`, `list_remote_calibrations`, `pull_web_observations` (L15749), `pull_measurements_for_images` (L15812), `pull_bulk_image_metadata` (L15865) | Complete remote collections | Single-shot `_get` for unbounded sets | See section F |
 | Metadata-only microscope anchors | `_is_metadata_only_microscope_cloud_image` (L4979), `_is_local_metadata_only_microscope_anchor` (L4999), `_ensure_metadata_only_microscope_image_for_public_spores` (L19518), `_metadata_only_microscope_image_payload` (L19408), `_set_cloud_image_metadata_only_state` (L5279) | Anchor lifecycle, separate from byte storage | Byte predicate; publication logic | `storage_path IS NULL` + `image_type='microscope'` = deliberate anchor, not breakage |
 | sync_status transitions | `_stamp_observation_synced` (L9143), `mark_observation_dirty` (L7368), `mark_observation_media_dirty` (L7384), `_clear_observation_dirty_if_no_real_changes` (L4360) | Canonical helpers; not an exhaustive set of current writes | Direct SQL updates on `sync_status` | Intended contract: stamp after required children and snapshot. Current `push_all` commits an early synced state then compensates by re-dirtying; see section I |
 | Cloud deletion (soft) | `SporelyCloudClient.soft_delete_image` (L15952) | PATCH `deleted_at` on one image row; **no storage removal** | Hard delete during routine sync | Contract rule 5 |
 | Cloud deletion (hard) | `delete_cloud_observation` (L16067), `delete_cloud_measurements_for_image` (L16063) | Full observation teardown: Worker storage remove first (abort-on-partial keeps it retryable), then DELETE image rows, then observation row | Routine sync loops | Only explicit user deletion flows |
-| Media deletion | `_storage_remove` (L14796) | Worker-owned dual-bucket delete + quota accounting | Direct S3 deletion (legacy-only, never lifecycle cleanup) | |
-| Pull-only enforcement | `PullOnlyCloudClient` (L2170), `_PULL_ONLY_BLOCKED_CLIENT_METHODS` (L2117), `_PULL_ONLY_ALLOWED_READ_METHODS` (L2134) | Fail-closed allowlist proxy; records `write_attempts` | Any Download-from-Cloud path using a raw client | Unrecognized callables are blocked too — an allowlist, not a denylist |
+| Media deletion | `transport.CloudTransportMixin._storage_remove` (facade: `SporelyCloudClient._storage_remove`) | Worker-owned dual-bucket delete + quota accounting | Direct S3 deletion (legacy-only, never lifecycle cleanup) | |
+| Pull-only enforcement | `pull_only.PullOnlyCloudClient`, `_PULL_ONLY_BLOCKED_CLIENT_METHODS`, `_PULL_ONLY_ALLOWED_READ_METHODS` | Fail-closed allowlist proxy; records `write_attempts` | Any Download-from-Cloud path using a raw client | Unrecognized callables are blocked too — an allowlist, not a denylist |
 
 ### Observation identity model (`cloud_id` vs `desktop_id`)
 
@@ -433,11 +443,11 @@ cloud_writes_completed == 0
 write_attempts == []
 ```
 
-`PullOnlyCloudClient` (L2170) is a **fail-closed allowlist proxy**:
+`pull_only.PullOnlyCloudClient` is a **fail-closed allowlist proxy**:
 
 - Non-callable attributes forward verbatim.
-- Callables on `_PULL_ONLY_ALLOWED_READ_METHODS` (L2134) forward verbatim.
-- Every method on `_PULL_ONLY_BLOCKED_CLIENT_METHODS` (L2117) raises
+- Callables on `pull_only._PULL_ONLY_ALLOWED_READ_METHODS` forward verbatim.
+- Every method on `pull_only._PULL_ONLY_BLOCKED_CLIENT_METHODS` raises
   `PullOnlyModeError` (L2106) and is recorded on `write_attempts`.
 - **Any other callable is also blocked.** Under a plain denylist a future
   writer whose internals call `self._patch` would execute on the wrapped
@@ -518,7 +528,8 @@ live in `tests/test_cloud_download_only.py` (see section K).
 
 Rules, as implemented:
 
-- `_get_paginated` (L14703) is the canonical bulk reader. It loops
+- `pagination.CloudPaginationMixin._get_paginated` (also available as
+  `SporelyCloudClient._get_paginated`) is the canonical bulk reader. It loops
   `limit/offset` pages until a short page arrives, and **raises on any page
   failure — a partial accumulation is never returned.**
 - Callers MUST include a deterministic `order=` clause with `id.asc` as

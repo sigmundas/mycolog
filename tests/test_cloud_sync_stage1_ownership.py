@@ -1,6 +1,7 @@
 """Stage 1 ownership and import-compatibility checks."""
 from __future__ import annotations
 
+import inspect
 import subprocess
 import sys
 
@@ -26,23 +27,32 @@ def test_stage1_leaf_and_facade_imports_work_in_fresh_processes():
         assert result.returncode == 0, result.stderr
 
 
-def test_every_sync_client_method_is_explicitly_read_or_write_classified():
-    """New sync-facing client operations must declare their pull-only safety."""
-    sync_surface = {
-        'fetch_current_user_id', 'fetch_cloud_plan_profile', 'list_remote_observations',
-        'list_remote_calibrations', 'pull_bulk_image_metadata', 'pull_image_metadata',
-        'pull_measurements_for_images', 'pull_observation_identifications', 'download_image_file',
-        'list_image_changes_since', 'list_measurement_changes_since', '_get', 'get_read_only',
-        '_patch', '_post', '_delete', '_storage_remove', 'push_observation',
-        'push_image_metadata', 'push_measurement', 'upload_image_file',
-        'upload_original_image_file', 'set_image_storage_path', 'set_image_desktop_id',
-        'set_desktop_id', 'set_measurement_desktop_id', 'set_image_original_storage_path',
-        'reserve_image_storage_path_for_promotion', 'release_image_storage_path_reservation',
-        'soft_delete_image', 'delete_cloud_observation', 'delete_cloud_measurements_for_image',
-        'push_calibration_reference_image', 'push_calibration_metadata',
+def test_every_relevant_public_client_method_is_explicitly_read_or_write_classified():
+    """A new sync-facing client callable must join a canonical pull-only registry."""
+    non_sync_public_methods = {
+        # Authentication/session construction and credential cleanup.
+        'login', 'refresh_login', 'from_stored_credentials', 'clear_session', 'clear_credentials',
+        # Profile/account settings and their cloud-side mutations.
+        'fetch_current_user_info', 'fetch_profile', 'update_profile', 'upload_profile_avatar',
+        'count_remote_privacy_slots',
+        # Interactive public/community browsing, outside desktop sync orchestration.
+        'pull_web_observations', 'search_community_spore_datasets',
+        'get_community_spore_dataset', 'community_spore_taxon_summary',
+        'search_public_reference_values',
+    }
+    public_client_methods = {
+        name
+        for name, method in inspect.getmembers(cloud_sync.SporelyCloudClient, callable)
+        if not name.startswith('_')
     }
     classified = (
         cloud_sync._PULL_ONLY_ALLOWED_READ_METHODS
         | cloud_sync._PULL_ONLY_BLOCKED_CLIENT_METHODS
     )
-    assert sync_surface <= classified
+    assert public_client_methods - non_sync_public_methods <= classified
+
+
+def test_pull_only_classifies_private_low_level_transport_contract_methods():
+    """Private transport primitives remain explicit despite public-surface discovery."""
+    assert {'_get', '_refresh_session_if_possible'} <= cloud_sync._PULL_ONLY_ALLOWED_READ_METHODS
+    assert {'_post', '_patch', '_delete', '_storage_remove'} <= cloud_sync._PULL_ONLY_BLOCKED_CLIENT_METHODS

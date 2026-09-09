@@ -4,6 +4,14 @@ Status: authoritative planning document for the staged decomposition and hardeni
 
 ## Agent handoff
 
+- **Stage 1 follow-up pending (2026-09-09):** Candidate
+  `8d06a9dafb6e26ceded2853a2a189f588b25e576` was committed and pushed on
+  `feature/cloud-sync-transport-boundary`, then independently web-reviewed.
+  The review found no concrete production-behavior regression in the
+  transport/pagination/pull-only extraction. A narrow follow-up remains to
+  make the client-classification test future-enforcing and to update ownership
+  navigation; stop for web review after that follow-up. This review path is
+  web, not local `sporely-sparring`.
 - **Stage 1 implementation (2026-09-09):** Moved the client request/session
   refresh plumbing, REST GET/POST/PATCH/DELETE/RPC/storage-remove primitives,
   deterministic pagination, and the strict pull-only registry/proxy into
@@ -11,9 +19,9 @@ Status: authoritative planning document for the staged decomposition and hardeni
   `utils/cloud_sync.py` remains the compatibility facade and re-exports the
   moved registry/proxy. Added `tests/test_cloud_sync_stage1_ownership.py` for
   facade/leaf import compatibility, owner identity, and explicit sync-surface
-  read/write classification. Working candidate is on
-  `feature/cloud-sync-transport-boundary`, uncommitted while final verification
-  and review handoff are completed. Focused safety selection: 209 passed.
+  read/write classification. The reviewed implementation candidate is
+  `8d06a9dafb6e26ceded2853a2a189f588b25e576`; the narrow follow-up above is
+  pending final verification.
 - **Stage 0 final ownership cleanup (2026-09-08):** Corrected four remaining
   frozen-manifest discrepancies on top of corrective candidate `4dc6b8259a34fef32c9f2c8645e9a8f413beae7d`: the facade now retains the imported
   `_SUPABASE_TRANSIENT_STATUS_CODES`, `_SUPABASE_TRANSIENT_ERROR_HINTS`, and
@@ -72,8 +80,10 @@ Status: authoritative planning document for the staged decomposition and hardeni
   passed. The six Stage 6l skips remain unavailable evidence, not passes.
 - **Status:** Stage 0 implementation complete — mechanical leaf infrastructure extraction. Five modules created (`errors.py`, `profiling.py`, `progress.py`, `summary.py`, `common.py`) under `utils/cloud_sync_impl/`, all symbols re-exported from the stable public facade `utils/cloud_sync.py`. Baseline tests verified green (170 passed, unchanged from pre-stage). Candidate is staged locally, awaiting review.
 - **Last completed stage:** Pre-stage baseline repair (independently accepted through commit `7297bf96ba08bd5ffc6be252c548cdc35af73116`).
-- **Current stage:** Stage 1 transport, pagination, and pull-only boundary. Implementation complete and locally verified; independent review pending.
-- **Next stage:** Fresh independent `sporely-sparring` review of the Stage 1 candidate.
+- **Current stage:** Stage 1 transport, pagination, and pull-only boundary.
+  The reviewed candidate has a narrow classification/documentation follow-up
+  pending; do not begin Stage 2.
+- **Next stage:** Independent web review of the final Stage 1 follow-up candidate.
 - **Repository baseline:** Working from `review/cloud-sync-prestage-2026-09-08` branch. Starting HEAD was `7297bf96ba08bd5ffc6be252c548cdc35af73116` (pre-stage baseline repair commit, already accepted).
 - **Candidate baseline:** `7297bf96ba08bd5ffc6be252c548cdc35af73116` (existing accepted pre-stage commit).
 - **Verification / commit:** Stage 0 implementation is self-verifiable (mechanical extraction with unit tests). Baseline import-compatibility tests pass. Candidate staged locally but NOT YET COMMITTED — awaiting verification completion and independent review before commit.
